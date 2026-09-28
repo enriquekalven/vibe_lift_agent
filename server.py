@@ -128,6 +128,7 @@ class VibeLiftRuntimeController:
       active_agent_dict = self.optimizer.active_agent.to_dict()
       available_agents = self.optimizer.list_agents_summary()
       all_agents = self.optimizer.get_all_agents_dict()
+      optimizer_platforms = self.optimizer.get_optimizer_platforms_payload()
       steps = list(self.agent.step_descriptions)
 
     services = self.gcp_telemetry.list_cloud_run_agent_services(non_blocking=fast_mcp)
@@ -145,6 +146,9 @@ class VibeLiftRuntimeController:
         'active_agent': active_agent_dict,
         'available_agents': available_agents,
         'all_agents': all_agents,
+        'optimizer_platforms': optimizer_platforms,
+        'user_centric': alpha_evolve_optimizer.build_user_centric_analytics(),
+        'decorator_events': telemetry.get_recent_decorator_events(),
         'summary': dict(telemetry.summarize_log_stream(turns)),
         'turns': [t.to_dict() for t in turns],
         'steps': steps,
@@ -170,6 +174,36 @@ class VibeLiftRuntimeController:
           agent_name=self.optimizer.active_agent.agent_id,
           model=self.optimizer.active_agent.model,
       )
+    return self.get_state_payload(include_fleet=False)
+
+  def select_optimizer(self, platform_id: str) -> dict[str, object]:
+    """Switches the active optimization platform (AlphaEvolve, Opus Critic, Vizier, or Hybrid)."""
+    with self._lock:
+      self.optimizer.select_optimizer_platform(platform_id)
+    return self.get_state_payload(include_fleet=False)
+
+  def ingest_decorator_event(self, body: Mapping[str, object] | None = None) -> dict[str, object]:
+    """Records a real-time @vibelift_telemetry decorator event from an agent message-passing hook."""
+    import time
+    raw = body or {}
+    active = self.optimizer.active_agent
+    event = telemetry.DecoratorTelemetryEvent(
+        timestamp=str(raw.get('timestamp') or time.strftime('%H:%M:%S UTC', time.gmtime())),
+        agent_name=str(raw.get('agent_name') or active.agent_id),
+        handler_name=str(raw.get('handler_name') or 'on_message_passing_turn'),
+        protocol=str(raw.get('protocol') or 'ADK / MCP Decorator Stream'),
+        model=str(raw.get('model') or active.model),
+        latency_ms=float(raw.get('latency_ms') or 585.0),
+        prompt_tokens=int(raw.get('prompt_tokens') or 19200),
+        cached_tokens=int(raw.get('cached_tokens') or 17680),
+        output_tokens=int(raw.get('output_tokens') or 320),
+        context_bloat_pct=float(raw.get('context_bloat_pct') or 12.4),
+        idle_ratio_pct=float(raw.get('idle_ratio_pct') or 6.8),
+        skill_or_mcp=str(raw.get('skill_or_mcp') or f'mcp://{active.agent_id}/stream'),
+        user_cohort=str(raw.get('user_cohort') or 'Enterprise Active DAU Cohort'),
+        status=str(raw.get('status') or '200 OK (@vibelift_telemetry)'),
+    )
+    telemetry.record_decorator_event(event)
     return self.get_state_payload(include_fleet=False)
 
   def add_parameter(
@@ -338,6 +372,13 @@ class VibeLiftRequestHandler(http.server.BaseHTTPRequestHandler):
     if self.path == '/api/select_agent':
       agent_id = str(body.get('agent_id', 'it_service_desk'))
       self._send_json(srv.controller.select_agent(agent_id))
+      return
+    if self.path == '/api/select_optimizer':
+      platform_id = str(body.get('platform_id', 'alpha_evolve'))
+      self._send_json(srv.controller.select_optimizer(platform_id))
+      return
+    if self.path == '/api/decorator_ingest':
+      self._send_json(srv.controller.ingest_decorator_event(body))
       return
     if self.path == '/api/add_parameter':
       label = str(body.get('label', 'Custom Guardrail Metric'))
@@ -576,6 +617,14 @@ def register_api_routes(app: object, controller: VibeLiftRuntimeController) -> N
   @app.post('/api/select_agent')
   def post_select_agent(payload: dict = fastapi.Body(default={})):
     return controller.select_agent(str(payload.get('agent_id', 'it_service_desk')))
+
+  @app.post('/api/select_optimizer')
+  def post_select_optimizer(payload: dict = fastapi.Body(default={})):
+    return controller.select_optimizer(str(payload.get('platform_id', 'alpha_evolve')))
+
+  @app.post('/api/decorator_ingest')
+  def post_decorator_ingest(payload: dict = fastapi.Body(default={})):
+    return controller.ingest_decorator_event(payload)
 
   @app.post('/api/add_parameter')
   def post_add_parameter(payload: dict = fastapi.Body(default={})):

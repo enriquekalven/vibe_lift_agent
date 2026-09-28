@@ -207,6 +207,28 @@ def _build_default_agents() -> dict[str, DemoAgentProfile]:
               weight_pct=5,
               status='SELF-HEALED (0.0%)',
           ),
+          OptimizationParameter(
+              key='context_bloat_pct',
+              label='Context Bloating Ratio (Stale History / Total Context)',
+              unit='%',
+              direction='LOWER',
+              baseline_value=64.0,
+              current_value=14.2,
+              target_value=20.0,
+              weight_pct=15,
+              status='PRUNED BY N-2 WINDOW (-78%)',
+          ),
+          OptimizationParameter(
+              key='idle_ratio_pct',
+              label='Agent Idle & Tool-Wait Ratio (@vibelift_telemetry)',
+              unit='%',
+              direction='LOWER',
+              baseline_value=41.5,
+              current_value=8.4,
+              target_value=15.0,
+              weight_pct=10,
+              status='MEETING TARGET (-80%)',
+          ),
       ],
       timeline=[
           TimeSeriesPoint(
@@ -286,16 +308,16 @@ def _build_default_agents() -> dict[str, DemoAgentProfile]:
               generation=8,
               timestamp='Day 3 • 09:15 UTC',
               action_title='Sliding-Window Tool History Compression (N-2)',
-              parameter_targeted='Latency (ms) & Cost ($)',
+              parameter_targeted='Latency (ms), Context Bloating (%) & Cost ($)',
               root_cause_from_logs=(
                   'Multi-turn logs showed 9,400-token VPN/SSO diagnostic dumps '
-                  're-sent verbatim across turns 3..12, slowing TTFT.'
+                  're-sent verbatim across turns 3..12, causing 64% context bloating.'
               ),
               action_taken=(
                   'Synthesized N-2 turn summarizer that compacts historical '
                   'runbook search outputs into 180-token structured digests.'
               ),
-              impact_summary='Latency: 1,420ms -> 980ms | Cost: $6.10 -> $4.80',
+              impact_summary='Latency: 1,420ms -> 980ms | Context Bloat: 64% -> 14.2% | Cost: $6.10 -> $4.80',
               diff_snippet=(
                   '+ PRUNE_TOOL_OUTPUT_OLDER_THAN_TURNS = 2\n'
                   '+ TOOL_DIGEST_FORMAT = "compact_key_metrics_only"'
@@ -399,6 +421,28 @@ def _build_default_agents() -> dict[str, DemoAgentProfile]:
               15,
               'EXCEEDING TARGET (+71.4%)',
           ),
+          OptimizationParameter(
+              'context_bloat_pct',
+              'Context Bloating Ratio (Stale Telemetry Dumps)',
+              '%',
+              'LOWER',
+              58.0,
+              11.8,
+              20.0,
+              15,
+              'PRUNED (-80%)',
+          ),
+          OptimizationParameter(
+              'idle_ratio_pct',
+              'Agent Idle & Fan-Out Wait Ratio (@vibelift_telemetry)',
+              '%',
+              'LOWER',
+              48.0,
+              5.2,
+              12.0,
+              10,
+              'PARALLELIZED (-89%)',
+          ),
       ],
       timeline=[
           TimeSeriesPoint(
@@ -457,7 +501,7 @@ def _build_default_agents() -> dict[str, DemoAgentProfile]:
               generation=11,
               timestamp='Day 5 • 15:30 UTC',
               action_title='Parallel Cloud Monitoring Fan-Out & Warm Snapshot Cache',
-              parameter_targeted='Latency (ms) & Accuracy (%)',
+              parameter_targeted='Latency (ms), Idle Ratio (%) & Accuracy (%)',
               root_cause_from_logs=(
                   'Sequential Discovery Engine, Cloud Monitoring, and Cloud Logging '
                   'calls exceeded the 1.0s Gemini Enterprise MCP streamable HTTP window.'
@@ -467,7 +511,7 @@ def _build_default_agents() -> dict[str, DemoAgentProfile]:
                   'open_dashboard responds in <10ms with verified telemetry.'
               ),
               impact_summary=(
-                  'Latency: 1,890ms -> 1,120ms | Accuracy: 89.5% -> 97.2%'
+                  'Latency: 1,890ms -> 1,120ms | Idle Ratio: 48% -> 5.2% | Accuracy: 97.2%'
               ),
               diff_snippet=(
                   '+ FLEET_STALE_WHILE_REVALIDATE = True\n'
@@ -530,6 +574,28 @@ def _build_default_agents() -> dict[str, DemoAgentProfile]:
               15,
               'SELF-HEALED (0.0%)',
           ),
+          OptimizationParameter(
+              'context_bloat_pct',
+              'Context Bloating Ratio (Unpruned Search Chunks)',
+              '%',
+              'LOWER',
+              71.0,
+              16.5,
+              22.0,
+              15,
+              'DEDUPLICATED (-77%)',
+          ),
+          OptimizationParameter(
+              'idle_ratio_pct',
+              'Subagent Retrieval Idle / Pacing Ratio',
+              '%',
+              'LOWER',
+              39.0,
+              9.1,
+              15.0,
+              10,
+              'MEETING TARGET (-77%)',
+          ),
       ],
       timeline=[
           TimeSeriesPoint(
@@ -568,16 +634,16 @@ def _build_default_agents() -> dict[str, DemoAgentProfile]:
               generation=7,
               timestamp='Day 3 • 12:00 UTC',
               action_title='Multi-Hop Search Snippet Deduplication & Prefix Share',
-              parameter_targeted='Cost ($) & Latency (ms)',
+              parameter_targeted='Cost ($), Context Bloating (%) & Latency (ms)',
               root_cause_from_logs=(
                   'Retrieval subagents appended raw document chunks across '
-                  'research hops, causing 429 token-per-minute bursts.'
+                  'research hops, causing 71% context bloating and 429 bursts.'
               ),
               action_taken=(
                   'Shared static research plan prefix across hops and capped '
                   'retrieved chunks to top-3 deduplicated citation digests.'
               ),
-              impact_summary='Latency: 3,100ms -> 1,290ms | Cost: $19.80 -> $4.50',
+              impact_summary='Latency: 3,100ms -> 1,290ms | Context Bloat: 71% -> 16.5% | Cost: $19.80 -> $4.50',
               diff_snippet=(
                   '+ MAX_RETRIEVAL_CHUNKS_PER_HOP = 3\n'
                   '+ DEDUPLICATE_CITATION_DIGESTS = True'
@@ -614,18 +680,186 @@ def _build_default_agents() -> dict[str, DemoAgentProfile]:
   }
 
 
+OPTIMIZER_PLATFORMS: dict[str, dict[str, str]] = {
+    'alpha_evolve': {
+        'id': 'alpha_evolve',
+        'name': 'AlphaEvolve (Multi-Objective Pareto Loop)',
+        'badge': 'Genetic Prompt & Config Evolution',
+        'description': (
+            'Evolutionary Pareto optimization over prompt prefixes, tool schemas, '
+            'and sliding-window context rules with shadow log-replay safety gates.'
+        ),
+    },
+    'opus_critic': {
+        'id': 'opus_critic',
+        'name': 'Opus Frontier Critic (Structural Prompt Refactoring)',
+        'badge': 'Frontier LLM Structural Critic',
+        'description': (
+            'Uses frontier reasoning critique to rewrite ambiguous instructions, '
+            'eliminate redundant tool calls, and synthesize compact JSON schemas.'
+        ),
+    },
+    'vertex_vizier': {
+        'id': 'vertex_vizier',
+        'name': 'Google Vizier (Distributed Black-Box Bayesian Tuner)',
+        'badge': 'Bayesian Hyperparameter & Context Tuner',
+        'description': (
+            'Google distributed black-box optimization engine tuning continuous '
+            'parameters (N-turn pruning window, QPS pacing, temperature, cache TTL).'
+        ),
+    },
+    'hybrid_ensemble': {
+        'id': 'hybrid_ensemble',
+        'name': 'Hybrid Ensemble (AlphaEvolve + Vizier + Opus Critic)',
+        'badge': 'Combined Multi-Platform Pipeline',
+        'description': (
+            'Combines Opus structural prompt refactoring, Google Vizier numerical '
+            'hyperparameter tuning, and AlphaEvolve Pareto selection.'
+        ),
+    },
+}
+
+
+def build_user_centric_analytics() -> dict[str, object]:
+  """Builds the User-Centric Token Spending, Savings, Skill/MCP & Governance view (Sep 22 Sync)."""
+  cohorts = [
+      {
+          'cohort': 'Enterprise IT Support & Helpdesk Analysts',
+          'primary_agent': 'IT Service Desk',
+          'active_dau': 2840,
+          'sessions_24h': 9420,
+          'tokens_per_user_k': 48.2,
+          'context_bloat_before_pct': 64.0,
+          'context_bloat_after_pct': 14.2,
+          'idle_ratio_pct': 8.4,
+          'baseline_cost_per_1k_usd': 29.40,
+          'optimized_cost_per_1k_usd': 3.45,
+          'monthly_savings_usd': 14820,
+      },
+      {
+          'cohort': 'Cloud Platform, SRE & FinOps Engineers',
+          'primary_agent': 'VibeLift Analytics & FinOps',
+          'active_dau': 1650,
+          'sessions_24h': 6180,
+          'tokens_per_user_k': 62.5,
+          'context_bloat_before_pct': 58.0,
+          'context_bloat_after_pct': 11.8,
+          'idle_ratio_pct': 5.2,
+          'baseline_cost_per_1k_usd': 42.00,
+          'optimized_cost_per_1k_usd': 5.80,
+          'monthly_savings_usd': 22400,
+      },
+      {
+          'cohort': 'Product Strategy & Executive Research Teams',
+          'primary_agent': 'Deep Research',
+          'active_dau': 2350,
+          'sessions_24h': 5140,
+          'tokens_per_user_k': 84.0,
+          'context_bloat_before_pct': 71.0,
+          'context_bloat_after_pct': 16.5,
+          'idle_ratio_pct': 9.1,
+          'baseline_cost_per_1k_usd': 19.80,
+          'optimized_cost_per_1k_usd': 2.60,
+          'monthly_savings_usd': 9650,
+      },
+  ]
+  skill_mcp_breakdown = [
+      {
+          'resource_name': 'mcp://vibelift-analytics/dashboard',
+          'kind': 'Custom MCP Server (Cloud Run)',
+          'attached_agent': 'VibeLift Analytics & FinOps',
+          'calls_24h': 4120,
+          'prompt_tokens_m': 82.4,
+          'cache_hit_pct': 89.4,
+          'context_bloat_pct': 11.8,
+          'optimization_applied': 'Pinned 22k MCP tool schema in static prefix + <10ms warm snapshot',
+          'monthly_saved_usd': 12900,
+      },
+      {
+          'resource_name': 'mcp://service-desk-escalation',
+          'kind': 'ADK Reasoning Engine Tooling',
+          'attached_agent': 'IT Service Desk',
+          'calls_24h': 6890,
+          'prompt_tokens_m': 112.6,
+          'cache_hit_pct': 91.2,
+          'context_bloat_pct': 14.2,
+          'optimization_applied': 'Shared Tier-1/Tier-2 static runbook prefix + N-2 history pruner',
+          'monthly_saved_usd': 14820,
+      },
+      {
+          'resource_name': 'skill://multi-hop-citation-dedup',
+          'kind': 'Agent Skill (Retrieval & Synthesis)',
+          'attached_agent': 'Deep Research',
+          'calls_24h': 3410,
+          'prompt_tokens_m': 64.8,
+          'cache_hit_pct': 93.1,
+          'context_bloat_pct': 16.5,
+          'optimization_applied': 'Top-3 chunk deduplication + adaptive 429 QPS token-bucket pacing',
+          'monthly_saved_usd': 9650,
+      },
+      {
+          'resource_name': 'skill://finops-rate-card-attribution',
+          'kind': 'Agent Skill (Prompt Cache Economics)',
+          'attached_agent': 'VibeLift Analytics & FinOps',
+          'calls_24h': 2760,
+          'prompt_tokens_m': 38.2,
+          'cache_hit_pct': 90.8,
+          'context_bloat_pct': 10.4,
+          'optimization_applied': 'Static Vertex AI rate-card table locked in cached system prefix',
+          'monthly_saved_usd': 9500,
+      },
+  ]
+  total_dau = sum(int(c['active_dau']) for c in cohorts)
+  total_monthly_savings = sum(int(c['monthly_savings_usd']) for c in cohorts)
+  return {
+      'total_active_dau': total_dau,
+      'supported_dau_capacity': '4,000 – 10,000 DAU',
+      'baseline_cost_per_1k_turns_usd': 29.40,
+      'optimized_cost_per_1k_turns_usd': 3.45,
+      'avg_cost_reduction_pct': 88.3,
+      'per_user_monthly_baseline_usd': 7.85,
+      'per_user_monthly_optimized_usd': 0.98,
+      'total_monthly_savings_usd': total_monthly_savings,
+      'annualized_savings_usd': total_monthly_savings * 12,
+      'collection_mode': '@vibelift_telemetry Decorator (Real-Time Message-Passing, <10ms lag)',
+      'security_governance': {
+          'oauth_cross_project': 'ACTIVE (OAuth 2.0 Consent Verified Across GCP Projects)',
+          'pdd_privacy_review': 'APPROVED (Anonymized Cohort & Token Attribution)',
+          'hosting_target': 'Google Cloud Run (Migrated from Borg; A2UI Descoped)',
+      },
+      'cohorts': cohorts,
+      'skill_mcp_breakdown': skill_mcp_breakdown,
+  }
+
+
 class VibeLiftAlphaEvolveOptimizer:
-  """Manages selectable Gemini Enterprise agents, user parameters, and AlphaEvolve loops."""
+  """Manages selectable Gemini Enterprise agents, user parameters, and optimization loops."""
 
   def __init__(self) -> None:
     """Initializes the multi-agent catalog and sets default active agent."""
     self._agents: dict[str, DemoAgentProfile] = _build_default_agents()
     self.selected_agent_id: str = 'it_service_desk'
+    self.selected_optimizer_platform: str = 'alpha_evolve'
 
   @property
   def active_agent(self) -> DemoAgentProfile:
     """Returns the currently selected DemoAgentProfile."""
     return self._agents[self.selected_agent_id]
+
+  def select_optimizer_platform(self, platform_id: str) -> dict[str, str]:
+    """Switches the active optimization platform (AlphaEvolve, Opus Critic, Vizier, or Hybrid)."""
+    clean = (platform_id or '').strip().lower()
+    if clean in OPTIMIZER_PLATFORMS:
+      self.selected_optimizer_platform = clean
+    return OPTIMIZER_PLATFORMS[self.selected_optimizer_platform]
+
+  def get_optimizer_platforms_payload(self) -> dict[str, object]:
+    """Returns the active optimization platform and all supported platforms."""
+    return {
+        'active_platform_id': self.selected_optimizer_platform,
+        'active_platform': OPTIMIZER_PLATFORMS[self.selected_optimizer_platform],
+        'available_platforms': list(OPTIMIZER_PLATFORMS.values()),
+    }
 
   def select_agent(self, agent_id: str) -> DemoAgentProfile:
     """Switches the currently selected agent by slug, GE resource ID, or display name."""
@@ -693,6 +927,14 @@ class VibeLiftAlphaEvolveOptimizer:
                 OptimizationParameter(
                     'cache_hit_pct', 'Prompt Cache Hit Ratio', '%', 'HIGHER',
                     15.0, 88.5, 85.0, 10, 'EXCEEDING TARGET (+73.5%)',
+                ),
+                OptimizationParameter(
+                    'context_bloat_pct', 'Context Bloating Ratio', '%', 'LOWER',
+                    60.0, 15.0, 20.0, 10, 'PRUNED (-75%)',
+                ),
+                OptimizationParameter(
+                    'idle_ratio_pct', 'Agent Idle Ratio', '%', 'LOWER',
+                    38.0, 9.5, 15.0, 10, 'MEETING TARGET (-75%)',
                 ),
             ],
             timeline=[
@@ -789,6 +1031,12 @@ class VibeLiftAlphaEvolveOptimizer:
       elif param.key == 'error_rate_pct':
         param.current_value = 9.4
         param.status = '⚠️ 429 QUOTA ERRORS'
+      elif param.key == 'context_bloat_pct':
+        param.current_value = 68.5
+        param.status = '⚠️ CONTEXT BLOAT SPIKE'
+      elif param.key == 'idle_ratio_pct':
+        param.current_value = 44.0
+        param.status = '⚠️ TOOL WAIT BOTTLENECK'
 
     agent.timeline.append(
         TimeSeriesPoint(
@@ -805,8 +1053,12 @@ class VibeLiftAlphaEvolveOptimizer:
     return agent
 
   def run_next_generation(self) -> DemoAgentProfile:
-    """Runs AlphaEvolve to heal anomalies and improve all agent parameters."""
+    """Runs the selected optimization platform to heal anomalies and improve all agent parameters."""
     agent = self.active_agent
+    platform = OPTIMIZER_PLATFORMS.get(
+        self.selected_optimizer_platform, OPTIMIZER_PLATFORMS['alpha_evolve']
+    )
+    platform_short = platform['name'].split(' (')[0]
     next_gen = (agent.timeline[-1].generation if agent.timeline else 14) + 1
     new_lat = 590.0
     new_cost = 2.85
@@ -833,8 +1085,14 @@ class VibeLiftAlphaEvolveOptimizer:
       elif param.key == 'error_rate_pct':
         param.current_value = 0.0
         param.status = 'SELF-HEALED (0.0%)'
+      elif param.key == 'context_bloat_pct':
+        param.current_value = max(8.5, round(min(param.current_value, 14.2) * 0.85, 1))
+        param.status = f'PRUNED ({param.current_value}% Bloat)'
+      elif param.key == 'idle_ratio_pct':
+        param.current_value = max(4.2, round(min(param.current_value, 8.4) * 0.85, 1))
+        param.status = f'OPTIMIZED ({param.current_value}% Idle)'
 
-    agent.health_status = f'OPTIMIZED & HEALED (Gen {next_gen} Active)'
+    agent.health_status = f'OPTIMIZED & HEALED ({platform_short} • Gen {next_gen} Active)'
     agent.monthly_savings_usd += 1850
     agent.timeline.append(
         TimeSeriesPoint(
@@ -845,32 +1103,33 @@ class VibeLiftAlphaEvolveOptimizer:
             accuracy_pct=new_acc,
             cache_hit_pct=new_hit,
             error_rate_pct=0.0,
-            event_marker=f'🧬 AlphaEvolve Gen {next_gen} Auto-Healed',
+            event_marker=f'🧬 {platform_short} Gen {next_gen} Auto-Healed',
         )
     )
     agent.actions.insert(
         0,
         AlphaEvolveActionRecord(
             generation=next_gen,
-            timestamp=f'Live Run • Gen {next_gen}',
+            timestamp=f'Live Run • Gen {next_gen} ({platform_short})',
             action_title=(
-                f'Gen {next_gen}: Cross-Turn Context Deduplication & '
+                f'Gen {next_gen} [{platform_short}]: Cross-Turn Context Deduplication & '
                 'Speculative Prefix Warming'
             ),
-            parameter_targeted='Latency (ms), Cost ($), Accuracy (%) & Cache %',
+            parameter_targeted='Latency (ms), Cost ($), Context Bloat (%), Idle Ratio (%) & Cache %',
             root_cause_from_logs=(
-                'Detected uncached context growth and subagent serialization '
-                'overhead in recent log window.'
+                'Decorator telemetry (@vibelift_telemetry) detected uncached context bloating '
+                'and subagent serialization idle wait in recent message-passing window.'
             ),
             action_taken=(
-                'Locked static prompt prefix hash, enabled speculative '
-                'subagent cache key sharing, and pruned redundant tool JSON.'
+                f'{platform_short} locked static prompt prefix hash, tuned sliding-window '
+                'context pruning, and shared cross-subagent KV cache keys.'
             ),
             impact_summary=(
                 f'Latency: -> {new_lat}ms | Cost: -> ${new_cost} | '
                 f'Accuracy: -> {new_acc}% | Cache Hit: -> {new_hit}%'
             ),
             diff_snippet=(
+                f'+ OPTIMIZER_BACKEND = "{self.selected_optimizer_platform}"\n'
                 f'+ GENERATION_ID = {next_gen}\n'
                 '+ SPECULATIVE_PREFIX_WARMING = True\n'
                 '+ CROSS_SUBAGENT_CACHE_KEY = "vibelift_global_v4"'

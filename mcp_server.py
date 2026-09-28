@@ -84,6 +84,9 @@ RESOURCE_META: dict[str, Any] = {
             ],
         },
         'prefersBorder': True,
+        'preferredMode': 'pip',
+        'displayMode': 'pip',
+        'availableDisplayModes': ['pip', 'fullscreen', 'inline'],
     },
     UI_META_KEY: {
         'csp': {
@@ -99,6 +102,9 @@ RESOURCE_META: dict[str, Any] = {
             ],
         },
         'prefersBorder': True,
+        'preferredMode': 'pip',
+        'displayMode': 'pip',
+        'availableDisplayModes': ['pip', 'fullscreen', 'inline'],
     },
 }
 
@@ -115,6 +121,8 @@ def _build_ui_meta(
   if is_widget:
     ui_meta['resourceUri'] = WIDGET_URI
     ui_meta['preferredMode'] = preferred_mode
+    ui_meta['displayMode'] = preferred_mode
+    ui_meta['availableDisplayModes'] = ['pip', 'fullscreen', 'inline']
     ui_meta['icon'] = 'analytics'
     ui_meta['iconUrl'] = (
         'https://fonts.gstatic.com/s/i/short-term/release/'
@@ -150,7 +158,7 @@ def _get_controller():
 # Tool Handlers
 # ---------------------------------------------------------------------------
 
-FLEET_TAB, DEMO_PARAMETERS_TAB, DEMO_ALPHAEVOLVE_TAB = 0, 1, 2
+FLEET_TAB, DEMO_PARAMETERS_TAB, DEMO_ALPHAEVOLVE_TAB, USER_CENTRIC_FINOPS_TAB = 0, 1, 2, 3
 
 
 def _parse_focus_tab(value: Any) -> int:
@@ -159,7 +167,11 @@ def _parse_focus_tab(value: Any) -> int:
     tab = int(value)
   except (TypeError, ValueError):
     return FLEET_TAB
-  return tab if tab in (FLEET_TAB, DEMO_PARAMETERS_TAB, DEMO_ALPHAEVOLVE_TAB) else FLEET_TAB
+  return (
+      tab
+      if tab in (FLEET_TAB, DEMO_PARAMETERS_TAB, DEMO_ALPHAEVOLVE_TAB, USER_CENTRIC_FINOPS_TAB)
+      else FLEET_TAB
+  )
 
 
 async def _tool_open_dashboard(session_key: str, args: dict[str, Any]) -> dict[str, Any]:

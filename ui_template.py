@@ -38,10 +38,12 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .app-bar {
       background: var(--surface);
       border-bottom: 1px solid var(--border);
-      padding: 12px 24px;
+      padding: 10px 18px;
       display: flex;
       align-items: center;
       justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px 16px;
       position: sticky;
       top: 0;
       z-index: 20;
@@ -50,36 +52,40 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .brand-row {
       display: flex;
       align-items: center;
-      gap: 14px;
+      gap: 12px;
+      flex-wrap: wrap;
+      min-width: 0;
     }
     .brand-logo-img {
-      width: 48px;
-      height: 48px;
+      width: 42px;
+      height: 42px;
       border-radius: 10px;
       object-fit: cover;
       border: 1px solid var(--border);
       box-shadow: 0 2px 6px rgba(60,64,67,0.14);
+      flex-shrink: 0;
     }
     .brand-title {
-      font-size: 19px;
+      font-size: 17px;
       font-weight: 700;
       color: var(--text-primary);
       letter-spacing: -0.2px;
     }
     .brand-subtitle {
-      font-size: 12px;
+      font-size: 11.5px;
       color: var(--text-secondary);
     }
     .action-bar {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
+      flex-wrap: wrap;
     }
     .btn {
       font-family: var(--font-sans);
-      font-size: 13px;
+      font-size: 12.5px;
       font-weight: 600;
-      padding: 8px 16px;
+      padding: 7px 13px;
       border-radius: 6px;
       border: 1px solid var(--border);
       background: var(--surface);
@@ -89,6 +95,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       display: inline-flex;
       align-items: center;
       gap: 6px;
+      white-space: nowrap;
     }
     .btn:hover { background: #f1f3f4; }
     .btn-primary {
@@ -109,33 +116,44 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       border-color: #f6aea9;
     }
     .btn-danger:hover { background: #fad2cf; }
+    .btn-fullscreen-toggle {
+      background: #174ea6;
+      color: #ffffff;
+      border-color: #174ea6;
+      box-shadow: 0 1px 3px rgba(23,78,166,0.25);
+    }
+    .btn-fullscreen-toggle:hover {
+      background: #0d3b8c;
+      border-color: #0d3b8c;
+    }
     .tabs-bar {
       background: var(--surface);
       border-bottom: 1px solid var(--border);
-      padding: 0 24px;
+      padding: 0 18px;
       display: flex;
-      gap: 28px;
+      gap: 18px;
+      flex-wrap: wrap;
     }
     .tab-btn {
       background: none;
       border: none;
-      padding: 14px 4px;
-      font-size: 14px;
+      padding: 12px 4px;
+      font-size: 13.5px;
       font-weight: 600;
       color: var(--text-secondary);
       cursor: pointer;
       border-bottom: 3px solid transparent;
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 7px;
     }
     .tab-btn.active {
       color: var(--g-blue);
       border-bottom-color: var(--g-blue);
     }
     .tab-step-pill {
-      font-size: 11px;
-      padding: 2px 8px;
+      font-size: 10.5px;
+      padding: 2px 7px;
       border-radius: 99px;
       background: var(--g-blue-bg);
       color: var(--g-blue);
@@ -143,8 +161,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .container {
       max-width: 1400px;
-      margin: 20px auto;
-      padding: 0 24px 40px 24px;
+      margin: 16px auto;
+      padding: 0 18px 40px 18px;
     }
     .selector-banner {
       background: var(--surface);
@@ -421,30 +439,30 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <div>
         <div class="brand-title">VibeLift | Analytics Platform for Agent Optimization</div>
         <div class="brand-subtitle">
-          Autonomous Multi-Objective Agent Optimization &bull; Powered by AlphaEvolve Closed-Loop Telemetry
+          Real-Time <span class="mono">@vibelift_telemetry</span> Decorator &bull; Multi-Platform Optimization (AlphaEvolve &bull; Opus &bull; Vizier)
         </div>
       </div>
-      <div style="display:inline-flex;align-items:center;gap:8px;margin-left:16px;padding:4px 12px;background:#e8f0fe;border-radius:16px;border:1px solid #c2e7ff;font-size:12px;font-weight:600;color:#174ea6;">
-        <span>&#x2601;&#xFE0F; GCP Project: <strong id="gcpProjectText" class="mono">&#x2026;</strong> (<span id="gcpRegionText" class="mono">&#x2026;</span>)</span>
+      <div style="display:inline-flex;align-items:center;gap:8px;padding:4px 10px;background:#e8f0fe;border-radius:16px;border:1px solid #c2e7ff;font-size:11.5px;font-weight:600;color:#174ea6;">
+        <span>&#x2601;&#xFE0F; GCP: <strong id="gcpProjectText" class="mono">&#x2026;</strong> (<span id="gcpRegionText" class="mono">&#x2026;</span>)</span>
         <span class="badge badge-green" style="font-size:10px;">Cloud Run ACTIVE</span>
       </div>
     </div>
     <div class="action-bar">
+      <button id="btnModeFullscreen" class="btn btn-fullscreen-toggle" onclick="toggleDisplayMode()" title="Toggle between Right Side Panel and Fullscreen">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg> Fullscreen
+      </button>
       <span id="activeGenBadge" class="badge badge-green">ACTIVE GENOME: GEN 14</span>
       <button class="btn btn-blue" id="syncGcpBtn" onclick="syncGcpTelemetry()" title="Fetch live telemetry from Cloud Logging & Gemini Enterprise">
         &#x2601;&#xFE0F; Sync GCP Telemetry
       </button>
       <button class="btn btn-danger" onclick="triggerApi('/api/inject_anomaly')">
-        &#x1F525; Inject Production Log Anomaly
+        &#x1F525; Inject Log Anomaly
       </button>
       <button class="btn btn-green" onclick="triggerApi('/api/evolve_generation')">
-        &#x1F9EC; Run AlphaEvolve Optimization Cycle
+        &#x1F9EC; Run Optimization Cycle
       </button>
       <button class="btn" onclick="triggerApi('/api/reset')">
-        Reset Demo
-      </button>
-      <button id="btnModeFullscreen" class="btn" onclick="toggleDisplayMode()" title="Expand to fullscreen or side panel" style="display:none;">
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg> Fullscreen
+        Reset
       </button>
     </div>
   </header>
@@ -456,24 +474,39 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     </button>
     <button id="tabBtn1" class="tab-btn" onclick="switchTab(1)">
       <span class="tab-step-pill">STEP 1</span>
-      Select Agent &amp; Configure Optimization Parameters
+      Select Agent &amp; Optimization Parameters
     </button>
     <button id="tabBtn2" class="tab-btn" onclick="switchTab(2)">
       <span class="tab-step-pill">STEP 2</span>
-      Parameter Performance Over Time &amp; AlphaEvolve Actions Taken
+      Performance Over Time &amp; Actions Taken
+    </button>
+    <button id="tabBtn3" class="tab-btn" onclick="switchTab(3)">
+      <span class="tab-step-pill">FINOPS &amp; SDK</span>
+      User-Centric Spend, Skills/MCP &amp; <span class="mono">@vibelift_telemetry</span>
     </button>
   </nav>
 
   <main class="container">
-    <!-- Persistent Agent Selector Banner across both tabs -->
+    <!-- Persistent Agent & Optimization Platform Selector Banner -->
     <section id="demoSelectorBanner" class="selector-banner hidden">
-      <div>
-        <div class="selector-label">1. Select Your Production Agent to Optimize</div>
-        <select id="agentDropdown" class="agent-select" onchange="onSelectAgent(this.value)">
-          <option value="it_service_desk">IT Service Desk (gemini-2.5-flash &bull; Vertex AI Agent Engine)</option>
-          <option value="vibelift_analytics">VibeLift Analytics &amp; FinOps (gemini-2.5-flash &bull; Cloud Run A2A + MCP)</option>
-          <option value="deep_research">Deep Research (gemini-2.5-pro &bull; Google-Managed Research Agent)</option>
-        </select>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div>
+          <div class="selector-label">1. Select Production Agent to Optimize</div>
+          <select id="agentDropdown" class="agent-select" onchange="onSelectAgent(this.value)">
+            <option value="it_service_desk">IT Service Desk (gemini-2.5-flash &bull; Vertex AI Agent Engine)</option>
+            <option value="vibelift_analytics">VibeLift Analytics &amp; FinOps (gemini-2.5-flash &bull; Cloud Run A2A + MCP)</option>
+            <option value="deep_research">Deep Research (gemini-2.5-pro &bull; Google-Managed Research Agent)</option>
+          </select>
+        </div>
+        <div>
+          <div class="selector-label">2. Select Optimization Platform Backend</div>
+          <select id="optimizerDropdown" class="agent-select" onchange="onSelectOptimizer(this.value)">
+            <option value="alpha_evolve">AlphaEvolve (Multi-Objective Pareto Loop &bull; Default)</option>
+            <option value="opus_critic">Opus Frontier Critic (Structural Prompt &amp; Schema Refactoring)</option>
+            <option value="vertex_vizier">Google Vizier (Distributed Black-Box Bayesian Tuner)</option>
+            <option value="hybrid_ensemble">Hybrid Ensemble (AlphaEvolve + Vizier + Opus Critic)</option>
+          </select>
+        </div>
       </div>
       <div class="agent-meta-box">
         <div class="agent-meta-top">
@@ -484,10 +517,10 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           <span id="agentHealthBadge" class="badge badge-green">OPTIMIZED (GEN 14)</span>
         </div>
         <div id="agentDescText" style="font-size:13px;color:var(--text-secondary);"></div>
-        <div style="font-size:12px;color:var(--text-secondary);display:flex;gap:18px;flex-wrap:wrap;">
+        <div style="font-size:12px;color:var(--text-secondary);display:flex;gap:16px;flex-wrap:wrap;">
           <span><strong>Foundation Model:</strong> <span id="agentModelText" class="mono"></span></span>
-          <span><strong>Optimization Engine:</strong> <span class="mono">AlphaEvolve Pareto Multi-Objective Loop</span></span>
-          <span><strong>Zero-Code Mode:</strong> <span style="color:var(--g-green);font-weight:600;">Log-Driven Genome Mutation</span></span>
+          <span><strong>Active Optimizer:</strong> <span id="activeOptimizerText" class="mono" style="color:var(--g-blue);font-weight:700;">AlphaEvolve (Multi-Objective Pareto Loop)</span></span>
+          <span><strong>Telemetry Hook:</strong> <span style="color:var(--g-green);font-weight:600;">@vibelift_telemetry Decorator (&lt;10ms)</span></span>
         </div>
       </div>
     </section>
@@ -574,29 +607,40 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="panel">
         <div class="panel-header">
           <div class="panel-title">
-            <span>2. Agent Optimization Parameters &amp; Current Live Status</span>
+            <span>2. Plug-and-Play Agent Optimization Parameters &amp; Current Live Status</span>
             <span class="badge badge-blue">Multi-Objective Pareto Frontier</span>
           </div>
           <div style="font-size:12px;color:var(--text-secondary);">
-            Each parameter is continuously monitored from agent logs and weighted in the AlphaEvolve fitness objective.
+            Includes latency, token cost ($29.40 &rarr; $3.45), accuracy, prompt cache hit ratio, context bloating, and agent idle ratio.
           </div>
         </div>
 
-        <table>
-          <thead>
-            <tr>
-              <th>Optimization Parameter</th>
-              <th>Direction</th>
-              <th>Baseline (Gen 0)</th>
-              <th>Current Live Value</th>
-              <th>Improvement vs. Baseline</th>
-              <th>Target Goal (SLO)</th>
-              <th>Priority Weight</th>
-              <th>Current Status</th>
-            </tr>
-          </thead>
-          <tbody id="parametersTableBody"></tbody>
-        </table>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Optimization Parameter</th>
+                <th>Direction</th>
+                <th>Baseline (Gen 0)</th>
+                <th>Current Live Value</th>
+                <th>Improvement vs. Baseline</th>
+                <th>Target Goal (SLO)</th>
+                <th>Priority Weight</th>
+                <th>Current Status</th>
+              </tr>
+            </thead>
+            <tbody id="parametersTableBody"></tbody>
+          </table>
+        </div>
+
+        <div style="margin-top:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span style="font-size:11.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;">Quick-Add Plug-and-Play Presets:</span>
+          <button class="btn" onclick="applyParameterPreset('Context Bloating Ratio', '%', 'lower_is_better', 64.0, 20.0, 15)">+ Context Bloating Ratio</button>
+          <button class="btn" onclick="applyParameterPreset('Agent Idle &amp; Wait Ratio', '%', 'lower_is_better', 42.0, 12.0, 10)">+ Agent Idle Ratio</button>
+          <button class="btn" onclick="applyParameterPreset('Skill Token Consumption / Turn', 'k tok', 'lower_is_better', 18.5, 6.0, 15)">+ Skill Token Consumption</button>
+          <button class="btn" onclick="applyParameterPreset('User Cost per Session', '$', 'lower_is_better', 0.42, 0.08, 20)">+ User Cost per Session</button>
+          <button class="btn" onclick="applyParameterPreset('Tool Selection Precision', '%', 'higher_is_better', 84.0, 97.5, 15)">+ Tool Selection Precision</button>
+        </div>
 
         <div class="add-param-form">
           <div class="field-group">
@@ -682,7 +726,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="panel">
         <div class="panel-header">
           <div class="panel-title">
-            <span>What Actions AlphaEvolve Took to Improve These Parameters</span>
+            <span>What Actions the Optimizer Took to Improve These Parameters</span>
             <span class="badge badge-green">Closed-Loop Log Diagnosis &rarr; Genome Action &rarr; Verified Impact</span>
           </div>
           <div style="font-size:12px;color:var(--text-secondary);">
@@ -693,17 +737,144 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
 
     </section>
+
+    <!-- TAB 3: USER-CENTRIC FINOPS, SKILLS/MCP TOKEN CONSUMPTION & @VIBELIFT_TELEMETRY DECORATOR -->
+    <section id="tabPanel3" class="hidden">
+      <div class="kpi-grid" id="userCentricKpis"></div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>User-Centric Token Spending &amp; Cost Savings by Cohort (4,000 &ndash; 10,000 DAU Scale)</span>
+            <span class="badge badge-green" id="oauthGovernanceBadge">OAuth 2.0 Cross-Project Consent &amp; PDD Verified</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Customer-requested user-centric view tracking token spending, context bloating reduction, idle ratio, and net dollar savings across enterprise cohorts.
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Enterprise User Cohort</th>
+                <th>Primary Agent</th>
+                <th>Active DAU</th>
+                <th>24h Sessions</th>
+                <th>Tokens / User</th>
+                <th>Context Bloating (Before &rarr; After)</th>
+                <th>Idle Ratio</th>
+                <th>Cost / 1k Turns (Baseline &rarr; Now)</th>
+                <th>Net Monthly Savings</th>
+              </tr>
+            </thead>
+            <tbody id="userCohortsTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Real-Time Skill &amp; MCP Server Token Consumption + Active Optimization Layer</span>
+            <span class="badge badge-blue">Beyond Raw Admin Consoles: Automated Optimization Applied</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Tracks real-time token consumption per Skill and MCP Server and pairs each with automated prefix caching, chunk deduplication, and history pruning.
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Skill / MCP Server Resource</th>
+                <th>Type</th>
+                <th>Attached Agent</th>
+                <th>24h Calls</th>
+                <th>Prompt Tokens</th>
+                <th>Cache Hit %</th>
+                <th>Context Bloat %</th>
+                <th>Optimization Action Applied</th>
+                <th>Monthly Saved</th>
+              </tr>
+            </thead>
+            <tbody id="skillMcpTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Real-Time <span class="mono">@vibelift_telemetry</span> Decorator Stream (Message-Passing Protocol Hook)</span>
+            <span class="badge badge-green">Zero BigQuery Router Delay (&lt;10ms Capture)</span>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <button class="btn btn-primary" onclick="emitLiveDecoratorEvent()">
+              &#x26A1; Emit Live @vibelift_telemetry Event
+            </button>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-bottom:14px;">
+          <div class="action-box">
+            <div class="action-box-title">Plug-and-Play Python Decorator (ADK / MCP / A2A Message Passing)</div>
+            <pre class="diff-pre" style="margin-top:6px;">from telemetry import vibelift_telemetry
+
+@vibelift_telemetry(
+    agent_name="it_service_desk",
+    model="gemini-2.5-flash",
+    protocol="ADK / MCP Message Passing",
+    skill_or_mcp="mcp://service-desk-escalation",
+    user_cohort="Enterprise IT Support (2,840 DAU)",
+)
+async def handle_agent_turn(message_envelope):
+    return await runner.process(message_envelope)</pre>
+          </div>
+          <div class="action-box">
+            <div class="action-box-title">Architecture &amp; Security Governance Consensus</div>
+            <div id="governanceDetailsBox" style="font-size:12.5px;line-height:1.65;color:var(--text-primary);margin-top:6px;">
+              <div>&bull; <strong>Collection Mode:</strong> Real-time decorator on message-passing protocols (avoids BigQuery Log Router delay).</div>
+              <div>&bull; <strong>Hosting Architecture:</strong> Migrated from Borg to Google Cloud Run with MCP Side-Panel + Fullscreen UI (complex A2UI descoped).</div>
+              <div>&bull; <strong>Security &amp; Privacy:</strong> Cross-project OAuth 2.0 user consent &amp; PDD review compliant for 4,000&ndash;10,000 DAU.</div>
+              <div>&bull; <strong>Optimization Backends:</strong> Pluggable support for AlphaEvolve, Opus Frontier Critic, and Google Vizier.</div>
+            </div>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Agent</th>
+                <th>Handler</th>
+                <th>Protocol</th>
+                <th>Skill / MCP</th>
+                <th>User Cohort</th>
+                <th>Latency</th>
+                <th>Cache Hit</th>
+                <th>Context Bloat</th>
+                <th>Idle Ratio</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="decoratorEventsBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
   </main>
 
   <script>
     function switchTab(tabIndex) {
-      const tab = [0, 1, 2].indexOf(Number(tabIndex)) >= 0 ? Number(tabIndex) : 0;
-      [0, 1, 2].forEach(function(i) {
-        document.getElementById('tabBtn' + i).classList.toggle('active', tab === i);
-        document.getElementById('tabPanel' + i).classList.toggle('hidden', tab !== i);
+      const tab = [0, 1, 2, 3].indexOf(Number(tabIndex)) >= 0 ? Number(tabIndex) : 0;
+      [0, 1, 2, 3].forEach(function(i) {
+        const btn = document.getElementById('tabBtn' + i);
+        const panel = document.getElementById('tabPanel' + i);
+        if (btn) btn.classList.toggle('active', tab === i);
+        if (panel) panel.classList.toggle('hidden', tab !== i);
       });
       const banner = document.getElementById('demoSelectorBanner');
       if (banner) banner.classList.toggle('hidden', tab === 0);
+      notifyHostSizeChanged();
     }
 
     function renderMiniChart(points, key, unit, color, targetVal, lowerIsBetter) {
@@ -942,7 +1113,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
                 <div>${a.root_cause_from_logs}</div>
               </div>
               <div class="action-box">
-                <div class="action-box-title">2. Action Taken by AlphaEvolve</div>
+                <div class="action-box-title">2. Action Taken by Optimizer</div>
                 <div><strong>${a.action_taken}</strong></div>
                 <div style="margin-top:6px;color:var(--g-green);font-weight:700;font-size:12px;">
                   Impact: ${a.impact_summary}
@@ -956,6 +1127,107 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
         `;
       }).join('');
+
+      if (state.optimizer_platforms) {
+        const op = state.optimizer_platforms;
+        const optSel = document.getElementById('optimizerDropdown');
+        if (optSel && op.active_platform_id) {
+          optSel.value = op.active_platform_id;
+        }
+        const optText = document.getElementById('activeOptimizerText');
+        if (optText && op.active_platform && op.active_platform.name) {
+          optText.textContent = op.active_platform.name;
+        }
+      }
+
+      renderUserCentricAndDecorator(state.user_centric, state.decorator_events);
+      notifyHostSizeChanged();
+    }
+
+    function renderUserCentricAndDecorator(uc, decoratorEvents) {
+      if (uc && typeof uc === 'object') {
+        const kpiBox = document.getElementById('userCentricKpis');
+        if (kpiBox) {
+          kpiBox.replaceChildren(
+            kpiCard(
+              'Active Enterprise Users (DAU)',
+              fmtInt(uc.total_active_dau || 6840),
+              'Supported Scale: ' + (uc.supported_dau_capacity || '4,000 – 10,000 DAU')
+            ),
+            kpiCard(
+              'Cost per 1k Turns (Baseline → Now)',
+              '$' + Number(uc.baseline_cost_per_1k_turns_usd || 29.40).toFixed(2) + ' → $' + Number(uc.optimized_cost_per_1k_turns_usd || 3.45).toFixed(2),
+              '-' + (uc.avg_cost_reduction_pct || 88.3) + '% via Prefix Cache & Pruning'
+            ),
+            kpiCard(
+              'Monthly Token Spend per User',
+              '$' + Number(uc.per_user_monthly_baseline_usd || 7.85).toFixed(2) + ' → $' + Number(uc.per_user_monthly_optimized_usd || 0.98).toFixed(2),
+              'User-centric token spend savings'
+            ),
+            kpiCard(
+              'Total Fleet Savings (Monthly / Annual)',
+              '$' + fmtInt(uc.total_monthly_savings_usd || 46870) + '/mo',
+              '$' + fmtInt(uc.annualized_savings_usd || 562440) + '/yr annualized net savings'
+            )
+          );
+        }
+
+        const cohortBody = document.getElementById('userCohortsTableBody');
+        if (cohortBody) {
+          cohortBody.replaceChildren();
+          (uc.cohorts || []).forEach(function(c) {
+            cohortBody.appendChild(el('tr', null, [
+              el('td', null, [el('strong', null, [c.cohort])]),
+              el('td', null, [badge(c.primary_agent, 'badge-blue')]),
+              el('td', 'mono', [fmtInt(c.active_dau)]),
+              el('td', 'mono', [fmtInt(c.sessions_24h)]),
+              el('td', 'mono', [c.tokens_per_user_k + 'k tok']),
+              el('td', 'mono', [c.context_bloat_before_pct + '% → ' + c.context_bloat_after_pct + '%']),
+              el('td', 'mono', [c.idle_ratio_pct + '%']),
+              el('td', 'mono', ['$' + Number(c.baseline_cost_per_1k_usd).toFixed(2) + ' → $' + Number(c.optimized_cost_per_1k_usd).toFixed(2)]),
+              el('td', 'mono', [badge('$' + fmtInt(c.monthly_savings_usd) + '/mo saved', 'badge-green')]),
+            ]));
+          });
+        }
+
+        const skillBody = document.getElementById('skillMcpTableBody');
+        if (skillBody) {
+          skillBody.replaceChildren();
+          (uc.skill_mcp_breakdown || []).forEach(function(s) {
+            skillBody.appendChild(el('tr', null, [
+              el('td', 'mono', [el('strong', null, [s.resource_name])]),
+              el('td', null, [badge(s.kind, 'badge-blue')]),
+              el('td', null, [s.attached_agent]),
+              el('td', 'mono', [fmtInt(s.calls_24h)]),
+              el('td', 'mono', [s.prompt_tokens_m + 'M']),
+              el('td', 'mono', [s.cache_hit_pct + '%']),
+              el('td', 'mono', [s.context_bloat_pct + '%']),
+              el('td', null, [s.optimization_applied]),
+              el('td', 'mono', [badge('$' + fmtInt(s.monthly_saved_usd) + '/mo', 'badge-green')]),
+            ]));
+          });
+        }
+      }
+
+      const decBody = document.getElementById('decoratorEventsBody');
+      if (decBody && Array.isArray(decoratorEvents)) {
+        decBody.replaceChildren();
+        decoratorEvents.forEach(function(ev) {
+          decBody.appendChild(el('tr', null, [
+            el('td', 'mono', [ev.timestamp]),
+            el('td', 'mono', [ev.agent_name]),
+            el('td', 'mono', [ev.handler_name]),
+            el('td', null, [ev.protocol]),
+            el('td', 'mono', [ev.skill_or_mcp]),
+            el('td', null, [ev.user_cohort]),
+            el('td', 'mono', [ev.latency_ms + ' ms']),
+            el('td', 'mono', [ev.cache_hit_pct + '%']),
+            el('td', 'mono', [ev.context_bloat_pct + '%']),
+            el('td', 'mono', [ev.idle_ratio_pct + '%']),
+            el('td', null, [badge(ev.status, 'badge-green')]),
+          ]));
+        });
+      }
     }
 
     // ---------------------------------------------------------------------------
@@ -1290,16 +1562,24 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
+    const PLATFORM_META_LOCAL = {
+      alpha_evolve: { id: 'alpha_evolve', name: 'AlphaEvolve (Multi-Objective Pareto Loop)' },
+      opus_critic: { id: 'opus_critic', name: 'Opus Frontier Critic (Structural Prompt Refactoring)' },
+      vertex_vizier: { id: 'vertex_vizier', name: 'Google Vizier (Distributed Black-Box Bayesian Tuner)' },
+      hybrid_ensemble: { id: 'hybrid_ensemble', name: 'Hybrid Ensemble (AlphaEvolve + Vizier + Opus Critic)' },
+    };
+
     function applyEmbeddedMutation(endpoint, payload) {
       if (!currentState || !currentState.active_agent) return false;
       const agent = currentState.active_agent;
       const ts = agent.timeline || [];
       const lastPt = ts.length > 0 ? ts[ts.length - 1] : {
         generation: 14,
-        p95_latency_ms: 810.0,
-        cost_per_1k_turns_usd: 4.15,
-        task_accuracy_pct: 97.6,
-        prompt_cache_hit_pct: 84.5,
+        latency_ms: 690.0,
+        cost_usd: 3.45,
+        accuracy_pct: 96.4,
+        cache_hit_pct: 91.2,
+        error_rate_pct: 0.0,
       };
       const nextGen = Number(lastPt.generation || 14) + 1;
 
@@ -1313,34 +1593,71 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         return false;
       }
 
+      if (endpoint === '/api/select_optimizer' && payload && payload.platform_id) {
+        const pid = String(payload.platform_id);
+        currentState.optimizer_platforms = currentState.optimizer_platforms || {};
+        currentState.optimizer_platforms.active_platform_id = pid;
+        currentState.optimizer_platforms.active_platform = PLATFORM_META_LOCAL[pid] || PLATFORM_META_LOCAL.alpha_evolve;
+        renderState(currentState);
+        return true;
+      }
+
+      if (endpoint === '/api/decorator_ingest') {
+        currentState.decorator_events = currentState.decorator_events || [];
+        currentState.decorator_events.unshift({
+          timestamp: new Date().toLocaleTimeString() + ' (<10ms)',
+          agent_name: agent.agent_id || 'it_service_desk',
+          handler_name: (payload && payload.handler_name) || 'on_message_passing_turn',
+          protocol: (payload && payload.protocol) || 'ADK / MCP Decorator Stream',
+          model: agent.model || 'gemini-2.5-flash',
+          latency_ms: 565.0,
+          prompt_tokens: 19400,
+          cached_tokens: 17980,
+          output_tokens: 295,
+          cache_hit_pct: 92.7,
+          context_bloat_pct: 12.1,
+          idle_ratio_pct: 6.4,
+          skill_or_mcp: 'mcp://' + (agent.agent_id || 'it_service_desk') + '/decorator',
+          user_cohort: 'Enterprise Active DAU Cohort',
+          status: '200 OK (@vibelift_telemetry)',
+        });
+        renderState(currentState);
+        return true;
+      }
+
       if (endpoint === '/api/inject_anomaly') {
         (agent.parameters || []).forEach(function(p) {
-          if (p.param_id === 'p95_latency_ms') { p.current_value = 3180.0; p.status = '⚠️ SLO BREACH (SPIKE)'; }
-          else if (p.param_id === 'cost_per_1k_turns_usd') { p.current_value = 13.90; p.status = '⚠️ BUDGET BREACH'; }
-          else if (p.param_id === 'task_accuracy_pct') { p.current_value = 88.2; p.status = '⚠️ GUARDRAIL BREACH'; }
-          else if (p.param_id === 'prompt_cache_hit_pct') { p.current_value = 22.0; p.status = '⚠️ CACHE THRASH'; }
+          const k = p.key || p.param_id;
+          if (k === 'latency_ms' || k === 'p95_latency_ms') { p.current_value = 2390.0; p.status = '⚠️ SLA BREACH (+246%)'; }
+          else if (k === 'cost_usd' || k === 'cost_per_1k_turns_usd') { p.current_value = 24.80; p.status = '⚠️ CACHE BUST SPIKE'; }
+          else if (k === 'accuracy_pct' || k === 'task_accuracy_pct') { p.current_value = 88.2; p.status = '⚠️ ACCURACY REGRESSION'; }
+          else if (k === 'cache_hit_pct' || k === 'prompt_cache_hit_pct') { p.current_value = 14.5; p.status = '⚠️ PREFIX INVALIDATED'; }
+          else if (k === 'error_rate_pct') { p.current_value = 9.4; p.status = '⚠️ 429 QUOTA ERRORS'; }
+          else if (k === 'context_bloat_pct') { p.current_value = 68.5; p.status = '⚠️ CONTEXT BLOAT SPIKE'; }
+          else if (k === 'idle_ratio_pct') { p.current_value = 44.0; p.status = '⚠️ TOOL WAIT BOTTLENECK'; }
         });
-        agent.health_status = 'CRITICAL: LOG ANOMALY DETECTED';
+        agent.health_status = '⚠️ CRITICAL LOG ANOMALY (Cache Bust + 429 Spike)';
         ts.push({
-          timestamp_label: 'Live Anomaly (Gen ' + nextGen + ')',
-          generation: nextGen,
-          p95_latency_ms: 3180.0,
-          cost_per_1k_turns_usd: 13.90,
-          task_accuracy_pct: 88.2,
-          prompt_cache_hit_pct: 22.0,
-          event_marker: 'Log Anomaly Injected',
+          timestamp_label: 'Live Anomaly!',
+          generation: lastPt.generation || 14,
+          latency_ms: 2390.0,
+          cost_usd: 24.80,
+          accuracy_pct: 88.2,
+          cache_hit_pct: 14.5,
+          error_rate_pct: 9.4,
+          event_marker: '⚠️ Dynamic Prompt Regression Injected',
         });
-        agent.actions_taken = agent.actions_taken || [];
-        agent.actions_taken.unshift({
+        agent.actions = agent.actions || [];
+        agent.actions.unshift({
           generation: nextGen,
           timestamp: 'Just now (Live Log Alert)',
-          parameter_targeted: 'All Parameters (Latency, Cost & Cache Breach)',
+          parameter_targeted: 'All Parameters (Latency, Cost, Context Bloat & Cache Breach)',
           root_cause_from_logs: 'Upstream schema drift injected volatile correlation_id into system prefix, invalidating KV prefix cache and triggering 3x retry loops.',
-          action_title: 'LIVE ALERT: Production Log Anomaly Detected — Awaiting AlphaEvolve Remediation',
-          action_taken: 'Telemetry collector flagged P95 latency > 3,100ms and Cache Hit drop to 22%. Ready to trigger AlphaEvolve evolution cycle.',
-          impact_summary: 'Click "Run AlphaEvolve Optimization Cycle" to evolve and promote a remediation genome.',
-          status: 'ANOMALY ACTIVE — RUN ALPHAEVOLVE',
-          diff_snippet: '! ALERT: Uncached dynamic prefix token detected at offset 14\n! Action Required: Execute AlphaEvolve Evolution Step',
+          action_title: 'LIVE ALERT: Production Log Anomaly Detected — Awaiting Optimizer Remediation',
+          action_taken: '@vibelift_telemetry decorator flagged P95 latency > 2,300ms and Cache Hit drop to 14.5%. Ready to trigger optimization cycle.',
+          impact_summary: 'Click "Run Optimization Cycle" to evolve and promote a remediation genome.',
+          status: 'ANOMALY ACTIVE — RUN OPTIMIZER',
+          diff_snippet: '! ALERT: Uncached dynamic prefix token detected at offset 14\\n! Action Required: Execute Optimization Cycle',
         });
         allAgentsCache[agent.agent_id] = agent;
         renderState(currentState);
@@ -1348,44 +1665,56 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       }
 
       if (endpoint === '/api/evolve_generation') {
-        const newLat = Math.max(420.0, Math.round((Number(lastPt.p95_latency_ms) < 1500 ? Number(lastPt.p95_latency_ms) - 45.0 : 760.0) * 10) / 10);
-        const newCost = Math.max(2.10, Math.round((Number(lastPt.cost_per_1k_turns_usd) < 9.0 ? Number(lastPt.cost_per_1k_turns_usd) - 0.35 : 3.95) * 100) / 100);
-        const newAcc = Math.min(99.4, Math.round((Number(lastPt.task_accuracy_pct) > 92.0 ? Number(lastPt.task_accuracy_pct) + 0.3 : 97.9) * 10) / 10);
-        const newCache = Math.min(95.0, Math.round((Number(lastPt.prompt_cache_hit_pct) > 50.0 ? Number(lastPt.prompt_cache_hit_pct) + 2.5 : 86.5) * 10) / 10);
+        const curLat = Number(lastPt.latency_ms || lastPt.p95_latency_ms || 690.0);
+        const curCost = Number(lastPt.cost_usd || lastPt.cost_per_1k_turns_usd || 3.45);
+        const curAcc = Number(lastPt.accuracy_pct || lastPt.task_accuracy_pct || 96.4);
+        const curCache = Number(lastPt.cache_hit_pct || lastPt.prompt_cache_hit_pct || 91.2);
+        const newLat = Math.max(380.0, Math.round((curLat < 1500 ? curLat * 0.86 : 590.0) * 10) / 10);
+        const newCost = Math.max(1.80, Math.round((curCost < 9.0 ? curCost * 0.84 : 2.85) * 100) / 100);
+        const newAcc = Math.min(99.2, Math.round((curAcc > 92.0 ? curAcc + 0.6 : 97.6) * 10) / 10);
+        const newCache = Math.min(97.5, Math.round((curCache > 50.0 ? curCache + 1.8 : 94.6) * 10) / 10);
+        const activePlat = (currentState.optimizer_platforms && currentState.optimizer_platforms.active_platform && currentState.optimizer_platforms.active_platform.name)
+          ? currentState.optimizer_platforms.active_platform.name.split(' (')[0]
+          : 'AlphaEvolve';
         (agent.parameters || []).forEach(function(p) {
-          if (p.param_id === 'p95_latency_ms') { p.current_value = newLat; p.status = 'OPTIMAL'; }
-          else if (p.param_id === 'cost_per_1k_turns_usd') { p.current_value = newCost; p.status = 'OPTIMAL'; }
-          else if (p.param_id === 'task_accuracy_pct') { p.current_value = newAcc; p.status = 'GUARDRAIL PASS'; }
-          else if (p.param_id === 'prompt_cache_hit_pct') { p.current_value = newCache; p.status = 'OPTIMAL'; }
+          const k = p.key || p.param_id;
+          if (k === 'latency_ms' || k === 'p95_latency_ms') { p.current_value = newLat; p.status = 'OPTIMIZED BY GEN ' + nextGen; }
+          else if (k === 'cost_usd' || k === 'cost_per_1k_turns_usd') { p.current_value = newCost; p.status = 'OPTIMIZED BY GEN ' + nextGen; }
+          else if (k === 'accuracy_pct' || k === 'task_accuracy_pct') { p.current_value = newAcc; p.status = 'EXCEEDING TARGET (' + newAcc + '%)'; }
+          else if (k === 'cache_hit_pct' || k === 'prompt_cache_hit_pct') { p.current_value = newCache; p.status = 'LOCKED (' + newCache + '% Hit)'; }
+          else if (k === 'error_rate_pct') { p.current_value = 0.0; p.status = 'SELF-HEALED (0.0%)'; }
+          else if (k === 'context_bloat_pct') { p.current_value = 11.4; p.status = 'PRUNED (11.4% Bloat)'; }
+          else if (k === 'idle_ratio_pct') { p.current_value = 6.2; p.status = 'OPTIMIZED (6.2% Idle)'; }
           else {
             p.current_value = p.direction === 'LOWER'
-              ? Math.round((Number(p.current_value) * 0.94) * 100) / 100
+              ? Math.round((Number(p.current_value) * 0.92) * 100) / 100
               : Math.min(99.9, Math.round((Number(p.current_value) * 1.02) * 100) / 100);
-            p.status = 'OPTIMAL';
+            p.status = 'OPTIMIZED';
           }
         });
-        agent.health_status = 'OPTIMIZED (GEN ' + nextGen + ')';
+        agent.health_status = 'OPTIMIZED & HEALED (' + activePlat + ' • Gen ' + nextGen + ' Active)';
         agent.monthly_savings_usd = Number(agent.monthly_savings_usd || 0) + 1850;
         ts.push({
-          timestamp_label: 'Now (Gen ' + nextGen + ')',
+          timestamp_label: 'Gen ' + nextGen + ' (Live)',
           generation: nextGen,
-          p95_latency_ms: newLat,
-          cost_per_1k_turns_usd: newCost,
-          task_accuracy_pct: newAcc,
-          prompt_cache_hit_pct: newCache,
-          event_marker: 'Live Evolution Step',
+          latency_ms: newLat,
+          cost_usd: newCost,
+          accuracy_pct: newAcc,
+          cache_hit_pct: newCache,
+          error_rate_pct: 0.0,
+          event_marker: '🧬 ' + activePlat + ' Gen ' + nextGen + ' Auto-Healed',
         });
-        agent.actions_taken = agent.actions_taken || [];
-        agent.actions_taken.unshift({
+        agent.actions = agent.actions || [];
+        agent.actions.unshift({
           generation: nextGen,
-          timestamp: 'Just now (Live Run)',
-          parameter_targeted: 'Multi-Objective Pareto Frontier (All Weighted Parameters)',
-          root_cause_from_logs: 'Analyzed recent 500 production traces; detected volatile correlation_id header breaking prefix cache and redundant tool verification calls.',
-          action_title: 'Sanitized Dynamic Header & Compressed Verification Step',
-          action_taken: 'Stripped volatile correlation_id from system prompt prefix, restored KV cache hit rate, and fused verification step into single structured output schema.',
+          timestamp: 'Just now (Live Run • ' + activePlat + ')',
+          parameter_targeted: 'Multi-Objective Pareto Frontier (Latency, Cost, Context Bloat & Cache Hit)',
+          root_cause_from_logs: '@vibelift_telemetry decorator detected volatile header breaking prefix cache and redundant tool history bloating.',
+          action_title: 'Gen ' + nextGen + ' [' + activePlat + ']: Sanitized Dynamic Header & Pruned Context Bloat',
+          action_taken: 'Stripped volatile correlation_id from system prompt prefix, restored KV cache hit rate, and compacted N-2 tool history.',
           impact_summary: 'P95 Latency -> ' + newLat + 'ms | Cost -> $' + newCost + ' | Accuracy -> ' + newAcc + '% | Cache Hit -> ' + newCache + '%',
           status: 'PROMOTED TO PROD',
-          diff_snippet: '- system_prefix: "Correlation={{corr_id}} | Follow all steps..."\n+ system_prefix: "[STATIC_CACHED_V' + nextGen + '] Return single verified JSON block."',
+          diff_snippet: '- system_prefix: "Correlation={{corr_id}} | Follow all steps..."\\n+ system_prefix: "[STATIC_CACHED_V' + nextGen + '] Return single verified JSON block."',
         });
         allAgentsCache[agent.agent_id] = agent;
         renderState(currentState);
@@ -1396,20 +1725,18 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         const slug = String(payload.label || 'custom_metric').toLowerCase().replace(/[^a-z0-9]+/g, '_');
         const bVal = Number(payload.baseline_val) || 80.0;
         const dir = payload.direction || 'HIGHER';
-        const curVal = dir === 'LOWER' ? Math.round(bVal * 0.85 * 100) / 100 : Math.round(bVal * 1.08 * 100) / 100;
+        const curVal = dir === 'LOWER' ? Math.round(bVal * 0.65 * 100) / 100 : Math.round(Math.min(99.0, bVal * 1.12) * 100) / 100;
         agent.parameters = agent.parameters || [];
         agent.parameters.push({
-          param_id: slug,
+          key: slug,
           label: payload.label || 'Custom Metric',
-          category: 'Custom User-Defined',
           unit: payload.unit || '%',
           direction: dir,
           baseline_value: bVal,
           current_value: curVal,
           target_value: Number(payload.target_val) || 95.0,
           weight_pct: Number(payload.weight_pct) || 10,
-          status: 'ACTIVE TRACKING',
-          description: 'User-defined optimization parameter actively weighted in the AlphaEvolve fitness loop.',
+          status: 'TRACKING IN LOGS (@vibelift_telemetry)',
         });
         allAgentsCache[agent.agent_id] = agent;
         renderState(currentState);
@@ -1459,6 +1786,27 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       triggerApi('/api/select_agent', {agent_id: agentId});
     }
 
+    function onSelectOptimizer(platformId) {
+      triggerApi('/api/select_optimizer', {platform_id: platformId});
+    }
+
+    function applyParameterPreset(label, unit, dirValue, baselineVal, targetVal, weightVal) {
+      document.getElementById('newParamLabel').value = label;
+      document.getElementById('newParamUnit').value = unit;
+      document.getElementById('newParamDirection').value = dirValue;
+      document.getElementById('newParamBaseline').value = String(baselineVal);
+      document.getElementById('newParamTarget').value = String(targetVal);
+      document.getElementById('newParamWeight').value = String(weightVal);
+      onAddCustomParameter();
+    }
+
+    function emitLiveDecoratorEvent() {
+      triggerApi('/api/decorator_ingest', {
+        handler_name: 'on_message_passing_turn',
+        protocol: 'ADK / MCP Decorator Stream (<10ms)',
+      });
+    }
+
     function onAddCustomParameter() {
       const label = document.getElementById('newParamLabel').value.trim() || 'Custom Metric';
       const unit = document.getElementById('newParamUnit').value.trim() || '%';
@@ -1479,6 +1827,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 
     // ---------------------------------------------------------------------------
     // Gemini Enterprise AppBridge & Streamable MCP postMessage protocol
+    // Docks on the Right Side Panel ('pip') by default with a prominent Fullscreen toggle button.
     // ---------------------------------------------------------------------------
     const INITIAL_EMBEDDED_STATE = __VIBELIFT_INITIAL_STATE_JSON__;
     const pending = {};
@@ -1486,14 +1835,38 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     let isBridgeInitialized = false;
     let currentDisplayMode = 'pip';
 
+    function notifyHostSizeChanged() {
+      if (!isEmbedded()) return;
+      try {
+        const h = Math.max(document.documentElement.scrollHeight || 0, document.body.scrollHeight || 0, 720);
+        post({
+          jsonrpc: '2.0',
+          method: 'ui/notifications/size-changed',
+          params: { height: h },
+        });
+      } catch (e) {}
+    }
+
     function setDisplayMode(mode) {
-      return callHost('ui/request-display-mode', { mode: mode }).then(function(res) {
-        if (res && res.mode) {
-          currentDisplayMode = res.mode;
-          syncDisplayModeButton();
+      if (!isEmbedded()) {
+        if (mode === 'fullscreen' && document.documentElement.requestFullscreen && !document.fullscreenElement) {
+          document.documentElement.requestFullscreen().catch(function() {});
+        } else if (mode !== 'fullscreen' && document.exitFullscreen && document.fullscreenElement) {
+          document.exitFullscreen().catch(function() {});
         }
+        currentDisplayMode = mode;
+        syncDisplayModeButton();
+        return Promise.resolve({ mode: mode });
+      }
+      return callHost('ui/request-display-mode', { mode: mode }, 4000).then(function(res) {
+        currentDisplayMode = (res && res.mode) ? res.mode : mode;
+        syncDisplayModeButton();
+        notifyHostSizeChanged();
+        return res;
       }).catch(function(err) {
-        console.warn('Display mode request failed:', err);
+        console.warn('Display mode request notice:', err);
+        currentDisplayMode = mode;
+        syncDisplayModeButton();
       });
     }
 
@@ -1505,15 +1878,13 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     function syncDisplayModeButton() {
       const btn = document.getElementById('btnModeFullscreen');
       if (!btn) return;
-      if (window.parent && window.parent !== window) {
-        btn.style.display = 'inline-flex';
-      }
+      btn.style.display = 'inline-flex';
       if (currentDisplayMode === 'fullscreen') {
-        btn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg> Side Panel';
-        btn.title = 'Return to side panel';
+        btn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg> Dock to Right Panel';
+        btn.title = 'Return to right side panel (pip)';
       } else {
         btn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg> Fullscreen';
-        btn.title = 'Expand to fullscreen';
+        btn.title = 'Expand dashboard to Fullscreen';
       }
     }
 
@@ -1528,7 +1899,11 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           if (msg.id && pending[msg.id]) {
             const p = pending[msg.id];
             delete pending[msg.id];
-            p.resolve({ protocolVersion: '2025-06-18', capabilities: {} });
+            p.resolve({
+              protocolVersion: '2025-06-18',
+              hostCapabilities: {},
+              hostContext: { displayMode: 'pip', availableDisplayModes: ['pip', 'fullscreen', 'inline'] },
+            });
           }
         }, 10);
         return;
@@ -1618,24 +1993,36 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 
     // 1. Instantly notify host that UI is ready
     emitAppInitialized();
+    syncDisplayModeButton();
 
-    // 2. Perform ui/initialize handshake per MCP UI specification
-    callHost('ui/initialize', {
+    // 2. Perform ui/initialize handshake per MCP Apps UI specification with availableDisplayModes
+    const initPayload = {
       protocolVersion: '2025-06-18',
-      capabilities: {},
-      clientInfo: { name: 'vibelift-analytics-dashboard', version: '1.0.0' },
-    }, 2000).catch(function() {
-      return callHost('initialize', {
-        protocolVersion: '2025-06-18',
-        capabilities: {},
-        clientInfo: { name: 'vibelift-analytics-dashboard', version: '1.0.0' },
-      }, 1000).catch(function() { return {}; });
-    }).then(function() {
+      appInfo: { name: 'vibelift-analytics-dashboard', version: '1.1.0' },
+      clientInfo: { name: 'vibelift-analytics-dashboard', version: '1.1.0' },
+      appCapabilities: { availableDisplayModes: ['pip', 'fullscreen', 'inline'] },
+      capabilities: { availableDisplayModes: ['pip', 'fullscreen', 'inline'] },
+    };
+    callHost('ui/initialize', initPayload, 2500).catch(function() {
+      return callHost('initialize', initPayload, 1500).catch(function() { return {}; });
+    }).then(function(res) {
       emitAppInitialized();
+      const hostMode = res && res.hostContext && res.hostContext.displayMode;
+      if (hostMode) {
+        currentDisplayMode = hostMode;
+      }
       syncDisplayModeButton();
+      // Automatically request Right Side Panel ('pip') when opened inline in Gemini Enterprise
+      if (isEmbedded() && currentDisplayMode !== 'pip' && currentDisplayMode !== 'fullscreen') {
+        setDisplayMode('pip');
+      }
+      notifyHostSizeChanged();
     }).catch(function(err) {
       console.warn('AppBridge handshake notice:', err);
       emitAppInitialized();
+      if (isEmbedded()) {
+        setDisplayMode('pip');
+      }
     });
 
     setTimeout(emitAppInitialized, 150);

@@ -833,6 +833,96 @@ class DeploymentHardeningTest(unittest.TestCase):
     self.assertIn('vibelift_analytics', payload['state']['all_agents'])
     self.assertIn('deep_research', payload['state']['all_agents'])
 
+  def test_dashboard_javascript_syntax_is_valid_and_pip_configured(self) -> None:
+    import subprocess
+    import tempfile
+    import shutil
+    import ui_template
+
+    state = server._global_controller.get_state_payload(fast_mcp=True)
+    html = ui_template.render_dashboard_html(initial_state=state)
+    self.assertIn('btnModeFullscreen', html)
+    self.assertIn("availableDisplayModes: ['pip', 'fullscreen', 'inline']", html)
+    self.assertIn("setDisplayMode('pip')", html)
+    self.assertIn('tabPanel3', html)
+
+    scripts = re.findall(r'<script[^>]*>(.*?)</script>', html, flags=re.DOTALL)
+    self.assertGreaterEqual(len(scripts), 1)
+    node_bin = shutil.which('node')
+    if node_bin:
+      for idx, script_body in enumerate(scripts):
+        with tempfile.NamedTemporaryFile('w', suffix=f'_{idx}.js', delete=False, encoding='utf-8') as f:
+          f.write(script_body)
+          tmp_path = f.name
+        try:
+          proc = subprocess.run([node_bin, '--check', tmp_path], capture_output=True, text=True, check=False)
+          self.assertEqual(proc.returncode, 0, f'SyntaxError in <script> #{idx}: {proc.stderr}')
+        finally:
+          os.unlink(tmp_path)
+
+    # Verify MCP resource metadata and open_dashboard _meta declare right-panel pip mode
+    ui_meta = mcp_server.RESOURCE_META['ui']
+    self.assertEqual(ui_meta['preferredMode'], 'pip')
+    self.assertEqual(ui_meta['displayMode'], 'pip')
+    self.assertEqual(ui_meta['availableDisplayModes'], ['pip', 'fullscreen', 'inline'])
+
+  def test_weekly_sync_enhancements_decorator_optimizer_and_user_centric_finops(self) -> None:
+    from fastapi.testclient import TestClient
+    from app import fast_api_app
+
+    @telemetry.vibelift_telemetry(
+        agent_name='it_service_desk',
+        protocol='MCP',
+        model='gemini-2.5-flash',
+        skill_or_mcp='mcp.servicenow_iam',
+    )
+    def sample_decorated_tool(ticket_id: str) -> dict:
+      return {'ticket_id': ticket_id, 'resolved': True, 'cached': True}
+
+    res = sample_decorated_tool('INC-99412')
+    self.assertTrue(res['resolved'])
+    events = telemetry.get_recent_decorator_events()
+    self.assertGreaterEqual(len(events), 1)
+    self.assertEqual(events[0]['skill_or_mcp'], 'mcp.servicenow_iam')
+
+    client = TestClient(fast_api_app.app)
+    state = client.get('/api/state').json()
+    self.assertIn('optimizer_platforms', state)
+    self.assertIn('user_centric', state)
+    self.assertIn('decorator_events', state)
+    self.assertEqual(state['user_centric']['supported_dau_capacity'], '4,000 – 10,000 DAU')
+    self.assertEqual(state['user_centric']['baseline_cost_per_1k_turns_usd'], 29.40)
+    self.assertEqual(state['user_centric']['optimized_cost_per_1k_turns_usd'], 3.45)
+
+    # Verify context_bloat_pct and idle_ratio_pct parameters exist on active agent
+    param_keys = [p['key'] for p in state['active_agent']['parameters']]
+    self.assertIn('context_bloat_pct', param_keys)
+    self.assertIn('idle_ratio_pct', param_keys)
+
+    # Test switching optimization platform via /api/select_optimizer
+    opt_resp = client.post('/api/select_optimizer', json={'platform_id': 'hybrid_ensemble'})
+    self.assertEqual(opt_resp.status_code, 200)
+    opt_state = opt_resp.json()
+    self.assertEqual(opt_state['optimizer_platforms']['active_platform_id'], 'hybrid_ensemble')
+
+    # Test ingesting a real-time decorator event via /api/decorator_ingest
+    ing_resp = client.post('/api/decorator_ingest', json={
+        'agent_name': 'deep_research',
+        'protocol': 'A2A',
+        'handler_name': 'synthesize_sec_10k_corpus',
+        'model': 'gemini-2.5-pro',
+        'prompt_tokens': 24800,
+        'cached_tokens': 23100,
+        'output_tokens': 640,
+        'latency_ms': 410.5,
+        'idle_ratio_pct': 6.8,
+        'context_bloat_pct': 6.4,
+        'skill_or_mcp': 'mcp.vertex_ai_search',
+    })
+    self.assertEqual(ing_resp.status_code, 200)
+    ing_state = ing_resp.json()
+    self.assertEqual(ing_state['decorator_events'][0]['handler_name'], 'synthesize_sec_10k_corpus')
+
 
 if __name__ == '__main__':
   unittest.main()
