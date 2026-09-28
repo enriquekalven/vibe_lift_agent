@@ -12,11 +12,11 @@
         "properties": {
           "initial_agent": {
             "type": "string",
-            "description": "Optional agent to select: 'mortgage_assistant', 'stock_market_updates', or 'forecast_engine'."
+            "description": "Optional Gemini Enterprise agent to select: 'it_service_desk' (IT Service Desk), 'vibelift_analytics' (VibeLift Analytics & FinOps), or 'deep_research' (Deep Research)."
           },
           "focus_tab": {
             "type": "integer",
-            "description": "Tab to open: 0 = live Gemini Enterprise agent fleet (default), 1 = demo agent optimization parameters, 2 = AlphaEvolve performance and actions. Omit to open the live fleet."
+            "description": "Tab to open: 0 = live Gemini Enterprise agent fleet (default), 1 = agent optimization parameters, 2 = AlphaEvolve performance and actions. Omit to open the live fleet."
           },
           "window_hours": {
             "type": "integer",
@@ -92,7 +92,7 @@
         "properties": {
           "agent_id": {
             "type": "string",
-            "description": "Optional agent identifier: 'mortgage_assistant', 'stock_market_updates', or 'forecast_engine'."
+            "description": "Optional Gemini Enterprise agent identifier: 'it_service_desk', 'vibelift_analytics', or 'deep_research'."
           }
         }
       }

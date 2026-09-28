@@ -9,20 +9,20 @@ import telemetry
 
 GCP_ADK_TOOL_SEQUENCE: tuple[tuple[str, str], ...] = (
     (
-        'vertex_ai.code_search',
-        'Indexed forecast_engine/engine.py & extracted solver constraints via Vertex AI Code Index.',
+        'adk.agent_engine.it_service_desk',
+        'Triaged IT support ticket & checked runbooks via service-desk-agent with static prefix cache hit.',
     ),
     (
-        'google_search.web_retrieval',
-        'Fetched live Santee Cooper & Treasury rate curve benchmarks via Google Search grounding.',
+        'adk.agent_engine.service_desk_escalation',
+        'Reviewed resolution plan against IT policy & escalated to tier-2 service-desk-escalation.',
     ),
     (
-        'adk.subagent.mortgage_assistant',
-        'Validated underwriting rules with shared static prefix prompt cache hit.',
+        'mcp.vibelift_analytics.open_dashboard',
+        'Aggregated live Gemini Enterprise fleet telemetry & prompt cache FinOps economics.',
     ),
     (
-        'adk.subagent.stock_market_updates',
-        'Aggregated multi-horizon market deltas via cached ADK tool schemas.',
+        'gemini_enterprise.deep_research',
+        'Synthesized multi-source research plan and citation-grounded report with deduplicated snippets.',
     ),
     (
         'gcp.cloud_storage_checkpoint_writer',

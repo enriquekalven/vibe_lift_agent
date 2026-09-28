@@ -67,7 +67,7 @@ steps:
           --concurrency=80 \
           --timeout=300 \
           --cpu-boost \
-          --min-instances=0 \
+          --min-instances=1 \
           --max-instances=10 \
           --update-env-vars='GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_REGION=${_REGION},GOOGLE_CLOUD_LOCATION=${_REGION},GOOGLE_GENAI_USE_VERTEXAI=TRUE,USE_UVICORN=1,ENABLE_MCP_APP=1,MCP_PROTOCOL_VERSION=2025-06-18,VIBELIFT_PUBLIC_URL=https://${_SERVICE}-${PROJECT_NUMBER}.${_REGION}.run.app'
 

@@ -35,7 +35,7 @@ Designed for production deployment on **Google Cloud Run**, VibeLift continuousl
      - **Tab 0 — Gemini Enterprise Agent Fleet**: Real-time inventory, requests, error rates, latency percentiles, LLM calls, token usage, and model spend across every deployed agent.
      - **Tab 1 — Overview & Prompt Cache Economics**: Turn-by-turn prefix cache hit ratio, breakpoint diagnostics, and multi-objective parameter configuration.
      - **Tab 2 — AlphaEvolve Studio**: Closed-loop Pareto evolutionary optimization, anomaly injection, and guardrail rollback verification.
-   - Multi-agent optimization profiles (`Mortgage Underwriting Assistant`, `Stock Market Analysis Engine`, `Regulatory Forecast Engine`).
+   - Multi-agent optimization profiles synchronized with Gemini Enterprise (`IT Service Desk` on Vertex AI Agent Engine, `VibeLift Analytics & FinOps` on Cloud Run A2A/MCP, and `Deep Research` Google-managed research agent).
 
 5. **Gemini Enterprise BYO MCP App Integration**:
    - Implements a streamable HTTP JSON-RPC 2.0 MCP server at `/mcp` compliant with protocol versions `2025-06-18` and `2025-03-26`.

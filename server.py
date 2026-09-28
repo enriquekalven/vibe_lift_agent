@@ -42,11 +42,12 @@ import threading
 
 
 class VibeLiftRuntimeController:
-  """Coordinates the selectable demo agents, AlphaEvolve optimizer, GCP telemetry, and the GE fleet."""
+  """Coordinates the selectable Gemini Enterprise agents, AlphaEvolve optimizer, GCP telemetry, and GE fleet."""
 
   def __init__(self, fleet_service: ge_fleet.GeminiEnterpriseFleetService | None = None) -> None:
     """Initializes the optimizer, long-running agent, GCP telemetry client, and fleet service."""
     self._lock = threading.Lock()
+    self._warmer_started = False
     self.optimizer = alpha_evolve_optimizer.VibeLiftAlphaEvolveOptimizer()
     self.agent = long_running_agent.LongRunningVibeLiftAgent(
         self.optimizer,
@@ -56,10 +57,44 @@ class VibeLiftRuntimeController:
     self.gcp_telemetry = gcp_telemetry.GoogleCloudTelemetryService()
     self.ge_fleet = fleet_service or ge_fleet.get_ge_fleet_service()
 
-  def get_fleet_payload(self, window_hours: int | None = None, force_refresh: bool = False) -> dict[str, object]:
+  def start_background_warmer(self, interval_s: float = 45.0) -> None:
+    """Starts a daemon thread that keeps the GE fleet and GCP telemetry caches warm on Cloud Run."""
+    with self._lock:
+      if self._warmer_started:
+        return
+      self._warmer_started = True
+
+    def _warm_loop() -> None:
+      import time
+      while True:
+        try:
+          self.get_fleet_payload(window_hours=24, force_refresh=False)
+          self.gcp_telemetry.list_cloud_run_agent_services(force_refresh=True)
+          self.gcp_telemetry.fetch_gemini_enterprise_support_telemetry(limit=6, force_refresh=True)
+        except Exception:
+          logger.debug('Background cache warmer iteration failed', exc_info=True)
+        time.sleep(max(15.0, interval_s))
+
+    threading.Thread(target=_warm_loop, daemon=True, name='vibelift-fleet-warmer').start()
+
+  def get_fleet_payload(
+      self,
+      window_hours: int | None = None,
+      force_refresh: bool = False,
+      allow_stale: bool = False,
+      max_wait_s: float | None = None,
+  ) -> dict[str, object]:
     """Returns the live Gemini Enterprise agent fleet (inventory joined with real telemetry)."""
     try:
-      return self.ge_fleet.collect(window_hours=window_hours, force_refresh=force_refresh)
+      fleet = self.ge_fleet.collect(
+          window_hours=window_hours,
+          force_refresh=force_refresh,
+          allow_stale=allow_stale,
+          max_wait_s=max_wait_s,
+      )
+      with self._lock:
+        self.optimizer.sync_from_ge_fleet(fleet)
+      return fleet
     except Exception:  # collect() degrades per source; this guards against unexpected failures.
       logger.exception('Gemini Enterprise fleet collection failed')
       return {
@@ -73,16 +108,32 @@ class VibeLiftRuntimeController:
           'notes': [],
       }
 
-  def get_state_payload(self, include_fleet: bool = True, window_hours: int | None = None) -> dict[str, object]:
-    """Builds the JSON payload for the dashboard (demo tabs plus, optionally, the live GE fleet)."""
+  def get_state_payload(
+      self,
+      include_fleet: bool = True,
+      window_hours: int | None = None,
+      fast_mcp: bool = False,
+  ) -> dict[str, object]:
+    """Builds the JSON payload for the dashboard (optimization tabs plus, optionally, the live GE fleet)."""
+    fleet_payload = None
+    if include_fleet:
+      fleet_payload = self.get_fleet_payload(
+          window_hours=window_hours,
+          allow_stale=fast_mcp,
+          max_wait_s=0.35 if fast_mcp else None,
+      )
+
     with self._lock:
       turns = list(self.agent.turns)
       active_agent_dict = self.optimizer.active_agent.to_dict()
       available_agents = self.optimizer.list_agents_summary()
+      all_agents = self.optimizer.get_all_agents_dict()
       steps = list(self.agent.step_descriptions)
 
-    services = self.gcp_telemetry.list_cloud_run_agent_services()
-    support_events = self.gcp_telemetry.fetch_gemini_enterprise_support_telemetry(limit=6)
+    services = self.gcp_telemetry.list_cloud_run_agent_services(non_blocking=fast_mcp)
+    support_events = self.gcp_telemetry.fetch_gemini_enterprise_support_telemetry(
+        limit=6, non_blocking=fast_mcp
+    )
 
     payload: dict[str, object] = {
         'agent_name': self.agent.agent_name,
@@ -93,12 +144,13 @@ class VibeLiftRuntimeController:
         'gemini_enterprise_support_events': support_events,
         'active_agent': active_agent_dict,
         'available_agents': available_agents,
+        'all_agents': all_agents,
         'summary': dict(telemetry.summarize_log_stream(turns)),
         'turns': [t.to_dict() for t in turns],
         'steps': steps,
     }
-    if include_fleet:
-      payload['ge_fleet'] = self.get_fleet_payload(window_hours=window_hours)
+    if include_fleet and fleet_payload is not None:
+      payload['ge_fleet'] = fleet_payload
     return payload
 
   def sync_gcp_telemetry(self) -> dict[str, object]:
@@ -176,6 +228,8 @@ class VibeLiftRuntimeController:
 
 # Shared singleton runtime controller
 _global_controller = VibeLiftRuntimeController()
+if os.environ.get('K_SERVICE') or os.environ.get('VIBELIFT_BACKGROUND_WARMER') == '1':
+  _global_controller.start_background_warmer()
 
 
 class VibeLiftHttpServer(http.server.ThreadingHTTPServer):
@@ -282,7 +336,7 @@ class VibeLiftRequestHandler(http.server.BaseHTTPRequestHandler):
     assert isinstance(srv, VibeLiftHttpServer)
     body = self._read_json_body()
     if self.path == '/api/select_agent':
-      agent_id = str(body.get('agent_id', 'mortgage_assistant'))
+      agent_id = str(body.get('agent_id', 'it_service_desk'))
       self._send_json(srv.controller.select_agent(agent_id))
       return
     if self.path == '/api/add_parameter':
@@ -521,7 +575,7 @@ def register_api_routes(app: object, controller: VibeLiftRuntimeController) -> N
 
   @app.post('/api/select_agent')
   def post_select_agent(payload: dict = fastapi.Body(default={})):
-    return controller.select_agent(str(payload.get('agent_id', 'mortgage_assistant')))
+    return controller.select_agent(str(payload.get('agent_id', 'it_service_desk')))
 
   @app.post('/api/add_parameter')
   def post_add_parameter(payload: dict = fastapi.Body(default={})):

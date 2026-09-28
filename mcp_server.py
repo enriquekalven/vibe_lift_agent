@@ -131,8 +131,13 @@ def _build_ui_meta(
 
 
 def _widget_html() -> str:
-  """Renders the VibeLift interactive dashboard HTML bundle with AppBridge."""
-  return ui_template.render_dashboard_html()
+  """Renders the VibeLift interactive dashboard HTML bundle with AppBridge and initial state."""
+  try:
+    ctrl = _get_controller()
+    initial_state = ctrl.get_state_payload(include_fleet=True, fast_mcp=True)
+  except Exception:
+    initial_state = None
+  return ui_template.render_dashboard_html(initial_state=initial_state)
 
 
 def _get_controller():
@@ -165,10 +170,12 @@ async def _tool_open_dashboard(session_key: str, args: dict[str, Any]) -> dict[s
     await asyncio.to_thread(ctrl.select_agent, str(initial_agent))
   focus_tab = _parse_focus_tab(args.get('focus_tab'))
   window_hours = ge_fleet.parse_window_hours(args.get('window_hours'))
+  if ge_fleet.parse_bool(args.get('force_refresh')):
+    ctrl.ge_fleet._trigger_async_refresh(window_hours or ctrl.ge_fleet.default_window_hours)
 
-  state = await asyncio.to_thread(ctrl.get_state_payload, True, window_hours)
+  state = await asyncio.to_thread(ctrl.get_state_payload, True, window_hours, True)
   project_id = state.get('gcp_project') or 'unconfigured'
-  active_agent = state.get('active_agent', {}).get('agent_name', 'Mortgage Assistant')
+  active_agent = state.get('active_agent', {}).get('display_name', 'IT Service Desk')
   fleet = state.get('ge_fleet') or {}
 
   msg = (
@@ -199,6 +206,8 @@ async def _tool_query_ge_agent_fleet(session_key: str, args: dict[str, Any]) -> 
       ctrl.get_fleet_payload,
       ge_fleet.parse_window_hours(args.get('window_hours')),
       ge_fleet.parse_bool(args.get('force_refresh')),
+      True,
+      0.45,
   )
   return {
       'content': [{'type': 'text', 'text': ge_fleet.summarize_fleet(fleet)}],
@@ -284,13 +293,15 @@ async def _tool_run_alpha_evolve_generation(session_key: str, args: dict[str, An
   active = evolved_state.get('active_agent', {})
   timeline = active.get('timeline', [])
   latest_gen = timeline[-1] if timeline else {}
+  actions = active.get('actions', [])
+  latest_action = actions[0] if actions else {}
 
   text_summary = (
-      f"AlphaEvolve Generation {latest_gen.get('generation', 13)} complete for `{active.get('agent_name')}`.\n"
+      f"AlphaEvolve Generation {latest_gen.get('generation', 13)} complete for `{active.get('display_name') or active.get('agent_id')}`.\n"
       f"- Status: {active.get('health_status')}\n"
-      f"- Mutation: {latest_gen.get('mutation_action')}\n"
-      f"- Decision: {latest_gen.get('decision')} (Rationale: {latest_gen.get('decision_rationale')})\n"
-      f"- Overall Score: {latest_gen.get('composite_score', 0):.1f}/100"
+      f"- Action: {latest_action.get('action_title')}\n"
+      f"- Impact: {latest_action.get('impact_summary')}\n"
+      f"- Monthly Savings: ${active.get('monthly_savings_usd', 0):,}/mo"
   )
   return {
       'content': [{'type': 'text', 'text': text_summary}],
@@ -301,7 +312,7 @@ async def _tool_run_alpha_evolve_generation(session_key: str, args: dict[str, An
 async def _tool_get_vibelift_state(session_key: str, args: dict[str, Any]) -> dict[str, Any]:
   """Retrieves complete VibeLift runtime state (turns, active agent, telemetry, and parameters)."""
   ctrl = _get_controller()
-  state = await asyncio.to_thread(ctrl.get_state_payload)
+  state = await asyncio.to_thread(ctrl.get_state_payload, True, None, True)
   return {
       'content': [{'type': 'text', 'text': f"VibeLift state: active agent `{state.get('active_agent', {}).get('agent_id')}`, {len(state.get('turns', []))} turns recorded."}],
       'structuredContent': state,
@@ -337,13 +348,13 @@ _TOOLS: list[dict[str, Any]] = [
             'properties': {
                 'initial_agent': {
                     'type': 'string',
-                    'description': "Optional agent to select: 'mortgage_assistant', 'stock_market_updates', or 'forecast_engine'.",
+                    'description': "Optional Gemini Enterprise agent to select: 'it_service_desk' (IT Service Desk), 'vibelift_analytics' (VibeLift Analytics & FinOps), or 'deep_research' (Deep Research).",
                 },
                 'focus_tab': {
                     'type': 'integer',
                     'description': (
                         'Tab to open: 0 = live Gemini Enterprise agent fleet (default), '
-                        '1 = demo agent optimization parameters, 2 = AlphaEvolve performance and actions. '
+                        '1 = agent optimization parameters, 2 = AlphaEvolve performance and actions. '
                         'Omit to open the live fleet.'
                     ),
                 },
@@ -449,7 +460,7 @@ _TOOLS: list[dict[str, Any]] = [
             'properties': {
                 'agent_id': {
                     'type': 'string',
-                    'description': "Optional agent identifier: 'mortgage_assistant', 'stock_market_updates', or 'forecast_engine'.",
+                    'description': "Optional Gemini Enterprise agent identifier: 'it_service_desk', 'vibelift_analytics', or 'deep_research'.",
                 },
             },
         },

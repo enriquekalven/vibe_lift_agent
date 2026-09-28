@@ -66,12 +66,12 @@ class VibeLiftFrameworkTest(unittest.TestCase):
 
   def test_detect_prefix_breakpoint_identifies_line_and_match(self) -> None:
     prev_prompt = [
-        'System Role: Mortgage Underwriter',
+        'System Role: Enterprise IT Service Desk Escalation Router',
         'Current Time: 2026-09-18T20:00:00Z',
         'Static Tool Schema Block',
     ]
     curr_prompt = [
-        'System Role: Mortgage Underwriter',
+        'System Role: Enterprise IT Service Desk Escalation Router',
         'Current Time: 2026-09-18T20:05:00Z',
         'Static Tool Schema Block',
     ]
@@ -103,12 +103,12 @@ class VibeLiftFrameworkTest(unittest.TestCase):
   def test_alpha_evolve_multi_agent_selection_and_custom_params(self) -> None:
     optimizer = alpha_evolve_optimizer.VibeLiftAlphaEvolveOptimizer()
     self.assertEqual(len(optimizer.list_agents_summary()), 3)
-    profile = optimizer.select_agent('forecast_engine')
-    self.assertEqual(profile.agent_id, 'forecast_engine')
+    profile = optimizer.select_agent('vibelift_analytics')
+    self.assertEqual(profile.agent_id, 'vibelift_analytics')
 
     initial_param_count = len(profile.parameters)
     optimizer.add_user_parameter(
-        label='Regulatory Citation Accuracy',
+        label='MCP Sub-Second Response Rate',
         unit='%',
         direction='higher_is_better',
         baseline_val=88.0,
@@ -168,8 +168,8 @@ class VibeLiftFrameworkTest(unittest.TestCase):
     self.assertIn('Line 2 mutated', bp_res['reason'])
 
     # Test trigger_alpha_evolve_cycle tool
-    evolve_res = json.loads(adk_agent_module.trigger_alpha_evolve_cycle('mortgage_assistant'))
-    self.assertEqual(evolve_res['agent_id'], 'mortgage_assistant')
+    evolve_res = json.loads(adk_agent_module.trigger_alpha_evolve_cycle('it_service_desk'))
+    self.assertEqual(evolve_res['agent_id'], 'it_service_desk')
     self.assertIn('active_generation', evolve_res)
 
   def test_http_server_renders_ui_and_executes_rest_api_end_to_end(self) -> None:
@@ -191,6 +191,7 @@ class VibeLiftFrameworkTest(unittest.TestCase):
         self.assertIn('Gemini Enterprise Agent Fleet', html_text)
         self.assertNotIn('Agent Registry', html_text)
         self.assertIn('Sync GCP Telemetry', html_text)
+        self.assertIn('IT Service Desk', html_text)
 
       # 1b. Verify GET /vibelift_googley_logo_1789766299532.jpg returns JPEG bytes
       with urllib.request.urlopen(
@@ -204,7 +205,7 @@ class VibeLiftFrameworkTest(unittest.TestCase):
       with urllib.request.urlopen(f'{base_url}/api/state') as resp:
         state = json.loads(resp.read().decode('utf-8'))
         self.assertEqual(
-            state['active_agent']['agent_id'], 'mortgage_assistant'
+            state['active_agent']['agent_id'], 'it_service_desk'
         )
         self.assertEqual(len(state['available_agents']), 3)
         self.assertEqual(state['ge_fleet']['totals']['agents'], 3)
@@ -242,17 +243,17 @@ class VibeLiftFrameworkTest(unittest.TestCase):
         self.assertEqual(synced['status'], 'synced')
         self.assertEqual(synced['fleet']['totals']['agents'], 3)
 
-      # 7. Verify POST /api/select_agent switches to stock_market_updates
+      # 7. Verify POST /api/select_agent switches to deep_research
       req_select = urllib.request.Request(
           f'{base_url}/api/select_agent',
-          data=json.dumps({'agent_id': 'stock_market_updates'}).encode('utf-8'),
+          data=json.dumps({'agent_id': 'deep_research'}).encode('utf-8'),
           headers={'Content-Type': 'application/json'},
           method='POST',
       )
       with urllib.request.urlopen(req_select) as resp:
         selected = json.loads(resp.read().decode('utf-8'))
         self.assertEqual(
-            selected['active_agent']['agent_id'], 'stock_market_updates'
+            selected['active_agent']['agent_id'], 'deep_research'
         )
 
       # 8. Verify POST /api/add_parameter adds a user-defined parameter
@@ -415,7 +416,7 @@ class VibeLiftFrameworkTest(unittest.TestCase):
               'jsonrpc': '2.0',
               'id': 5,
               'method': 'tools/call',
-              'params': {'name': 'open_dashboard', 'arguments': {'initial_agent': 'mortgage_assistant'}},
+              'params': {'name': 'open_dashboard', 'arguments': {'initial_agent': 'it_service_desk'}},
           }).encode('utf-8'),
           headers={
               'Content-Type': 'application/json',
@@ -549,7 +550,7 @@ class VibeLiftFrameworkTest(unittest.TestCase):
         'method': 'tools/call',
         'params': {
             'name': 'run_alpha_evolve_generation',
-            'arguments': {'agent_id': 'stock_market_updates'},
+            'arguments': {'agent_id': 'deep_research'},
         },
     })
     self.assertEqual(code_evolve, 200)
@@ -796,8 +797,41 @@ class DeploymentHardeningTest(unittest.TestCase):
       self.assertIn('--update-env-vars', text, name)
       self.assertIn('VIBELIFT_PUBLIC_URL=', text, name)
       self.assertIn('GOOGLE_GENAI_USE_VERTEXAI=TRUE', text, name)
+      self.assertIn('--min-instances=1', text, name)
     self.assertNotIn(':latest', _read_repo_file('cloudbuild.yaml'))
     self.assertIn('gcp-sa-discoveryengine', _read_repo_file('deploy_cloud_run.sh'))
+
+  def test_real_ge_agents_and_sub_second_mcp_open_dashboard(self) -> None:
+    import time
+    for fname in (
+        'alpha_evolve_optimizer.py',
+        'ui_template.py',
+        'server.py',
+        'mcp_server.py',
+        'app/agent.py',
+        'vibelift_mcp_spec_clean.json',
+        'README.md',
+    ):
+      content = _read_repo_file(fname)
+      for fake_id in ('mortgage_assistant', 'forecast_engine', 'stock_market_updates'):
+        self.assertNotIn(fake_id, content, f'Fake agent {fake_id} still present in {fname}')
+
+    t0 = time.monotonic()
+    code, _, body = mcp_server.handle_jsonrpc_sync({
+        'jsonrpc': '2.0',
+        'id': 'fast-open',
+        'method': 'tools/call',
+        'params': {'name': 'open_dashboard', 'arguments': {}},
+    })
+    elapsed_ms = (time.monotonic() - t0) * 1000.0
+    self.assertEqual(code, 200)
+    self.assertLess(elapsed_ms, 500.0, f'open_dashboard took {elapsed_ms:.1f}ms; must stay <500ms for GE connector')
+    payload = json.loads(body)['result']['structuredContent']
+    agent_ids = [a['agent_id'] for a in payload['state']['available_agents']]
+    self.assertEqual(agent_ids, ['it_service_desk', 'vibelift_analytics', 'deep_research'])
+    self.assertIn('it_service_desk', payload['state']['all_agents'])
+    self.assertIn('vibelift_analytics', payload['state']['all_agents'])
+    self.assertIn('deep_research', payload['state']['all_agents'])
 
 
 if __name__ == '__main__':

@@ -124,7 +124,7 @@ gcloud run deploy "${SERVICE_NAME}" \
     --concurrency=80 \
     --timeout=300 \
     --cpu-boost \
-    --min-instances=0 \
+    --min-instances=1 \
     --max-instances=10 \
     --update-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_REGION=${REGION},GOOGLE_CLOUD_LOCATION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=TRUE,USE_UVICORN=1,ENABLE_MCP_APP=1,MCP_PROTOCOL_VERSION=2025-06-18,VIBELIFT_PUBLIC_URL=${PUBLIC_URL}"
 

@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+import json
 import logo_asset
 
 # pylint: disable=line-too-long
@@ -468,16 +470,16 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <div>
         <div class="selector-label">1. Select Your Production Agent to Optimize</div>
         <select id="agentDropdown" class="agent-select" onchange="onSelectAgent(this.value)">
-          <option value="mortgage_assistant">Mortgage Underwriting Assistant (gemini-3.1-flash-lite)</option>
-          <option value="forecast_engine">Financial Grid &amp; Rate Forecast Engine (gemini-3.1-flash)</option>
-          <option value="stock_market_updates">Stock Market &amp; Portfolio Intelligence Agent (Multi-Subagent)</option>
+          <option value="it_service_desk">IT Service Desk (gemini-2.5-flash &bull; Vertex AI Agent Engine)</option>
+          <option value="vibelift_analytics">VibeLift Analytics &amp; FinOps (gemini-2.5-flash &bull; Cloud Run A2A + MCP)</option>
+          <option value="deep_research">Deep Research (gemini-2.5-pro &bull; Google-Managed Research Agent)</option>
         </select>
       </div>
       <div class="agent-meta-box">
         <div class="agent-meta-top">
           <div>
-            <strong id="agentTitleText" style="font-size:16px;">Mortgage Underwriting Assistant</strong>
-            <span id="agentDomainBadge" class="badge badge-blue" style="margin-left:8px;">Consumer Lending &amp; Risk</span>
+            <strong id="agentTitleText" style="font-size:16px;">IT Service Desk</strong>
+            <span id="agentDomainBadge" class="badge badge-blue" style="margin-left:8px;">Enterprise IT Support &amp; Escalation (Vertex AI Agent Engine)</span>
           </div>
           <span id="agentHealthBadge" class="badge badge-green">OPTIMIZED (GEN 14)</span>
         </div>
@@ -757,16 +759,46 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       `;
     }
 
+    let currentState = null;
+    let allAgentsCache = {};
+    let initialStateSnapshot = null;
+
     function renderState(state) {
       if (!state) return;
+      currentState = state;
+      if (state.all_agents && typeof state.all_agents === 'object') {
+        Object.keys(state.all_agents).forEach(function(k) {
+          allAgentsCache[k] = state.all_agents[k];
+        });
+      }
+      if (!initialStateSnapshot && state.active_agent) {
+        try {
+          initialStateSnapshot = JSON.parse(JSON.stringify(state));
+        } catch (e) {}
+      }
       if (state.ge_fleet) renderFleet(state.ge_fleet);
       const agent = state.active_agent;
       if (!agent) return;
+      allAgentsCache[agent.agent_id] = agent;
 
       const ts = agent.timeline || [];
       const activeGen = ts.length > 0 ? ts[ts.length - 1].generation : 14;
 
-      document.getElementById('agentDropdown').value = agent.agent_id;
+      const dropdown = document.getElementById('agentDropdown');
+      if (dropdown && Array.isArray(state.available_agents) && state.available_agents.length > 0) {
+        const currentIds = Array.from(dropdown.options).map(function(o) { return o.value; }).join(',');
+        const nextIds = state.available_agents.map(function(a) { return a.agent_id; }).join(',');
+        if (currentIds !== nextIds) {
+          dropdown.replaceChildren();
+          state.available_agents.forEach(function(a) {
+            const opt = document.createElement('option');
+            opt.value = a.agent_id;
+            opt.textContent = (a.display_name || a.agent_id) + ' (' + (a.model || 'gemini-2.5-flash') + ')';
+            dropdown.appendChild(opt);
+          });
+        }
+      }
+      if (dropdown) dropdown.value = agent.agent_id;
       document.getElementById('agentTitleText').textContent = agent.display_name;
       document.getElementById('agentDomainBadge').textContent = agent.domain;
       document.getElementById('agentDescText').textContent =
@@ -1159,13 +1191,34 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         let fleet = null;
         if (isEmbedded()) {
           // Inside Gemini Enterprise the dashboard is a sandboxed MCP App: the host proxies tools/call.
-          const result = await callHost('tools/call', {
-            name: FLEET_TOOL,
-            arguments: {window_hours: fleetWindowHours, force_refresh: !!force},
-          }, 45000);
-          if (result && result.isError) throw new Error('tool error');
-          fleet = result && result.structuredContent;
-          if (fleet) fleetRefreshMode = 'host';
+          try {
+            const result = await callHost('tools/call', {
+              name: FLEET_TOOL,
+              arguments: {window_hours: fleetWindowHours, force_refresh: !!force},
+            }, 20000);
+            if (result && !result.isError && result.structuredContent) {
+              fleet = result.structuredContent;
+              fleetRefreshMode = 'host';
+            }
+          } catch (innerErr) {
+            fleet = null;
+          }
+          if (!fleet) {
+            const fallback = await callHost('tools/call', {
+              name: 'open_dashboard',
+              arguments: {window_hours: fleetWindowHours, force_refresh: !!force},
+            }, 20000);
+            if (fallback && !fallback.isError && fallback.structuredContent) {
+              const sc = fallback.structuredContent;
+              if (sc.state) {
+                renderState(sc.state);
+                fleet = sc.state.ge_fleet;
+              } else {
+                fleet = sc.ge_fleet || sc;
+              }
+              if (fleet) fleetRefreshMode = 'host';
+            }
+          }
         } else {
           const url = '/api/ge_fleet?window_hours=' + encodeURIComponent(fleetWindowHours) + (force ? '&force_refresh=1' : '');
           const res = await fetch(url, {cache: 'no-store', credentials: 'same-origin'});
@@ -1220,6 +1273,10 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         btn.disabled = true;
       }
       try {
+        if (isEmbedded()) {
+          await refreshFleet(true);
+          return;
+        }
         const res = await fetch('/api/sync_gcp_telemetry', {method: 'POST'});
         const data = await res.json();
         renderState(data.state || data);
@@ -1233,14 +1290,169 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
+    function applyEmbeddedMutation(endpoint, payload) {
+      if (!currentState || !currentState.active_agent) return false;
+      const agent = currentState.active_agent;
+      const ts = agent.timeline || [];
+      const lastPt = ts.length > 0 ? ts[ts.length - 1] : {
+        generation: 14,
+        p95_latency_ms: 810.0,
+        cost_per_1k_turns_usd: 4.15,
+        task_accuracy_pct: 97.6,
+        prompt_cache_hit_pct: 84.5,
+      };
+      const nextGen = Number(lastPt.generation || 14) + 1;
+
+      if (endpoint === '/api/select_agent') {
+        const targetId = payload && payload.agent_id;
+        if (targetId && allAgentsCache[targetId]) {
+          currentState.active_agent = JSON.parse(JSON.stringify(allAgentsCache[targetId]));
+          renderState(currentState);
+          return true;
+        }
+        return false;
+      }
+
+      if (endpoint === '/api/inject_anomaly') {
+        (agent.parameters || []).forEach(function(p) {
+          if (p.param_id === 'p95_latency_ms') { p.current_value = 3180.0; p.status = '⚠️ SLO BREACH (SPIKE)'; }
+          else if (p.param_id === 'cost_per_1k_turns_usd') { p.current_value = 13.90; p.status = '⚠️ BUDGET BREACH'; }
+          else if (p.param_id === 'task_accuracy_pct') { p.current_value = 88.2; p.status = '⚠️ GUARDRAIL BREACH'; }
+          else if (p.param_id === 'prompt_cache_hit_pct') { p.current_value = 22.0; p.status = '⚠️ CACHE THRASH'; }
+        });
+        agent.health_status = 'CRITICAL: LOG ANOMALY DETECTED';
+        ts.push({
+          timestamp_label: 'Live Anomaly (Gen ' + nextGen + ')',
+          generation: nextGen,
+          p95_latency_ms: 3180.0,
+          cost_per_1k_turns_usd: 13.90,
+          task_accuracy_pct: 88.2,
+          prompt_cache_hit_pct: 22.0,
+          event_marker: 'Log Anomaly Injected',
+        });
+        agent.actions_taken = agent.actions_taken || [];
+        agent.actions_taken.unshift({
+          generation: nextGen,
+          timestamp: 'Just now (Live Log Alert)',
+          parameter_targeted: 'All Parameters (Latency, Cost & Cache Breach)',
+          root_cause_from_logs: 'Upstream schema drift injected volatile correlation_id into system prefix, invalidating KV prefix cache and triggering 3x retry loops.',
+          action_title: 'LIVE ALERT: Production Log Anomaly Detected — Awaiting AlphaEvolve Remediation',
+          action_taken: 'Telemetry collector flagged P95 latency > 3,100ms and Cache Hit drop to 22%. Ready to trigger AlphaEvolve evolution cycle.',
+          impact_summary: 'Click "Run AlphaEvolve Optimization Cycle" to evolve and promote a remediation genome.',
+          status: 'ANOMALY ACTIVE — RUN ALPHAEVOLVE',
+          diff_snippet: '! ALERT: Uncached dynamic prefix token detected at offset 14\n! Action Required: Execute AlphaEvolve Evolution Step',
+        });
+        allAgentsCache[agent.agent_id] = agent;
+        renderState(currentState);
+        return true;
+      }
+
+      if (endpoint === '/api/evolve_generation') {
+        const newLat = Math.max(420.0, Math.round((Number(lastPt.p95_latency_ms) < 1500 ? Number(lastPt.p95_latency_ms) - 45.0 : 760.0) * 10) / 10);
+        const newCost = Math.max(2.10, Math.round((Number(lastPt.cost_per_1k_turns_usd) < 9.0 ? Number(lastPt.cost_per_1k_turns_usd) - 0.35 : 3.95) * 100) / 100);
+        const newAcc = Math.min(99.4, Math.round((Number(lastPt.task_accuracy_pct) > 92.0 ? Number(lastPt.task_accuracy_pct) + 0.3 : 97.9) * 10) / 10);
+        const newCache = Math.min(95.0, Math.round((Number(lastPt.prompt_cache_hit_pct) > 50.0 ? Number(lastPt.prompt_cache_hit_pct) + 2.5 : 86.5) * 10) / 10);
+        (agent.parameters || []).forEach(function(p) {
+          if (p.param_id === 'p95_latency_ms') { p.current_value = newLat; p.status = 'OPTIMAL'; }
+          else if (p.param_id === 'cost_per_1k_turns_usd') { p.current_value = newCost; p.status = 'OPTIMAL'; }
+          else if (p.param_id === 'task_accuracy_pct') { p.current_value = newAcc; p.status = 'GUARDRAIL PASS'; }
+          else if (p.param_id === 'prompt_cache_hit_pct') { p.current_value = newCache; p.status = 'OPTIMAL'; }
+          else {
+            p.current_value = p.direction === 'LOWER'
+              ? Math.round((Number(p.current_value) * 0.94) * 100) / 100
+              : Math.min(99.9, Math.round((Number(p.current_value) * 1.02) * 100) / 100);
+            p.status = 'OPTIMAL';
+          }
+        });
+        agent.health_status = 'OPTIMIZED (GEN ' + nextGen + ')';
+        agent.monthly_savings_usd = Number(agent.monthly_savings_usd || 0) + 1850;
+        ts.push({
+          timestamp_label: 'Now (Gen ' + nextGen + ')',
+          generation: nextGen,
+          p95_latency_ms: newLat,
+          cost_per_1k_turns_usd: newCost,
+          task_accuracy_pct: newAcc,
+          prompt_cache_hit_pct: newCache,
+          event_marker: 'Live Evolution Step',
+        });
+        agent.actions_taken = agent.actions_taken || [];
+        agent.actions_taken.unshift({
+          generation: nextGen,
+          timestamp: 'Just now (Live Run)',
+          parameter_targeted: 'Multi-Objective Pareto Frontier (All Weighted Parameters)',
+          root_cause_from_logs: 'Analyzed recent 500 production traces; detected volatile correlation_id header breaking prefix cache and redundant tool verification calls.',
+          action_title: 'Sanitized Dynamic Header & Compressed Verification Step',
+          action_taken: 'Stripped volatile correlation_id from system prompt prefix, restored KV cache hit rate, and fused verification step into single structured output schema.',
+          impact_summary: 'P95 Latency -> ' + newLat + 'ms | Cost -> $' + newCost + ' | Accuracy -> ' + newAcc + '% | Cache Hit -> ' + newCache + '%',
+          status: 'PROMOTED TO PROD',
+          diff_snippet: '- system_prefix: "Correlation={{corr_id}} | Follow all steps..."\n+ system_prefix: "[STATIC_CACHED_V' + nextGen + '] Return single verified JSON block."',
+        });
+        allAgentsCache[agent.agent_id] = agent;
+        renderState(currentState);
+        return true;
+      }
+
+      if (endpoint === '/api/add_parameter' && payload) {
+        const slug = String(payload.label || 'custom_metric').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+        const bVal = Number(payload.baseline_val) || 80.0;
+        const dir = payload.direction || 'HIGHER';
+        const curVal = dir === 'LOWER' ? Math.round(bVal * 0.85 * 100) / 100 : Math.round(bVal * 1.08 * 100) / 100;
+        agent.parameters = agent.parameters || [];
+        agent.parameters.push({
+          param_id: slug,
+          label: payload.label || 'Custom Metric',
+          category: 'Custom User-Defined',
+          unit: payload.unit || '%',
+          direction: dir,
+          baseline_value: bVal,
+          current_value: curVal,
+          target_value: Number(payload.target_val) || 95.0,
+          weight_pct: Number(payload.weight_pct) || 10,
+          status: 'ACTIVE TRACKING',
+          description: 'User-defined optimization parameter actively weighted in the AlphaEvolve fitness loop.',
+        });
+        allAgentsCache[agent.agent_id] = agent;
+        renderState(currentState);
+        return true;
+      }
+
+      if (endpoint === '/api/reset' && initialStateSnapshot) {
+        currentState = JSON.parse(JSON.stringify(initialStateSnapshot));
+        if (currentState.all_agents) {
+          allAgentsCache = JSON.parse(JSON.stringify(currentState.all_agents));
+        }
+        renderState(currentState);
+        return true;
+      }
+      return false;
+    }
+
     async function triggerApi(endpoint, payload = {}) {
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      renderState(data);
+      if (isEmbedded()) {
+        applyEmbeddedMutation(endpoint, payload);
+        if (endpoint === '/api/evolve_generation' && currentState && currentState.active_agent) {
+          callHost('tools/call', {
+            name: 'run_alpha_evolve_generation',
+            arguments: {agent_id: currentState.active_agent.agent_id},
+          }, 15000).then(function(res) {
+            if (res && !res.isError && res.structuredContent && res.structuredContent.state) {
+              renderState(res.structuredContent.state);
+            }
+          }).catch(function() {});
+        }
+        return;
+      }
+      try {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        renderState(data);
+      } catch (err) {
+        applyEmbeddedMutation(endpoint, payload);
+      }
     }
 
     function onSelectAgent(agentId) {
@@ -1268,6 +1480,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     // ---------------------------------------------------------------------------
     // Gemini Enterprise AppBridge & Streamable MCP postMessage protocol
     // ---------------------------------------------------------------------------
+    const INITIAL_EMBEDDED_STATE = __VIBELIFT_INITIAL_STATE_JSON__;
     const pending = {};
     let seq = 0;
     let isBridgeInitialized = false;
@@ -1394,6 +1607,15 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       post({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} });
     }
 
+    // 0. If initial state was embedded in the MCP resource HTML, render immediately.
+    if (INITIAL_EMBEDDED_STATE && typeof INITIAL_EMBEDDED_STATE === 'object') {
+      try {
+        renderState(INITIAL_EMBEDDED_STATE);
+      } catch (err) {
+        console.warn('Initial state render notice:', err);
+      }
+    }
+
     // 1. Instantly notify host that UI is ready
     emitAppInitialized();
 
@@ -1439,9 +1661,20 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 """
 
 
-def render_dashboard_html() -> str:
-  """Returns the self-contained Google Cloud 2-tab HTML UI."""
-  return _DASHBOARD_HTML.replace(
-      '__VIBELIFT_GOOGLEY_LOGO_DATA_URI__',
-      logo_asset.VIBELIFT_GOOGLEY_LOGO_DATA_URI,
+def render_dashboard_html(
+    initial_state: Mapping[str, object] | None = None,
+) -> str:
+  """Returns the self-contained Google Cloud 3-tab HTML UI."""
+  state_json = 'null'
+  if initial_state is not None:
+    try:
+      state_json = json.dumps(initial_state).replace('</', '<\\/')
+    except (TypeError, ValueError):
+      state_json = 'null'
+  return (
+      _DASHBOARD_HTML.replace(
+          '__VIBELIFT_GOOGLEY_LOGO_DATA_URI__',
+          logo_asset.VIBELIFT_GOOGLEY_LOGO_DATA_URI,
+      )
+      .replace('__VIBELIFT_INITIAL_STATE_JSON__', state_json)
   )

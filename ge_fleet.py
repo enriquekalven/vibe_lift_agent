@@ -282,11 +282,18 @@ class GeminiEnterpriseFleetService:
     self._cache: dict[int, tuple[float, dict[str, Any]]] = {}
     self._cache_lock = threading.Lock()
     self._refresh_lock = threading.Lock()
+    self._inflight_events: dict[int, threading.Event] = {}
 
   # ------------------------------------------------------------------ public API
 
-  def collect(self, window_hours: int | None = None, force_refresh: bool = False) -> dict[str, Any]:
-    """Returns the fleet payload for the window, served from a short TTL cache."""
+  def collect(
+      self,
+      window_hours: int | None = None,
+      force_refresh: bool = False,
+      allow_stale: bool = False,
+      max_wait_s: float | None = None,
+  ) -> dict[str, Any]:
+    """Returns the fleet payload for the window, served from cache or refreshed."""
     hours = _clamp_window(window_hours, self.default_window_hours)
 
     def usable(entry: dict[str, Any] | None) -> bool:
@@ -297,16 +304,54 @@ class GeminiEnterpriseFleetService:
     cached = self._fresh_cache(hours)
     if usable(cached):
       return cached
+
+    if allow_stale and not force_refresh:
+      stale = self._any_cache(hours)
+      if stale is not None:
+        self._trigger_async_refresh(hours)
+        return stale
+      if max_wait_s is not None and max_wait_s > 0:
+        evt = self._trigger_async_refresh(hours)
+        evt.wait(timeout=max_wait_s)
+        after_wait = self._any_cache(hours)
+        if after_wait is not None:
+          return after_wait
+        return self._warming_placeholder(hours)
+
+    return self._refresh_sync(hours, force_refresh=force_refresh)
+
+  # ------------------------------------------------------------------ internals
+
+  def _refresh_sync(self, hours: int, force_refresh: bool = False) -> dict[str, Any]:
     with self._refresh_lock:
       cached = self._fresh_cache(hours)
-      if usable(cached):
+      if cached is not None and (
+          not force_refresh or cached['cache_age_seconds'] < self.min_refresh_interval_s
+      ):
         return cached
       payload = self._collect_uncached(hours)
       with self._cache_lock:
         self._cache[hours] = (time.monotonic(), payload)
       return dict(payload, cache_age_seconds=0.0)
 
-  # ------------------------------------------------------------------ internals
+  def _trigger_async_refresh(self, hours: int) -> threading.Event:
+    with self._cache_lock:
+      existing = self._inflight_events.get(hours)
+      if existing is not None and not existing.is_set():
+        return existing
+      evt = threading.Event()
+      self._inflight_events[hours] = evt
+
+    def _worker() -> None:
+      try:
+        self._refresh_sync(hours, force_refresh=False)
+      except Exception:
+        logger.debug('Background fleet refresh failed for window %sh', hours, exc_info=True)
+      finally:
+        evt.set()
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return evt
 
   def _fresh_cache(self, hours: int) -> dict[str, Any] | None:
     with self._cache_lock:
@@ -317,6 +362,38 @@ class GeminiEnterpriseFleetService:
     if age >= self.ttl_seconds:
       return None
     return dict(entry[1], cache_age_seconds=round(age, 1))
+
+  def _any_cache(self, hours: int) -> dict[str, Any] | None:
+    with self._cache_lock:
+      entry = self._cache.get(hours)
+      if entry is None and self._cache:
+        # Fall back to the most recently collected window while the requested window refreshes.
+        entry = max(self._cache.values(), key=lambda item: item[0])
+    if entry is None:
+      return None
+    age = time.monotonic() - entry[0]
+    return dict(entry[1], cache_age_seconds=round(age, 1))
+
+  def _warming_placeholder(self, hours: int) -> dict[str, Any]:
+    return {
+        'source': 'gemini_enterprise',
+        'project_id': self.project_id,
+        'location': self.location,
+        'engines': [{'engine_id': eid, 'display_name': eid, 'agents_count': None} for eid in self.engine_ids],
+        'window_hours': hours,
+        'generated_at': _iso(_utcnow()),
+        'collection_ms': 0,
+        'cache_ttl_seconds': self.ttl_seconds,
+        'cache_age_seconds': 0.0,
+        'agents': [],
+        'totals': {'agents': 0, 'enabled': 0, 'by_type': {}, 'with_runtime_telemetry': 0},
+        'model_usage': None,
+        'ge_traffic': None,
+        'token_log_scan': {'entries_scanned': 0, 'truncated': False},
+        'source_status': {'inventory': 'warming'},
+        'errors': [],
+        'notes': ['Live Gemini Enterprise telemetry collection is warming in the background; refresh in a moment.'],
+    }
 
   def _de_base(self) -> str:
     host = 'discoveryengine.googleapis.com'

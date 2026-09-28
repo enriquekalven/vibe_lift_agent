@@ -141,11 +141,11 @@ def detect_prompt_breakpoint(previous_prompt: str, current_prompt: str) -> str:
   )
 
 
-def trigger_alpha_evolve_cycle(agent_id: str = "mortgage_assistant") -> str:
+def trigger_alpha_evolve_cycle(agent_id: str = "it_service_desk") -> str:
   """Executes an AlphaEvolve optimization iteration to maximize prompt cache hit ratio.
 
   Args:
-      agent_id: Target agent profile identifier to optimize.
+      agent_id: Target Gemini Enterprise agent profile identifier ('it_service_desk', 'vibelift_analytics', 'deep_research').
 
   Returns:
       JSON string with mutated genome parameters and Pareto action description.
@@ -157,7 +157,7 @@ def trigger_alpha_evolve_cycle(agent_id: str = "mortgage_assistant") -> str:
   last_action = active.actions[-1] if active.actions else None
   return json.dumps(
       {
-          "agent_id": agent_id,
+          "agent_id": active.agent_id,
           "active_generation": active.timeline[-1].generation if active.timeline else 14,
           "latest_action": last_action.to_dict() if last_action else {},
           "monthly_savings_usd": active.monthly_savings_usd,
@@ -184,7 +184,7 @@ def query_ge_agent_fleet(window_hours: int = 24) -> str:
   return json.dumps({"summary": ge_fleet.summarize_fleet(payload), **payload}, indent=2)
 
 
-def open_dashboard(focus_tab: int = 0, initial_agent: str = "mortgage_assistant") -> str:
+def open_dashboard(focus_tab: int = 0, initial_agent: str = "it_service_desk") -> str:
   """Opens the VibeLift Analytics & FinOps Dashboard with interactive UI widget.
 
   CRITICAL: Always call this tool FIRST whenever the user asks to see, open, or
@@ -192,8 +192,8 @@ def open_dashboard(focus_tab: int = 0, initial_agent: str = "mortgage_assistant"
   economics, or AlphaEvolve optimization in the UI.
 
   Args:
-      focus_tab: Tab to open (0 = live Gemini Enterprise agent fleet, 1 = demo parameters, 2 = AlphaEvolve).
-      initial_agent: Optional agent identifier to analyze ('mortgage_assistant', 'stock_market_updates', 'forecast_engine').
+      focus_tab: Tab to open (0 = live Gemini Enterprise agent fleet, 1 = agent parameters, 2 = AlphaEvolve).
+      initial_agent: Optional Gemini Enterprise agent identifier to analyze ('it_service_desk', 'vibelift_analytics', 'deep_research').
 
   Returns:
       JSON string with dashboard URL, status, active agent, and focus tab details.

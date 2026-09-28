@@ -173,7 +173,11 @@ class GoogleCloudTelemetryService:
       logger.debug('Could not obtain ADC access token: %s', exc)
       return None
 
-  def list_cloud_run_agent_services(self, force_refresh: bool = False) -> list[dict[str, str]]:
+  def list_cloud_run_agent_services(
+      self,
+      force_refresh: bool = False,
+      non_blocking: bool = False,
+  ) -> list[dict[str, str]]:
     """Describes the allowlisted Cloud Run services via the Cloud Run Admin API.
 
     Only services returned by get_monitored_service_names() are reported. When the
@@ -182,6 +186,29 @@ class GoogleCloudTelemetryService:
     """
     if self._cached_services is not None and not force_refresh:
       return self._cached_services
+
+    if non_blocking and not force_refresh:
+      import threading
+      evt = threading.Event()
+      def _bg() -> None:
+        try:
+          self.list_cloud_run_agent_services(force_refresh=True, non_blocking=False)
+        finally:
+          evt.set()
+      threading.Thread(target=_bg, daemon=True).start()
+      evt.wait(timeout=0.05)
+      if self._cached_services is not None:
+        return self._cached_services
+      pub_url = os.environ.get('VIBELIFT_PUBLIC_URL', '').strip().rstrip('/')
+      return [
+          {
+              'service_name': name,
+              'url': pub_url if name == (os.environ.get('K_SERVICE') or DEFAULT_SERVICE_NAME) else '',
+              'region': self.region,
+              'status': 'READY' if pub_url else 'UNKNOWN',
+          }
+          for name in get_monitored_service_names()
+      ]
 
     token = self._get_access_token()
     discovered = []
@@ -206,10 +233,27 @@ class GoogleCloudTelemetryService:
     self._cached_services = discovered
     return discovered
 
-  def fetch_gemini_enterprise_support_telemetry(self, limit: int = 15, force_refresh: bool = False) -> list[dict[str, object]]:
+  def fetch_gemini_enterprise_support_telemetry(
+      self,
+      limit: int = 15,
+      force_refresh: bool = False,
+      non_blocking: bool = False,
+  ) -> list[dict[str, object]]:
     """Fetches high-level triage events from Gemini Enterprise views if available."""
     if self._cached_support_events is not None and not force_refresh:
       return self._cached_support_events
+
+    if non_blocking and not force_refresh:
+      import threading
+      evt = threading.Event()
+      def _bg() -> None:
+        try:
+          self.fetch_gemini_enterprise_support_telemetry(limit=limit, force_refresh=True, non_blocking=False)
+        finally:
+          evt.set()
+      threading.Thread(target=_bg, daemon=True).start()
+      evt.wait(timeout=0.05)
+      return self._cached_support_events if self._cached_support_events is not None else []
 
     events = []
     if self.bigquery_client is not None:
