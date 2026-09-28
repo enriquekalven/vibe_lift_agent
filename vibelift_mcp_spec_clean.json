@@ -1,0 +1,109 @@
+{
+  "server": {
+    "name": "vibelift-analytics-mcp",
+    "description": "VibeLift Agent Analytics, Prompt Cache FinOps & AlphaEvolve Optimization Platform"
+  },
+  "tools": [
+    {
+      "name": "open_dashboard",
+      "description": "CRITICAL: Always call this tool whenever the user asks to see, open, or inspect the VibeLift Analytics & FinOps Dashboard, or asks for the Gemini Enterprise agent fleet, agent telemetry, prompt cache economics, or AlphaEvolve optimization in the interactive UI. Opens the interactive dashboard in the side panel or full screen: every agent deployed on the Gemini Enterprise app with live Cloud Monitoring and Cloud Logging telemetry, plus the AlphaEvolve optimization studio.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "initial_agent": {
+            "type": "string",
+            "description": "Optional agent to select: 'mortgage_assistant', 'stock_market_updates', or 'forecast_engine'."
+          },
+          "focus_tab": {
+            "type": "integer",
+            "description": "Tab to open: 0 = live Gemini Enterprise agent fleet (default), 1 = demo agent optimization parameters, 2 = AlphaEvolve performance and actions. Omit to open the live fleet."
+          },
+          "window_hours": {
+            "type": "integer",
+            "description": "Telemetry window for the live fleet in hours (1-720, default 24)."
+          }
+        }
+      }
+    },
+    {
+      "name": "query_project_telemetry",
+      "description": "Fetches live Google Cloud telemetry for the project hosting Cloud Run, including active Cloud Run agent microservices, BigQuery support logs from Gemini Enterprise apps, and structured usage_metadata prompt cache statistics from Cloud Logging.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "force_refresh": {
+            "type": "boolean",
+            "description": "If true, forces a re-sync from Google Cloud Logging."
+          }
+        }
+      }
+    },
+    {
+      "name": "query_ge_agent_fleet",
+      "description": "Lists every agent deployed on the Gemini Enterprise app (ADK agents on Vertex AI Agent Engine, A2A agents, and Google-managed agents) with live telemetry aggregated from Cloud Monitoring and Cloud Logging: requests, 4xx/5xx errors, p50/p95 latency, LLM calls, input/output tokens, conversations, and last activity, plus project-wide Vertex AI model token usage and estimated cost.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "window_hours": {
+            "type": "integer",
+            "description": "Telemetry window in hours (1-720, default 24; e.g. 1, 6, 24, 168)."
+          },
+          "force_refresh": {
+            "type": "boolean",
+            "description": "If true, bypasses the 60-second cache and re-queries Google Cloud."
+          }
+        }
+      }
+    },
+    {
+      "name": "calculate_prompt_cache_economics",
+      "description": "Calculates prompt cache hit ratio and net dollar savings vs naive rate cards for Google Cloud Gemini models (gemini-2.5-flash, gemini-2.5-pro, gemini-1.5-flash, gemini-1.5-pro, gemini-3.1-flash).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "prompt_token_count": {
+            "type": "integer",
+            "description": "Total prompt token count."
+          },
+          "cached_content_token_count": {
+            "type": "integer",
+            "description": "Number of tokens read from Gemini prompt cache."
+          },
+          "output_token_count": {
+            "type": "integer",
+            "description": "Number of generated candidate tokens (defaults to 500)."
+          },
+          "model": {
+            "type": "string",
+            "description": "Gemini model identifier (e.g. 'gemini-2.5-flash')."
+          }
+        },
+        "required": [
+          "prompt_token_count",
+          "cached_content_token_count"
+        ]
+      }
+    },
+    {
+      "name": "run_alpha_evolve_generation",
+      "description": "Executes the next AlphaEvolve evolutionary optimization cycle on prompt prefixes, schema pruning, and multi-objective performance parameters for the active agent.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "description": "Optional agent identifier: 'mortgage_assistant', 'stock_market_updates', or 'forecast_engine'."
+          }
+        }
+      }
+    },
+    {
+      "name": "get_vibelift_state",
+      "description": "Retrieves full runtime state, active agent profile, recorded turns, and telemetry.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Local ADK sessions and artifacts
+.adk/
+
+# IDE & OS
+.DS_Store
+.idea/
+.vscode/
+
+# Legacy internal build configs
+Build
+*.borg

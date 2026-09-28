@@ -1,0 +1,26 @@
+__pycache__
+*.py[cod]
+*$py.class
+.git
+.gitignore
+.gcloudignore
+.env
+.env.*
+.venv
+env/
+venv/
+.DS_Store
+.idea/
+.vscode/
+.pytest_cache/
+.adk
+**/.adk
+
+# Tests, CI and deployment tooling are not needed at runtime (Cloud Build runs the tests from the
+# uploaded source, not from the image).
+tests/
+*_test.py
+cloudbuild.yaml
+cloud_run_service.yaml
+deploy_cloud_run.sh
+setup_bigquery_sink.sh

@@ -1,0 +1,12 @@
+name: vibe_lift_agent
+agent_directory: app
+region: us-central1
+base_template: adk
+version: 1.5.0
+language: python
+create_params:
+  deployment_target: cloud_run
+  session_type: in_memory
+  cicd_runner: google_cloud_build
+  agent_gateway: false
+  agent_guidance_filename: GEMINI.md

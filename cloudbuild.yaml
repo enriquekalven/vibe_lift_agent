@@ -1,0 +1,85 @@
+# Cloud Build pipeline: build -> test (inside the built image) -> push -> deploy (private).
+#
+#   gcloud builds submit --config=cloudbuild.yaml .                              # full pipeline
+#   gcloud builds submit --config=cloudbuild.yaml --substitutions=_DEPLOY=false . # build, test, push only
+#
+# Images are tagged with the immutable $BUILD_ID, so every revision maps to exactly one image and a
+# rollback never picks up a moved tag.
+#
+# Prerequisites:
+#   1. Run ./deploy_cloud_run.sh once. It creates the runtime service account, its IAM roles and the
+#      Gemini Enterprise invoker binding. This pipeline only rolls out new images.
+#   2. The deploy step runs as your Cloud Build service account, which cannot deploy Cloud Run by
+#      default. Grant it once (CB_SA is PROJECT_NUMBER@cloudbuild.gserviceaccount.com, or the Compute
+#      Engine default service account if your project builds with that):
+#        gcloud projects add-iam-policy-binding PROJECT_ID \
+#            --member="serviceAccount:${CB_SA}" --role=roles/run.developer
+#        gcloud iam service-accounts add-iam-policy-binding \
+#            vibe-lift-runtime-sa@PROJECT_ID.iam.gserviceaccount.com \
+#            --member="serviceAccount:${CB_SA}" --role=roles/iam.serviceAccountUser
+#      Without these grants, use _DEPLOY=false and deploy the pushed image with gcloud run deploy.
+steps:
+  - id: build
+    name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', '${_IMAGE}:${BUILD_ID}', '.']
+
+  # Runs the unit and integration suites with the image's pinned dependencies. Tests run offline: the
+  # credentials path does not exist, so no live Google Cloud API is called.
+  - id: test
+    name: '${_IMAGE}:${BUILD_ID}'
+    entrypoint: 'bash'
+    env:
+      - 'GOOGLE_APPLICATION_CREDENTIALS=/nonexistent/offline-test-credentials.json'
+      - 'GOOGLE_CLOUD_PROJECT=${PROJECT_ID}'
+      - 'GOOGLE_CLOUD_REGION=${_REGION}'
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        cp -r /workspace /tmp/src
+        cd /tmp/src
+        python -m unittest vibe_lift_test ge_fleet_test
+
+  - id: push
+    name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '${_IMAGE}:${BUILD_ID}']
+
+  - id: deploy
+    name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        if [ "${_DEPLOY}" != "true" ]; then
+          echo "_DEPLOY=${_DEPLOY}: skipping deploy. Pushed image: ${_IMAGE}:${BUILD_ID}"
+          exit 0
+        fi
+        gcloud run deploy '${_SERVICE}' \
+          --image='${_IMAGE}:${BUILD_ID}' \
+          --region='${_REGION}' \
+          --platform=managed \
+          --service-account='vibe-lift-runtime-sa@${PROJECT_ID}.iam.gserviceaccount.com' \
+          --no-allow-unauthenticated \
+          --port=8080 \
+          --memory=1Gi \
+          --cpu=1 \
+          --concurrency=80 \
+          --timeout=300 \
+          --cpu-boost \
+          --min-instances=0 \
+          --max-instances=10 \
+          --update-env-vars='GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_REGION=${_REGION},GOOGLE_CLOUD_LOCATION=${_REGION},GOOGLE_GENAI_USE_VERTEXAI=TRUE,USE_UVICORN=1,ENABLE_MCP_APP=1,MCP_PROTOCOL_VERSION=2025-06-18,VIBELIFT_PUBLIC_URL=https://${_SERVICE}-${PROJECT_NUMBER}.${_REGION}.run.app'
+
+substitutions:
+  _REGION: 'us-central1'
+  _SERVICE: 'vibe-lift-agent'
+  _IMAGE: '${_REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/vibe-lift-agent'
+  _DEPLOY: 'true'
+
+images:
+  - '${_IMAGE}:${BUILD_ID}'
+
+options:
+  dynamicSubstitutions: true
+  logging: CLOUD_LOGGING_ONLY

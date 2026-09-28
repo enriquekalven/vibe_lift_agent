@@ -1,0 +1,78 @@
+# Declarative reference for a FRESH vibe-lift-agent service. Prefer ./deploy_cloud_run.sh or cloudbuild.yaml.
+#
+# WARNING: `gcloud run services replace` swaps in this whole spec. Settings that are not in this file are
+# removed from the live service, for example custom audiences (run.googleapis.com/custom-audiences) and
+# env vars added later. To change an existing service declaratively, export the live spec, edit it, and
+# replace with that instead:
+#   gcloud run services describe vibe-lift-agent --region=us-central1 --format=export > live_service.yaml
+#
+# Placeholders: __PROJECT_ID__, __PROJECT_NUMBER__, __REGION__, __IMAGE_URI__. The image must be an
+# immutable tag or digest (for example .../vibe-lift-agent:<BUILD_ID> from cloudbuild.yaml), never :latest.
+# Example:
+#   sed -e 's|__PROJECT_ID__|my-project|g; s|__PROJECT_NUMBER__|123456789|g; s|__REGION__|us-central1|g' \
+#       -e 's|__IMAGE_URI__|us-central1-docker.pkg.dev/my-project/cloud-run-source-deploy/vibe-lift-agent:BUILD_ID|' \
+#       cloud_run_service.yaml > /tmp/service.yaml
+#   gcloud run services replace /tmp/service.yaml --region=us-central1
+# replace does not change IAM, so the service stays private. Grant roles/run.invoker as deploy_cloud_run.sh does.
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: vibe-lift-agent
+  labels:
+    cloud.googleapis.com/location: __REGION__
+  annotations:
+    run.googleapis.com/ingress: all
+    run.googleapis.com/launch-stage: GA
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: '0'
+        autoscaling.knative.dev/maxScale: '10'
+        run.googleapis.com/cpu-throttling: 'true'
+        run.googleapis.com/startup-cpu-boost: 'true'
+    spec:
+      serviceAccountName: vibe-lift-runtime-sa@__PROJECT_ID__.iam.gserviceaccount.com
+      containerConcurrency: 80
+      timeoutSeconds: 300
+      containers:
+        - image: __IMAGE_URI__
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          env:
+            - name: GOOGLE_CLOUD_PROJECT
+              value: __PROJECT_ID__
+            - name: GOOGLE_CLOUD_REGION
+              value: __REGION__
+            - name: GOOGLE_CLOUD_LOCATION
+              value: __REGION__
+            - name: GOOGLE_GENAI_USE_VERTEXAI
+              value: 'TRUE'
+            - name: USE_UVICORN
+              value: '1'
+            - name: ENABLE_MCP_APP
+              value: '1'
+            - name: MCP_PROTOCOL_VERSION
+              value: '2025-06-18'
+            - name: VIBELIFT_PUBLIC_URL
+              value: https://vibe-lift-agent-__PROJECT_NUMBER__.__REGION__.run.app
+          ports:
+            - name: http1
+              containerPort: 8080
+          # /healthz is VibeLift's own route, so it stays up even if the ADK API server fails to load.
+          # Cloud Run's internal probes can reach it; on the public URL it is reserved (use /health).
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 15
+            failureThreshold: 3

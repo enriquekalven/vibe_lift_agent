@@ -1,0 +1,35 @@
+[project]
+name = "vibe-lift-agent"
+version = "1.0.0"
+description = "VibeLift — Google Cloud Agent Runtime, Telemetry Dashboard & AlphaEvolve Studio"
+readme = "README.md"
+requires-python = ">=3.11"
+# Keep in sync with requirements.txt (exact pins verified in the production image; see constraints.txt).
+dependencies = [
+    "google-adk==2.10.0",
+    "google-genai==2.25.0",
+    "fastapi==0.141.1",
+    "uvicorn[standard]==0.54.0",
+    "google-cloud-logging==3.16.3",
+    "google-cloud-monitoring==2.31.0",
+    "google-cloud-bigquery==3.45.2",
+    "python-dotenv==1.2.3",
+    "absl-py==2.5.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0.0",
+    "httpx>=0.27.0",
+    "ruff>=0.5.0",
+]
+
+[tool.agents-cli]
+name = "vibe_lift_agent"
+agent_directory = "app"
+deployment_target = "cloud_run"
+region = "us-central1"
