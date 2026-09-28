@@ -886,42 +886,45 @@ class DeploymentHardeningTest(unittest.TestCase):
     self.assertEqual(events[0]['skill_or_mcp'], 'mcp.servicenow_iam')
 
     client = TestClient(fast_api_app.app)
-    state = client.get('/api/state').json()
-    self.assertIn('optimizer_platforms', state)
-    self.assertIn('user_centric', state)
-    self.assertIn('decorator_events', state)
-    self.assertEqual(state['user_centric']['supported_dau_capacity'], '4,000 – 10,000 DAU')
-    self.assertEqual(state['user_centric']['baseline_cost_per_1k_turns_usd'], 29.40)
-    self.assertEqual(state['user_centric']['optimized_cost_per_1k_turns_usd'], 3.45)
+    try:
+      state = client.get('/api/state').json()
+      self.assertIn('optimizer_platforms', state)
+      self.assertIn('user_centric', state)
+      self.assertIn('decorator_events', state)
+      self.assertEqual(state['user_centric']['supported_dau_capacity'], '4,000 – 10,000 DAU')
+      self.assertEqual(state['user_centric']['baseline_cost_per_1k_turns_usd'], 29.40)
+      self.assertEqual(state['user_centric']['optimized_cost_per_1k_turns_usd'], 3.45)
 
-    # Verify context_bloat_pct and idle_ratio_pct parameters exist on active agent
-    param_keys = [p['key'] for p in state['active_agent']['parameters']]
-    self.assertIn('context_bloat_pct', param_keys)
-    self.assertIn('idle_ratio_pct', param_keys)
+      # Verify context_bloat_pct and idle_ratio_pct parameters exist on active agent
+      param_keys = [p['key'] for p in state['active_agent']['parameters']]
+      self.assertIn('context_bloat_pct', param_keys)
+      self.assertIn('idle_ratio_pct', param_keys)
 
-    # Test switching optimization platform via /api/select_optimizer
-    opt_resp = client.post('/api/select_optimizer', json={'platform_id': 'hybrid_ensemble'})
-    self.assertEqual(opt_resp.status_code, 200)
-    opt_state = opt_resp.json()
-    self.assertEqual(opt_state['optimizer_platforms']['active_platform_id'], 'hybrid_ensemble')
+      # Test switching optimization platform via /api/select_optimizer
+      opt_resp = client.post('/api/select_optimizer', json={'platform_id': 'hybrid_ensemble'})
+      self.assertEqual(opt_resp.status_code, 200)
+      opt_state = opt_resp.json()
+      self.assertEqual(opt_state['optimizer_platforms']['active_platform_id'], 'hybrid_ensemble')
 
-    # Test ingesting a real-time decorator event via /api/decorator_ingest
-    ing_resp = client.post('/api/decorator_ingest', json={
-        'agent_name': 'deep_research',
-        'protocol': 'A2A',
-        'handler_name': 'synthesize_sec_10k_corpus',
-        'model': 'gemini-2.5-pro',
-        'prompt_tokens': 24800,
-        'cached_tokens': 23100,
-        'output_tokens': 640,
-        'latency_ms': 410.5,
-        'idle_ratio_pct': 6.8,
-        'context_bloat_pct': 6.4,
-        'skill_or_mcp': 'mcp.vertex_ai_search',
-    })
-    self.assertEqual(ing_resp.status_code, 200)
-    ing_state = ing_resp.json()
-    self.assertEqual(ing_state['decorator_events'][0]['handler_name'], 'synthesize_sec_10k_corpus')
+      # Test ingesting a real-time decorator event via /api/decorator_ingest
+      ing_resp = client.post('/api/decorator_ingest', json={
+          'agent_name': 'deep_research',
+          'protocol': 'A2A',
+          'handler_name': 'synthesize_sec_10k_corpus',
+          'model': 'gemini-2.5-pro',
+          'prompt_tokens': 24800,
+          'cached_tokens': 23100,
+          'output_tokens': 640,
+          'latency_ms': 410.5,
+          'idle_ratio_pct': 6.8,
+          'context_bloat_pct': 6.4,
+          'skill_or_mcp': 'mcp.vertex_ai_search',
+      })
+      self.assertEqual(ing_resp.status_code, 200)
+      ing_state = ing_resp.json()
+      self.assertEqual(ing_state['decorator_events'][0]['handler_name'], 'synthesize_sec_10k_corpus')
+    finally:
+      server._global_controller.reset()
 
 
 if __name__ == '__main__':

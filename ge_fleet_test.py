@@ -360,6 +360,12 @@ class GeFleetHelpersTest(unittest.TestCase):
   def test_classify_other_agent_kinds(self):
     low_code = ge_fleet.classify_agent(ENGINE, 'default_assistant', {'name': 'a/b/agents/x', 'lowCodeAgentDefinition': {}})
     self.assertEqual((low_code['type'], low_code['telemetry_scope']), ('LOW_CODE', 'none'))
+    workflow = ge_fleet.classify_agent(ENGINE, 'default_assistant', {'name': 'a/b/agents/w', 'workflowAgentDefinition': {}})
+    self.assertEqual((workflow['type'], workflow['telemetry_scope']), ('LOW_CODE', 'none'))
+    self.assertEqual(ge_fleet._parse_engine_spec('us/gemini-enterprise-17649552_1764955289529'), ('us', 'gemini-enterprise-17649552_1764955289529'))
+    self.assertEqual(ge_fleet._parse_engine_spec('agent-platform-demo'), ('global', 'agent-platform-demo'))
+    self.assertEqual(ge_fleet._de_base('us'), 'https://us-discoveryengine.googleapis.com/v1alpha')
+    self.assertEqual(ge_fleet._de_base('global'), 'https://discoveryengine.googleapis.com/v1alpha')
     external = ge_fleet.classify_agent(ENGINE, 'default_assistant', {
         'name': 'a/b/agents/y', 'a2aAgentDefinition': {'jsonAgentCard': json.dumps({'url': 'https://agents.example.com/a2a'})}})
     self.assertEqual((external['backend']['kind'], external['telemetry_scope']), ('external_endpoint', 'none'))

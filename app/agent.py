@@ -192,7 +192,7 @@ def open_dashboard(focus_tab: int = 0, initial_agent: str = "it_service_desk") -
   economics, or AlphaEvolve optimization in the UI.
 
   Args:
-      focus_tab: Tab to open (0 = live Gemini Enterprise agent fleet, 1 = agent parameters, 2 = AlphaEvolve).
+      focus_tab: Tab to open (0 = live Gemini Enterprise agent fleet, 1 = agent parameters, 2 = AlphaEvolve, 3 = User-Centric FinOps, Skill/MCP token breakdown & @vibelift_telemetry decorator stream).
       initial_agent: Optional Gemini Enterprise agent identifier to analyze ('it_service_desk', 'vibelift_analytics', 'deep_research').
 
   Returns:

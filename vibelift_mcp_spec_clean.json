@@ -16,7 +16,7 @@
           },
           "focus_tab": {
             "type": "integer",
-            "description": "Tab to open: 0 = live Gemini Enterprise agent fleet (default), 1 = agent optimization parameters, 2 = AlphaEvolve performance and actions. Omit to open the live fleet."
+            "description": "Tab to open: 0 = live Gemini Enterprise agent fleet (default), 1 = agent optimization parameters, 2 = AlphaEvolve performance and actions, 3 = User-Centric FinOps, Skill/MCP token consumption & @vibelift_telemetry decorator stream. Omit to open the live fleet."
           },
           "window_hours": {
             "type": "integer",
@@ -93,6 +93,10 @@
           "agent_id": {
             "type": "string",
             "description": "Optional Gemini Enterprise agent identifier: 'it_service_desk', 'vibelift_analytics', or 'deep_research'."
+          },
+          "platform_id": {
+            "type": "string",
+            "description": "Optional optimization platform ID: 'alpha_evolve', 'opus_critic', 'vertex_vizier', or 'hybrid_ensemble'."
           }
         }
       }

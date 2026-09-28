@@ -168,7 +168,7 @@ def classify_agent(engine_id: str, assistant_id: str, raw: dict[str, Any]) -> di
       backend.update(run)
   elif 'managedAgentDefinition' in raw:
     kind, backend = 'MANAGED', {'kind': 'google_managed'}
-  elif 'lowCodeAgentDefinition' in raw:
+  elif 'lowCodeAgentDefinition' in raw or 'workflowAgentDefinition' in raw:
     kind, backend = 'LOW_CODE', {'kind': 'gemini_enterprise_hosted'}
   elif 'dialogflowAgentDefinition' in raw:
     kind = 'DIALOGFLOW'
@@ -395,12 +395,13 @@ class GeminiEnterpriseFleetService:
         'notes': ['Live Gemini Enterprise telemetry collection is warming in the background; refresh in a moment.'],
     }
 
-  def _de_base(self) -> str:
+  def _de_base(self, location: str | None = None) -> str:
+    loc = location or self.location
     host = 'discoveryengine.googleapis.com'
-    if self.location != 'global':
-      host = f'{self.location}-{host}'
+    if loc != 'global':
+      host = f'{loc}-{host}'
     return (
-        f'https://{host}/v1alpha/projects/{self.project_id}/locations/{self.location}'
+        f'https://{host}/v1alpha/projects/{self.project_id}/locations/{loc}'
         f'/collections/{self.collection}/engines'
     )
 
@@ -416,8 +417,12 @@ class GeminiEnterpriseFleetService:
         break
     return items
 
-  def _list_engine_agents(self, engine_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    base = f'{self._de_base()}/{engine_id}'
+  def _list_engine_agents(self, engine_spec: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if '/' in engine_spec:
+      loc, engine_id = engine_spec.split('/', 1)
+    else:
+      loc, engine_id = self.location, engine_spec
+    base = f'{self._de_base(loc)}/{engine_id}'
     engine = self._api.call('GET', base)
     try:
       assistants = [a['name'].rsplit('/', 1)[-1] for a in self._paged(f'{base}/assistants?pageSize=100', 'assistants')]

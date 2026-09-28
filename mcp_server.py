@@ -295,11 +295,14 @@ async def _tool_calculate_cache_economics(session_key: str, args: dict[str, Any]
 
 
 async def _tool_run_alpha_evolve_generation(session_key: str, args: dict[str, Any]) -> dict[str, Any]:
-  """Executes an AlphaEvolve optimization cycle on the active agent."""
+  """Executes an optimization cycle on the active agent."""
   ctrl = _get_controller()
   agent_id = args.get('agent_id')
   if agent_id:
     await asyncio.to_thread(ctrl.select_agent, str(agent_id))
+  platform_id = args.get('platform_id')
+  if platform_id:
+    await asyncio.to_thread(ctrl.select_optimizer, str(platform_id))
 
   evolved_state = await asyncio.to_thread(ctrl.evolve_generation)
   active = evolved_state.get('active_agent', {})
@@ -309,7 +312,7 @@ async def _tool_run_alpha_evolve_generation(session_key: str, args: dict[str, An
   latest_action = actions[0] if actions else {}
 
   text_summary = (
-      f"AlphaEvolve Generation {latest_gen.get('generation', 13)} complete for `{active.get('display_name') or active.get('agent_id')}`.\n"
+      f"Optimization Generation {latest_gen.get('generation', 13)} complete for `{active.get('display_name') or active.get('agent_id')}`.\n"
       f"- Status: {active.get('health_status')}\n"
       f"- Action: {latest_action.get('action_title')}\n"
       f"- Impact: {latest_action.get('impact_summary')}\n"
@@ -348,10 +351,10 @@ _TOOLS: list[dict[str, Any]] = [
         'description': (
             'CRITICAL: Always call this tool whenever the user asks to see, open, '
             'or inspect the VibeLift Analytics & FinOps Dashboard, or asks for the Gemini Enterprise '
-            'agent fleet, agent telemetry, prompt cache economics, or AlphaEvolve optimization in the '
-            'interactive UI. Opens the interactive dashboard in the side panel or full screen: every agent '
-            'deployed on the Gemini Enterprise app with live Cloud Monitoring and Cloud Logging telemetry, '
-            'plus the AlphaEvolve optimization studio.'
+            'agent fleet, agent telemetry, prompt cache economics, user-centric FinOps, or AlphaEvolve '
+            'optimization in the interactive UI. Opens the interactive dashboard in the right side panel '
+            '(with a Fullscreen button): every agent deployed on the Gemini Enterprise app with live Cloud '
+            'Monitoring and Cloud Logging telemetry, plus the optimization studio and @vibelift_telemetry stream.'
         ),
         'visibility': ['model', 'app'],
         'widget': True,
@@ -366,7 +369,8 @@ _TOOLS: list[dict[str, Any]] = [
                     'type': 'integer',
                     'description': (
                         'Tab to open: 0 = live Gemini Enterprise agent fleet (default), '
-                        '1 = agent optimization parameters, 2 = AlphaEvolve performance and actions. '
+                        '1 = agent optimization parameters, 2 = optimizer performance and actions, '
+                        '3 = User-Centric FinOps, Skill/MCP token consumption & @vibelift_telemetry decorator stream. '
                         'Omit to open the live fleet.'
                     ),
                 },

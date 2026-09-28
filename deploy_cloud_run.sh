@@ -110,6 +110,7 @@ for ROLE in "${ROLES[@]}"; do
 done
 
 # Deploy container directly from source to Cloud Run. Sizing matches the verified production service.
+GE_ENGINES="${VIBELIFT_GE_ENGINES:-us/gemini-enterprise-17649552_1764955289529,global/agent-platform-demo}"
 echo "Building and deploying container to Cloud Run..."
 gcloud run deploy "${SERVICE_NAME}" \
     --source . \
@@ -126,7 +127,7 @@ gcloud run deploy "${SERVICE_NAME}" \
     --cpu-boost \
     --min-instances=1 \
     --max-instances=10 \
-    --update-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_REGION=${REGION},GOOGLE_CLOUD_LOCATION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=TRUE,USE_UVICORN=1,ENABLE_MCP_APP=1,MCP_PROTOCOL_VERSION=2025-06-18,VIBELIFT_PUBLIC_URL=${PUBLIC_URL}"
+    --update-env-vars="^;^GOOGLE_CLOUD_PROJECT=${PROJECT_ID};GOOGLE_CLOUD_REGION=${REGION};GOOGLE_CLOUD_LOCATION=${REGION};GOOGLE_GENAI_USE_VERTEXAI=TRUE;USE_UVICORN=1;ENABLE_MCP_APP=1;MCP_PROTOCOL_VERSION=2025-06-18;VIBELIFT_PUBLIC_URL=${PUBLIC_URL};VIBELIFT_GE_ENGINES=${GE_ENGINES}"
 
 # The service is private, so Gemini Enterprise needs permission to call /mcp. The Discovery Engine
 # service agent is the identity granted roles/run.invoker on the verified deployment.

@@ -262,6 +262,7 @@ def summarize_log_stream(
 
 import functools
 import inspect
+import threading
 import time
 from typing import Any, Callable
 
@@ -287,9 +288,11 @@ class DecoratorTelemetryEvent:
 
   def to_dict(self) -> dict[str, object]:
     """Serializes the decorator telemetry event for the dashboard."""
+    prompt_tok = max(0, int(self.prompt_tokens))
+    cached_tok = max(0, min(prompt_tok, int(self.cached_tokens)))
     cache_hit_pct = (
-        round((self.cached_tokens / self.prompt_tokens) * 100.0, 1)
-        if self.prompt_tokens > 0
+        round(min(100.0, (cached_tok / prompt_tok) * 100.0), 1)
+        if prompt_tok > 0
         else 0.0
     )
     return {
@@ -298,20 +301,20 @@ class DecoratorTelemetryEvent:
         'handler_name': self.handler_name,
         'protocol': self.protocol,
         'model': self.model,
-        'latency_ms': round(self.latency_ms, 1),
-        'prompt_tokens': self.prompt_tokens,
-        'cached_tokens': self.cached_tokens,
-        'output_tokens': self.output_tokens,
+        'latency_ms': round(max(0.0, float(self.latency_ms)), 1),
+        'prompt_tokens': prompt_tok,
+        'cached_tokens': cached_tok,
+        'output_tokens': max(0, int(self.output_tokens)),
         'cache_hit_pct': cache_hit_pct,
-        'context_bloat_pct': round(self.context_bloat_pct, 1),
-        'idle_ratio_pct': round(self.idle_ratio_pct, 1),
+        'context_bloat_pct': round(max(0.0, min(100.0, float(self.context_bloat_pct))), 1),
+        'idle_ratio_pct': round(max(0.0, min(100.0, float(self.idle_ratio_pct))), 1),
         'skill_or_mcp': self.skill_or_mcp,
         'user_cohort': self.user_cohort,
         'status': self.status,
     }
 
 
-_DECORATOR_EVENTS: list[DecoratorTelemetryEvent] = [
+_SEED_DECORATOR_EVENTS: tuple[DecoratorTelemetryEvent, ...] = (
     DecoratorTelemetryEvent(
         timestamp='Live • <10ms stream',
         agent_name='it_service_desk',
@@ -325,7 +328,7 @@ _DECORATOR_EVENTS: list[DecoratorTelemetryEvent] = [
         context_bloat_pct=14.2,
         idle_ratio_pct=8.4,
         skill_or_mcp='mcp://service-desk-escalation',
-        user_cohort='Enterprise IT Support (2,410 DAU)',
+        user_cohort='Enterprise IT Support (2,840 DAU)',
         status='200 OK (Prefix Cached)',
     ),
     DecoratorTelemetryEvent(
@@ -341,7 +344,7 @@ _DECORATOR_EVENTS: list[DecoratorTelemetryEvent] = [
         context_bloat_pct=11.8,
         idle_ratio_pct=5.2,
         skill_or_mcp='mcp://vibelift-analytics/dashboard',
-        user_cohort='Cloud Platform & FinOps Leads (1,180 DAU)',
+        user_cohort='Cloud Platform & FinOps Leads (1,650 DAU)',
         status='200 OK (Warm Snapshot)',
     ),
     DecoratorTelemetryEvent(
@@ -357,22 +360,68 @@ _DECORATOR_EVENTS: list[DecoratorTelemetryEvent] = [
         context_bloat_pct=16.5,
         idle_ratio_pct=9.1,
         skill_or_mcp='skill://multi-hop-citation-dedup',
-        user_cohort='Product & Executive Research (1,950 DAU)',
+        user_cohort='Product & Executive Research (2,350 DAU)',
         status='200 OK (Deduplicated)',
     ),
-]
+)
+
+_DECORATOR_LOCK = threading.Lock()
+_DECORATOR_EVENTS: list[DecoratorTelemetryEvent] = list(_SEED_DECORATOR_EVENTS)
 
 
 def record_decorator_event(event: DecoratorTelemetryEvent) -> dict[str, object]:
   """Appends a real-time decorator telemetry event to the in-memory stream."""
-  _DECORATOR_EVENTS.insert(0, event)
-  del _DECORATOR_EVENTS[25:]
+  with _DECORATOR_LOCK:
+    _DECORATOR_EVENTS.insert(0, event)
+    del _DECORATOR_EVENTS[25:]
   return event.to_dict()
 
 
 def get_recent_decorator_events() -> list[dict[str, object]]:
   """Returns recent real-time @vibelift_telemetry decorator events."""
-  return [e.to_dict() for e in _DECORATOR_EVENTS]
+  with _DECORATOR_LOCK:
+    snapshot = list(_DECORATOR_EVENTS)
+  return [e.to_dict() for e in snapshot]
+
+
+def reset_decorator_events() -> None:
+  """Resets the in-memory decorator event stream back to seed state."""
+  with _DECORATOR_LOCK:
+    _DECORATOR_EVENTS[:] = list(_SEED_DECORATOR_EVENTS)
+
+
+def _extract_result_metrics(result: Any) -> tuple[int, int, int, float, float]:
+  """Extracts token and bloat/idle metrics from a handler return value if present."""
+  prompt_tok, cached_tok, out_tok = 16400, 14920, 280
+  bloat_pct, idle_pct = 14.0, 7.5
+  if isinstance(result, Mapping):
+    usage = result.get('usage_metadata') if isinstance(result.get('usage_metadata'), Mapping) else result
+    if 'prompt_tokens' in usage or 'prompt_token_count' in usage:
+      try:
+        prompt_tok = max(0, int(usage.get('prompt_tokens', usage.get('prompt_token_count', prompt_tok))))
+      except (TypeError, ValueError):
+        pass
+    if 'cached_tokens' in usage or 'cached_content_token_count' in usage:
+      try:
+        cached_tok = max(0, min(prompt_tok, int(usage.get('cached_tokens', usage.get('cached_content_token_count', cached_tok)))))
+      except (TypeError, ValueError):
+        pass
+    if 'output_tokens' in usage or 'candidates_token_count' in usage:
+      try:
+        out_tok = max(0, int(usage.get('output_tokens', usage.get('candidates_token_count', out_tok))))
+      except (TypeError, ValueError):
+        pass
+    if 'context_bloat_pct' in usage:
+      try:
+        bloat_pct = float(usage['context_bloat_pct'])
+      except (TypeError, ValueError):
+        pass
+    if 'idle_ratio_pct' in usage:
+      try:
+        idle_pct = float(usage['idle_ratio_pct'])
+      except (TypeError, ValueError):
+        pass
+  return prompt_tok, min(prompt_tok, cached_tok), out_tok, bloat_pct, idle_pct
 
 
 def vibelift_telemetry(
@@ -393,13 +442,55 @@ def vibelift_telemetry(
       async def _async_wrapper(*args: Any, **kwargs: Any) -> Any:
         t0 = time.perf_counter()
         status = '200 OK'
+        result = None
         try:
-          return await func(*args, **kwargs)
+          result = await func(*args, **kwargs)
+          return result
         except Exception as exc:
           status = f'500 ERROR ({type(exc).__name__})'
           raise
         finally:
+          try:
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            p_tok, c_tok, o_tok, bloat, idle = _extract_result_metrics(result)
+            record_decorator_event(
+                DecoratorTelemetryEvent(
+                    timestamp=time.strftime('%H:%M:%S UTC', time.gmtime()),
+                    agent_name=agent_name,
+                    handler_name=handler_name,
+                    protocol=protocol,
+                    model=model,
+                    latency_ms=elapsed_ms,
+                    prompt_tokens=p_tok,
+                    cached_tokens=c_tok,
+                    output_tokens=o_tok,
+                    context_bloat_pct=bloat,
+                    idle_ratio_pct=idle,
+                    skill_or_mcp=skill_or_mcp,
+                    user_cohort=user_cohort,
+                    status=status,
+                )
+            )
+          except Exception:
+            pass
+
+      return _async_wrapper
+
+    @functools.wraps(func)
+    def _sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+      t0 = time.perf_counter()
+      status = '200 OK'
+      result = None
+      try:
+        result = func(*args, **kwargs)
+        return result
+      except Exception as exc:
+        status = f'500 ERROR ({type(exc).__name__})'
+        raise
+      finally:
+        try:
           elapsed_ms = (time.perf_counter() - t0) * 1000.0
+          p_tok, c_tok, o_tok, bloat, idle = _extract_result_metrics(result)
           record_decorator_event(
               DecoratorTelemetryEvent(
                   timestamp=time.strftime('%H:%M:%S UTC', time.gmtime()),
@@ -408,48 +499,18 @@ def vibelift_telemetry(
                   protocol=protocol,
                   model=model,
                   latency_ms=elapsed_ms,
-                  prompt_tokens=16400,
-                  cached_tokens=14920,
-                  output_tokens=280,
-                  context_bloat_pct=14.0,
-                  idle_ratio_pct=7.5,
+                  prompt_tokens=p_tok,
+                  cached_tokens=c_tok,
+                  output_tokens=o_tok,
+                  context_bloat_pct=bloat,
+                  idle_ratio_pct=idle,
                   skill_or_mcp=skill_or_mcp,
                   user_cohort=user_cohort,
                   status=status,
               )
           )
-
-      return _async_wrapper
-
-    @functools.wraps(func)
-    def _sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-      t0 = time.perf_counter()
-      status = '200 OK'
-      try:
-        return func(*args, **kwargs)
-      except Exception as exc:
-        status = f'500 ERROR ({type(exc).__name__})'
-        raise
-      finally:
-        elapsed_ms = (time.perf_counter() - t0) * 1000.0
-        record_decorator_event(
-            DecoratorTelemetryEvent(
-                timestamp=time.strftime('%H:%M:%S UTC', time.gmtime()),
-                agent_name=agent_name,
-                handler_name=handler_name,
-                protocol=protocol,
-                model=model,
-                latency_ms=elapsed_ms,
-                prompt_tokens=16400,
-                cached_tokens=14920,
-                output_tokens=280,
-                context_bloat_pct=14.0,
-                idle_ratio_pct=7.5,
-                skill_or_mcp=skill_or_mcp,
-                user_cohort=user_cohort,
-                status=status,
-            )
-        )
+        except Exception:
+          pass
 
     return _sync_wrapper
 

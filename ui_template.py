@@ -168,11 +168,11 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 10px;
-      padding: 20px 24px;
+      padding: 16px 20px;
       margin-bottom: 20px;
       display: grid;
-      grid-template-columns: 1.2fr 1.8fr;
-      gap: 24px;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+      gap: 20px;
       align-items: center;
       box-shadow: 0 1px 2px rgba(60,64,67,0.05);
     }
@@ -186,8 +186,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .agent-select {
       width: 100%;
-      padding: 11px 14px;
-      font-size: 15px;
+      padding: 10px 12px;
+      font-size: 14px;
       font-weight: 600;
       font-family: var(--font-sans);
       color: var(--text-primary);
@@ -201,7 +201,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       flex-direction: column;
       gap: 8px;
       border-left: 1px solid var(--border);
-      padding-left: 24px;
+      padding-left: 20px;
     }
     .agent-meta-top {
       display: flex;
@@ -212,15 +212,15 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .kpi-grid {
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 16px;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+      gap: 14px;
       margin-bottom: 20px;
     }
     .kpi-card {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 8px;
-      padding: 16px 18px;
+      padding: 14px 16px;
       position: relative;
       overflow: hidden;
     }
@@ -235,7 +235,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       letter-spacing: 0.5px;
     }
     .kpi-value {
-      font-size: 26px;
+      font-size: 24px;
       font-weight: 700;
       margin: 6px 0 4px 0;
     }
@@ -247,7 +247,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 10px;
-      padding: 20px 24px;
+      padding: 18px 20px;
       margin-bottom: 20px;
     }
     .panel-header {
@@ -261,10 +261,11 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       gap: 12px;
     }
     .panel-title {
-      font-size: 16px;
+      font-size: 15px;
       font-weight: 700;
       display: flex;
       align-items: center;
+      flex-wrap: wrap;
       gap: 8px;
     }
     .badge {
@@ -287,7 +288,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     th, td {
       text-align: left;
-      padding: 12px 12px;
+      padding: 10px 10px;
       border-bottom: 1px solid var(--border);
     }
     th {
@@ -320,7 +321,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       padding: 14px 16px;
       margin-top: 16px;
       display: grid;
-      grid-template-columns: 1.6fr 0.7fr 1.1fr 0.9fr 0.9fr 0.8fr auto;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
       gap: 10px;
       align-items: end;
     }
@@ -341,21 +342,21 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .charts-grid {
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 18px;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+      gap: 16px;
       margin-bottom: 20px;
     }
     .chart-card {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 10px;
-      padding: 16px 20px;
+      padding: 14px 16px;
     }
     .action-card {
       border: 1px solid var(--border);
       border-left: 5px solid var(--g-green);
       border-radius: 8px;
-      padding: 16px 20px;
+      padding: 14px 16px;
       margin-bottom: 14px;
       background: #ffffff;
     }
@@ -369,8 +370,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .action-grid {
       display: grid;
-      grid-template-columns: 1.1fr 1.2fr 1.2fr;
-      gap: 16px;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+      gap: 12px;
       margin-top: 10px;
     }
     .action-box {
@@ -411,9 +412,9 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .chip-ok { background: var(--g-green-bg); color: var(--g-green); border-color: transparent; }
     .chip-error { background: var(--g-red-bg); color: var(--g-red); border-color: transparent; }
     .chip-na { background: #f1f3f4; color: var(--text-secondary); }
-    .fleet-kpis { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+    .fleet-kpis { grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); }
     .fleet-kpis .kpi-value { font-size: 22px; }
-    .table-scroll { overflow-x: auto; }
+    .table-scroll { overflow-x: auto; width: 100%; }
     .fleet-agent-name { font-weight: 700; }
     .fleet-agent-desc { font-size: 11px; color: var(--text-secondary); margin-top: 2px; max-width: 360px; }
     .fleet-agent-tags { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
@@ -425,6 +426,11 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .fleet-error { background: var(--g-red-bg); color: var(--g-red); padding: 6px 10px; border-radius: 6px; margin-bottom: 6px; word-break: break-word; }
     .fleet-notes { font-size: 11px; color: var(--text-secondary); margin: 12px 0 0 16px; padding: 0; }
     .hidden { display: none !important; }
+    @media (max-width: 820px) {
+      .agent-meta-box { border-left: none; border-top: 1px solid var(--border); padding-left: 0; padding-top: 12px; }
+      .container { padding: 0 12px 28px 12px; }
+      .panel { padding: 14px 14px; }
+    }
   </style>
 </head>
 <body>
@@ -1093,35 +1099,36 @@ async def handle_agent_turn(message_envelope):
       // Render Tab 2 AlphaEvolve Action Cards
       const actions = agent.actions || [];
       document.getElementById('actionsTimelineContainer').innerHTML = actions.map(a => {
-        const isRej = a.status.includes('REJECTED');
-        const isBase = a.status.includes('BASELINE');
+        const statusStr = String(a.status || '');
+        const isRej = statusStr.includes('REJECTED');
+        const isBase = statusStr.includes('BASELINE');
         const cardCls = isRej ? 'action-card rejected' : (isBase ? 'action-card baseline' : 'action-card');
         const badgeCls = isRej ? 'badge-red' : (isBase ? 'badge-yellow' : 'badge-green');
         return `
           <div class="${cardCls}">
             <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
               <div>
-                <span class="badge badge-blue" style="margin-right:8px;">Gen ${a.generation} &bull; ${a.timestamp}</span>
-                <strong style="font-size:15px;">${a.action_title}</strong>
-                <span class="badge badge-blue" style="margin-left:6px;">Target: ${a.parameter_targeted}</span>
+                <span class="badge badge-blue" style="margin-right:8px;">Gen ${esc(a.generation)} &bull; ${esc(a.timestamp)}</span>
+                <strong style="font-size:15px;">${esc(a.action_title)}</strong>
+                <span class="badge badge-blue" style="margin-left:6px;">Target: ${esc(a.parameter_targeted)}</span>
               </div>
-              <span class="badge ${badgeCls}">${a.status}</span>
+              <span class="badge ${badgeCls}">${esc(statusStr)}</span>
             </div>
             <div class="action-grid">
               <div class="action-box">
                 <div class="action-box-title">1. Root Cause Detected in Logs</div>
-                <div>${a.root_cause_from_logs}</div>
+                <div>${esc(a.root_cause_from_logs)}</div>
               </div>
               <div class="action-box">
                 <div class="action-box-title">2. Action Taken by Optimizer</div>
-                <div><strong>${a.action_taken}</strong></div>
+                <div><strong>${esc(a.action_taken)}</strong></div>
                 <div style="margin-top:6px;color:var(--g-green);font-weight:700;font-size:12px;">
-                  Impact: ${a.impact_summary}
+                  Impact: ${esc(a.impact_summary)}
                 </div>
               </div>
               <div>
                 <div class="action-box-title" style="margin-bottom:4px;">3. Genome Prompt / Config Diff</div>
-                <pre class="diff-pre">${a.diff_snippet}</pre>
+                <pre class="diff-pre">${esc(a.diff_snippet)}</pre>
               </div>
             </div>
           </div>
@@ -1683,8 +1690,16 @@ async def handle_agent_turn(message_envelope):
           else if (k === 'accuracy_pct' || k === 'task_accuracy_pct') { p.current_value = newAcc; p.status = 'EXCEEDING TARGET (' + newAcc + '%)'; }
           else if (k === 'cache_hit_pct' || k === 'prompt_cache_hit_pct') { p.current_value = newCache; p.status = 'LOCKED (' + newCache + '% Hit)'; }
           else if (k === 'error_rate_pct') { p.current_value = 0.0; p.status = 'SELF-HEALED (0.0%)'; }
-          else if (k === 'context_bloat_pct') { p.current_value = 11.4; p.status = 'PRUNED (11.4% Bloat)'; }
-          else if (k === 'idle_ratio_pct') { p.current_value = 6.2; p.status = 'OPTIMIZED (6.2% Idle)'; }
+          else if (k === 'context_bloat_pct') {
+            const nextBloat = Math.max(6.0, Math.round(Number(p.current_value || 18.0) * 0.82 * 10) / 10);
+            p.current_value = nextBloat;
+            p.status = 'PRUNED (' + nextBloat + '% Bloat)';
+          }
+          else if (k === 'idle_ratio_pct') {
+            const nextIdle = Math.max(3.5, Math.round(Number(p.current_value || 10.0) * 0.85 * 10) / 10);
+            p.current_value = nextIdle;
+            p.status = 'OPTIMIZED (' + nextIdle + '% Idle)';
+          }
           else {
             p.current_value = p.direction === 'LOWER'
               ? Math.round((Number(p.current_value) * 0.92) * 100) / 100
@@ -1722,14 +1737,15 @@ async def handle_agent_turn(message_envelope):
       }
 
       if (endpoint === '/api/add_parameter' && payload) {
-        const slug = String(payload.label || 'custom_metric').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+        const cleanLabel = String(payload.label || 'Custom Metric').trim() || 'Custom Metric';
+        const slug = cleanLabel.toLowerCase().replace(/[^a-z0-9]+/g, '_');
         const bVal = Number(payload.baseline_val) || 80.0;
-        const dir = payload.direction || 'HIGHER';
+        const rawDir = String(payload.direction || 'HIGHER').toUpperCase();
+        const dir = rawDir.includes('LOWER') ? 'LOWER' : 'HIGHER';
         const curVal = dir === 'LOWER' ? Math.round(bVal * 0.65 * 100) / 100 : Math.round(Math.min(99.0, bVal * 1.12) * 100) / 100;
-        agent.parameters = agent.parameters || [];
-        agent.parameters.push({
+        const newParamObj = {
           key: slug,
-          label: payload.label || 'Custom Metric',
+          label: cleanLabel,
           unit: payload.unit || '%',
           direction: dir,
           baseline_value: bVal,
@@ -1737,7 +1753,16 @@ async def handle_agent_turn(message_envelope):
           target_value: Number(payload.target_val) || 95.0,
           weight_pct: Number(payload.weight_pct) || 10,
           status: 'TRACKING IN LOGS (@vibelift_telemetry)',
+        };
+        agent.parameters = agent.parameters || [];
+        const existingIdx = agent.parameters.findIndex(function(p) {
+          return (p.key || p.param_id) === slug || String(p.label || '').toLowerCase() === cleanLabel.toLowerCase();
         });
+        if (existingIdx >= 0) {
+          agent.parameters[existingIdx] = newParamObj;
+        } else {
+          agent.parameters.push(newParamObj);
+        }
         allAgentsCache[agent.agent_id] = agent;
         renderState(currentState);
         return true;
@@ -1758,12 +1783,22 @@ async def handle_agent_turn(message_envelope):
       if (isEmbedded()) {
         applyEmbeddedMutation(endpoint, payload);
         if (endpoint === '/api/evolve_generation' && currentState && currentState.active_agent) {
+          const activePlatId = (currentState.optimizer_platforms && currentState.optimizer_platforms.active_platform_id) || 'alpha_evolve';
           callHost('tools/call', {
             name: 'run_alpha_evolve_generation',
-            arguments: {agent_id: currentState.active_agent.agent_id},
+            arguments: {
+              agent_id: currentState.active_agent.agent_id,
+              platform_id: activePlatId,
+            },
           }, 15000).then(function(res) {
-            if (res && !res.isError && res.structuredContent && res.structuredContent.state) {
-              renderState(res.structuredContent.state);
+            if (res && !res.isError && res.structuredContent) {
+              const nextState = res.structuredContent.state || res.structuredContent;
+              if (nextState && nextState.active_agent) {
+                if (!nextState.ge_fleet && currentState && currentState.ge_fleet) {
+                  nextState.ge_fleet = currentState.ge_fleet;
+                }
+                renderState(nextState);
+              }
             }
           }).catch(function() {});
         }
@@ -1836,9 +1871,9 @@ async def handle_agent_turn(message_envelope):
     let currentDisplayMode = 'pip';
 
     function notifyHostSizeChanged() {
-      if (!isEmbedded()) return;
+      if (!isEmbedded() || currentDisplayMode === 'fullscreen') return;
       try {
-        const h = Math.max(document.documentElement.scrollHeight || 0, document.body.scrollHeight || 0, 720);
+        const h = Math.max(document.body ? document.body.offsetHeight : 0, 720);
         post({
           jsonrpc: '2.0',
           method: 'ui/notifications/size-changed',
@@ -1869,6 +1904,13 @@ async def handle_agent_turn(message_envelope):
         syncDisplayModeButton();
       });
     }
+
+    document.addEventListener('fullscreenchange', function() {
+      if (!isEmbedded()) {
+        currentDisplayMode = document.fullscreenElement ? 'fullscreen' : 'pip';
+        syncDisplayModeButton();
+      }
+    });
 
     function toggleDisplayMode() {
       const target = currentDisplayMode === 'fullscreen' ? 'pip' : 'fullscreen';
@@ -2051,11 +2093,17 @@ async def handle_agent_turn(message_envelope):
 def render_dashboard_html(
     initial_state: Mapping[str, object] | None = None,
 ) -> str:
-  """Returns the self-contained Google Cloud 3-tab HTML UI."""
+  """Returns the self-contained Google Cloud 4-tab HTML UI."""
   state_json = 'null'
   if initial_state is not None:
     try:
-      state_json = json.dumps(initial_state).replace('</', '<\\/')
+      state_json = (
+          json.dumps(initial_state)
+          .replace('<', '\\u003c')
+          .replace('>', '\\u003e')
+          .replace('\u2028', '\\u2028')
+          .replace('\u2029', '\\u2029')
+      )
     except (TypeError, ValueError):
       state_json = 'null'
   return (

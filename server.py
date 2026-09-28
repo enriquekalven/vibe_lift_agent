@@ -129,6 +129,7 @@ class VibeLiftRuntimeController:
       available_agents = self.optimizer.list_agents_summary()
       all_agents = self.optimizer.get_all_agents_dict()
       optimizer_platforms = self.optimizer.get_optimizer_platforms_payload()
+      user_centric = self.optimizer.get_user_centric_payload()
       steps = list(self.agent.step_descriptions)
 
     services = self.gcp_telemetry.list_cloud_run_agent_services(non_blocking=fast_mcp)
@@ -147,7 +148,7 @@ class VibeLiftRuntimeController:
         'available_agents': available_agents,
         'all_agents': all_agents,
         'optimizer_platforms': optimizer_platforms,
-        'user_centric': alpha_evolve_optimizer.build_user_centric_analytics(),
+        'user_centric': user_centric,
         'decorator_events': telemetry.get_recent_decorator_events(),
         'summary': dict(telemetry.summarize_log_stream(turns)),
         'turns': [t.to_dict() for t in turns],
@@ -187,21 +188,42 @@ class VibeLiftRuntimeController:
     import time
     raw = body or {}
     active = self.optimizer.active_agent
+
+    def _safe_float(key: str, default: float) -> float:
+      val = raw.get(key)
+      if val is None or val == '':
+        return default
+      try:
+        return max(0.0, float(val))
+      except (TypeError, ValueError):
+        return default
+
+    def _safe_int(key: str, default: int) -> int:
+      val = raw.get(key)
+      if val is None or val == '':
+        return default
+      try:
+        return max(0, int(val))
+      except (TypeError, ValueError):
+        return default
+
+    prompt_tok = _safe_int('prompt_tokens', 19200)
+    cached_tok = min(prompt_tok, _safe_int('cached_tokens', 17680))
     event = telemetry.DecoratorTelemetryEvent(
-        timestamp=str(raw.get('timestamp') or time.strftime('%H:%M:%S UTC', time.gmtime())),
-        agent_name=str(raw.get('agent_name') or active.agent_id),
-        handler_name=str(raw.get('handler_name') or 'on_message_passing_turn'),
-        protocol=str(raw.get('protocol') or 'ADK / MCP Decorator Stream'),
-        model=str(raw.get('model') or active.model),
-        latency_ms=float(raw.get('latency_ms') or 585.0),
-        prompt_tokens=int(raw.get('prompt_tokens') or 19200),
-        cached_tokens=int(raw.get('cached_tokens') or 17680),
-        output_tokens=int(raw.get('output_tokens') or 320),
-        context_bloat_pct=float(raw.get('context_bloat_pct') or 12.4),
-        idle_ratio_pct=float(raw.get('idle_ratio_pct') or 6.8),
-        skill_or_mcp=str(raw.get('skill_or_mcp') or f'mcp://{active.agent_id}/stream'),
-        user_cohort=str(raw.get('user_cohort') or 'Enterprise Active DAU Cohort'),
-        status=str(raw.get('status') or '200 OK (@vibelift_telemetry)'),
+        timestamp=str(raw.get('timestamp') or time.strftime('%H:%M:%S UTC', time.gmtime()))[:64],
+        agent_name=str(raw.get('agent_name') or active.agent_id)[:64],
+        handler_name=str(raw.get('handler_name') or 'on_message_passing_turn')[:80],
+        protocol=str(raw.get('protocol') or 'ADK / MCP Decorator Stream')[:80],
+        model=str(raw.get('model') or active.model)[:64],
+        latency_ms=_safe_float('latency_ms', 585.0),
+        prompt_tokens=prompt_tok,
+        cached_tokens=cached_tok,
+        output_tokens=_safe_int('output_tokens', 320),
+        context_bloat_pct=min(100.0, _safe_float('context_bloat_pct', 12.4)),
+        idle_ratio_pct=min(100.0, _safe_float('idle_ratio_pct', 6.8)),
+        skill_or_mcp=str(raw.get('skill_or_mcp') or f'mcp://{active.agent_id}/stream')[:96],
+        user_cohort=str(raw.get('user_cohort') or 'Enterprise Active DAU Cohort')[:96],
+        status=str(raw.get('status') or '200 OK (@vibelift_telemetry)')[:64],
     )
     telemetry.record_decorator_event(event)
     return self.get_state_payload(include_fleet=False)
@@ -257,6 +279,7 @@ class VibeLiftRuntimeController:
           agent_name=self.optimizer.active_agent.agent_id,
           model=self.optimizer.active_agent.model,
       )
+      telemetry.reset_decorator_events()
     return self.get_state_payload(include_fleet=False)
 
 

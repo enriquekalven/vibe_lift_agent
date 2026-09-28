@@ -1,6 +1,7 @@
 """Multi-agent profiles, user parameters, time-series & AlphaEvolve actions."""
 
 import dataclasses
+import re
 
 
 @dataclasses.dataclass
@@ -720,8 +721,39 @@ OPTIMIZER_PLATFORMS: dict[str, dict[str, str]] = {
 }
 
 
-def build_user_centric_analytics() -> dict[str, object]:
+def _get_param_val(profile: DemoAgentProfile | None, key: str, default: float) -> float:
+  if not profile:
+    return default
+  for p in profile.parameters:
+    if p.key == key:
+      return float(p.current_value)
+  return default
+
+
+def build_user_centric_analytics(
+    agents: dict[str, DemoAgentProfile] | None = None,
+) -> dict[str, object]:
   """Builds the User-Centric Token Spending, Savings, Skill/MCP & Governance view (Sep 22 Sync)."""
+  it_agent = agents.get('it_service_desk') if agents else None
+  vl_agent = agents.get('vibelift_analytics') if agents else None
+  dr_agent = agents.get('deep_research') if agents else None
+
+  it_cost = _get_param_val(it_agent, 'cost_usd', 3.45)
+  vl_cost = _get_param_val(vl_agent, 'cost_usd', 5.80)
+  dr_cost = _get_param_val(dr_agent, 'cost_usd', 2.60)
+
+  it_bloat = _get_param_val(it_agent, 'context_bloat_pct', 14.2)
+  vl_bloat = _get_param_val(vl_agent, 'context_bloat_pct', 11.8)
+  dr_bloat = _get_param_val(dr_agent, 'context_bloat_pct', 16.5)
+
+  it_idle = _get_param_val(it_agent, 'idle_ratio_pct', 8.4)
+  vl_idle = _get_param_val(vl_agent, 'idle_ratio_pct', 5.2)
+  dr_idle = _get_param_val(dr_agent, 'idle_ratio_pct', 9.1)
+
+  it_savings = int(it_agent.monthly_savings_usd) if it_agent else 14820
+  vl_savings = int(vl_agent.monthly_savings_usd) if vl_agent else 22400
+  dr_savings = int(dr_agent.monthly_savings_usd) if dr_agent else 9650
+
   cohorts = [
       {
           'cohort': 'Enterprise IT Support & Helpdesk Analysts',
@@ -730,11 +762,11 @@ def build_user_centric_analytics() -> dict[str, object]:
           'sessions_24h': 9420,
           'tokens_per_user_k': 48.2,
           'context_bloat_before_pct': 64.0,
-          'context_bloat_after_pct': 14.2,
-          'idle_ratio_pct': 8.4,
+          'context_bloat_after_pct': it_bloat,
+          'idle_ratio_pct': it_idle,
           'baseline_cost_per_1k_usd': 29.40,
-          'optimized_cost_per_1k_usd': 3.45,
-          'monthly_savings_usd': 14820,
+          'optimized_cost_per_1k_usd': it_cost,
+          'monthly_savings_usd': it_savings,
       },
       {
           'cohort': 'Cloud Platform, SRE & FinOps Engineers',
@@ -743,11 +775,11 @@ def build_user_centric_analytics() -> dict[str, object]:
           'sessions_24h': 6180,
           'tokens_per_user_k': 62.5,
           'context_bloat_before_pct': 58.0,
-          'context_bloat_after_pct': 11.8,
-          'idle_ratio_pct': 5.2,
+          'context_bloat_after_pct': vl_bloat,
+          'idle_ratio_pct': vl_idle,
           'baseline_cost_per_1k_usd': 42.00,
-          'optimized_cost_per_1k_usd': 5.80,
-          'monthly_savings_usd': 22400,
+          'optimized_cost_per_1k_usd': vl_cost,
+          'monthly_savings_usd': vl_savings,
       },
       {
           'cohort': 'Product Strategy & Executive Research Teams',
@@ -756,11 +788,11 @@ def build_user_centric_analytics() -> dict[str, object]:
           'sessions_24h': 5140,
           'tokens_per_user_k': 84.0,
           'context_bloat_before_pct': 71.0,
-          'context_bloat_after_pct': 16.5,
-          'idle_ratio_pct': 9.1,
+          'context_bloat_after_pct': dr_bloat,
+          'idle_ratio_pct': dr_idle,
           'baseline_cost_per_1k_usd': 19.80,
-          'optimized_cost_per_1k_usd': 2.60,
-          'monthly_savings_usd': 9650,
+          'optimized_cost_per_1k_usd': dr_cost,
+          'monthly_savings_usd': dr_savings,
       },
   ]
   skill_mcp_breakdown = [
@@ -770,8 +802,8 @@ def build_user_centric_analytics() -> dict[str, object]:
           'attached_agent': 'VibeLift Analytics & FinOps',
           'calls_24h': 4120,
           'prompt_tokens_m': 82.4,
-          'cache_hit_pct': 89.4,
-          'context_bloat_pct': 11.8,
+          'cache_hit_pct': _get_param_val(vl_agent, 'cache_hit_pct', 89.4),
+          'context_bloat_pct': vl_bloat,
           'optimization_applied': 'Pinned 22k MCP tool schema in static prefix + <10ms warm snapshot',
           'monthly_saved_usd': 12900,
       },
@@ -781,10 +813,10 @@ def build_user_centric_analytics() -> dict[str, object]:
           'attached_agent': 'IT Service Desk',
           'calls_24h': 6890,
           'prompt_tokens_m': 112.6,
-          'cache_hit_pct': 91.2,
-          'context_bloat_pct': 14.2,
+          'cache_hit_pct': _get_param_val(it_agent, 'cache_hit_pct', 91.2),
+          'context_bloat_pct': it_bloat,
           'optimization_applied': 'Shared Tier-1/Tier-2 static runbook prefix + N-2 history pruner',
-          'monthly_saved_usd': 14820,
+          'monthly_saved_usd': it_savings,
       },
       {
           'resource_name': 'skill://multi-hop-citation-dedup',
@@ -793,9 +825,9 @@ def build_user_centric_analytics() -> dict[str, object]:
           'calls_24h': 3410,
           'prompt_tokens_m': 64.8,
           'cache_hit_pct': 93.1,
-          'context_bloat_pct': 16.5,
+          'context_bloat_pct': dr_bloat,
           'optimization_applied': 'Top-3 chunk deduplication + adaptive 429 QPS token-bucket pacing',
-          'monthly_saved_usd': 9650,
+          'monthly_saved_usd': dr_savings,
       },
       {
           'resource_name': 'skill://finops-rate-card-attribution',
@@ -811,21 +843,22 @@ def build_user_centric_analytics() -> dict[str, object]:
   ]
   total_dau = sum(int(c['active_dau']) for c in cohorts)
   total_monthly_savings = sum(int(c['monthly_savings_usd']) for c in cohorts)
+  reduction_pct = round(((29.40 - it_cost) / 29.40) * 100.0, 1)
   return {
       'total_active_dau': total_dau,
       'supported_dau_capacity': '4,000 – 10,000 DAU',
       'baseline_cost_per_1k_turns_usd': 29.40,
-      'optimized_cost_per_1k_turns_usd': 3.45,
-      'avg_cost_reduction_pct': 88.3,
+      'optimized_cost_per_1k_turns_usd': it_cost,
+      'avg_cost_reduction_pct': reduction_pct,
       'per_user_monthly_baseline_usd': 7.85,
       'per_user_monthly_optimized_usd': 0.98,
       'total_monthly_savings_usd': total_monthly_savings,
       'annualized_savings_usd': total_monthly_savings * 12,
       'collection_mode': '@vibelift_telemetry Decorator (Real-Time Message-Passing, <10ms lag)',
       'security_governance': {
-          'oauth_cross_project': 'ACTIVE (OAuth 2.0 Consent Verified Across GCP Projects)',
-          'pdd_privacy_review': 'APPROVED (Anonymized Cohort & Token Attribution)',
-          'hosting_target': 'Google Cloud Run (Migrated from Borg; A2UI Descoped)',
+          'oauth_cross_project': 'ACTIVE (OAuth 2.0 Consent Configured Across GCP Projects)',
+          'pdd_privacy_review': 'COMPLIANT (Anonymized Cohort & Token Attribution)',
+          'hosting_target': 'Google Cloud Run (MCP Side-Panel & Fullscreen UI)',
       },
       'cohorts': cohorts,
       'skill_mcp_breakdown': skill_mcp_breakdown,
@@ -845,6 +878,10 @@ class VibeLiftAlphaEvolveOptimizer:
   def active_agent(self) -> DemoAgentProfile:
     """Returns the currently selected DemoAgentProfile."""
     return self._agents[self.selected_agent_id]
+
+  def get_user_centric_payload(self) -> dict[str, object]:
+    """Returns user-centric FinOps analytics synced with the live agent profiles."""
+    return build_user_centric_analytics(self._agents)
 
   def select_optimizer_platform(self, platform_id: str) -> dict[str, str]:
     """Switches the active optimization platform (AlphaEvolve, Opus Critic, Vizier, or Hybrid)."""
@@ -982,9 +1019,16 @@ class VibeLiftAlphaEvolveOptimizer:
       target_val: float,
       weight_pct: int,
   ) -> DemoAgentProfile:
-    """Adds a custom user-defined optimization parameter to active agent."""
+    """Adds or updates a custom user-defined optimization parameter on the active agent."""
     agent = self.active_agent
-    key = label.lower().replace(' ', '_')[:24]
+    clean_label = (label or 'Custom Metric').strip()
+    lower_label = clean_label.lower()
+    if 'context bloat' in lower_label:
+      key = 'context_bloat_pct'
+    elif 'idle' in lower_label:
+      key = 'idle_ratio_pct'
+    else:
+      key = re.sub(r'[^a-z0-9]+', '_', lower_label).strip('_')[:24] or 'custom_metric'
     norm_dir = (
         'LOWER'
         if direction.strip().upper() in ('LOWER', 'LOWER_IS_BETTER')
@@ -995,19 +1039,22 @@ class VibeLiftAlphaEvolveOptimizer:
         if norm_dir == 'LOWER'
         else round(min(99.0, baseline_val * 1.12), 2)
     )
-    agent.parameters.append(
-        OptimizationParameter(
-            key=key,
-            label=label,
-            unit=unit,
-            direction=norm_dir,
-            baseline_value=baseline_val,
-            current_value=current_val,
-            target_value=target_val,
-            weight_pct=weight_pct,
-            status='TRACKING IN LOGS (AlphaEvolve Active)',
-        )
+    new_param = OptimizationParameter(
+        key=key,
+        label=clean_label,
+        unit=unit,
+        direction=norm_dir,
+        baseline_value=baseline_val,
+        current_value=current_val,
+        target_value=target_val,
+        weight_pct=weight_pct,
+        status='TRACKING IN LOGS (@vibelift_telemetry)',
     )
+    for idx, existing in enumerate(agent.parameters):
+      if existing.key == key or existing.label.lower() == lower_label:
+        agent.parameters[idx] = new_param
+        return agent
+    agent.parameters.append(new_param)
     return agent
 
   def inject_anomaly(self) -> DemoAgentProfile:
