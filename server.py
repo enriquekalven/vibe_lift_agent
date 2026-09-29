@@ -26,6 +26,7 @@ except ImportError:
 
 import alpha_evolve_optimizer
 import billing_export
+import live_finops
 import logo_asset
 import long_running_agent
 import telemetry
@@ -109,6 +110,9 @@ class VibeLiftRuntimeController:
         bq_insights = self.gcp_telemetry.fetch_live_bigquery_project_insights(non_blocking=allow_stale)
       with self._lock:
         self.optimizer.sync_from_ge_fleet(fleet, bq_insights=bq_insights)
+      # Token economics / spend change for the same window as the fleet (shallow copy: fleet is cached).
+      fleet = dict(fleet)
+      fleet['live_finops'] = self._live_finops(fleet)
       return fleet
     except Exception:  # collect() degrades per source; this guards against unexpected failures.
       logger.exception('Gemini Enterprise fleet collection failed')
@@ -180,9 +184,15 @@ class VibeLiftRuntimeController:
         limit=6, non_blocking=fast_mcp
     )
     live_gcp = self._is_live_gcp()
+    live_finops_payload = None
     if live_gcp:
       # Real invoice data comes only from a Cloud Billing export; otherwise the panel says it is not connected.
       billing_reconciliation = self.billing_export.get(non_blocking=True)
+      # The tokenomics cockpit and what-if simulator are parametric models with example inputs.
+      # In live mode they are replaced by figures computed from observed telemetry only.
+      tokenomics_cockpit = None
+      what_if_default = None
+      live_finops_payload = self._live_finops(fleet_payload or self.optimizer._live_fleet_payload)
       # Never show demo personas in live mode: if BigQuery principals have not
       # loaded yet, show an empty table with an explicit loading status.
       live_bq = self.optimizer._live_bq_insights
@@ -245,6 +255,8 @@ class VibeLiftRuntimeController:
         'tokenomics_cockpit': tokenomics_cockpit,
         'persona_playbooks': persona_playbooks,
         'what_if_default': what_if_default,
+        'live_finops': live_finops_payload,
+        'live_data': live_gcp,
         'aive_logs': telemetry.get_recent_aive_logs(live_only=live_gcp),
         'nl2sql_default': nl2sql_default,
         'decorator_events': telemetry.get_recent_decorator_events(),
@@ -275,8 +287,40 @@ class VibeLiftRuntimeController:
         run_llm_judge=run_llm_judge,
     )
 
+  def _rate_cards(self) -> dict[str, dict[str, float]]:
+    getter = getattr(self.ge_fleet, 'rate_cards', None)
+    return getter() if callable(getter) else {}
+
+  def _live_finops(self, fleet: Mapping[str, object] | None) -> dict[str, object]:
+    payload = live_finops.build_live_finops(fleet)
+    payload['rate_card_models'] = sorted(self._rate_cards())
+    return payload
+
+  def what_if_live(self, body: Mapping[str, object] | None = None) -> dict[str, object]:
+    """Projection from observed model usage (model switch or cache share); never uses example inputs."""
+    raw = body or {}
+    fleet = self.get_fleet_payload(
+        window_hours=ge_fleet.parse_window_hours(raw.get('window_hours')), allow_stale=True, max_wait_s=20.0)
+    usage = fleet.get('model_usage') if isinstance(fleet, Mapping) else None
+    cards = self._rate_cards()
+    try:
+      if str(raw.get('kind') or 'model_switch') == 'cache_share':
+        return live_finops.project_cache_share(
+            usage, str(raw.get('model') or ''), float(raw.get('target_cache_share_pct') or 0), cards)
+      return live_finops.project_model_switch(
+          usage, str(raw.get('from_model') or ''), str(raw.get('to_model') or ''),
+          float(raw.get('share_pct') or 0), cards)
+    except (TypeError, ValueError):
+      return {'status': 'ERROR', 'error': 'Invalid numeric input.'}
+
   def recompute_finops(self, body: Mapping[str, object] | None = None) -> dict[str, object]:
     """Recomputes the deterministic Tokenomics & AgentOps Cockpit FinOps payload for given assumptions."""
+    if self._is_live_gcp():
+      return {
+        'status': 'DISABLED_IN_LIVE_MODE',
+        'reason': ('This parametric simulator uses example inputs, so it is off when connected to a real '
+                   'project. Use /api/what_if_live for projections from observed usage.'),
+    }
     with self._lock:
       return self.optimizer.get_tokenomics_and_cockpit_finops_payload(body)
 
@@ -287,6 +331,12 @@ class VibeLiftRuntimeController:
 
   def simulate_what_if(self, body: Mapping[str, object] | None = None) -> dict[str, object]:
     """Runs an interactive What-If FinOps & Canary scenario on the currently selected agent."""
+    if self._is_live_gcp():
+      return {
+        'status': 'DISABLED_IN_LIVE_MODE',
+        'reason': ('This parametric simulator uses example inputs, so it is off when connected to a real '
+                   'project. Use /api/what_if_live for projections from observed usage.'),
+    }
     raw = body or {}
     model_tier = str(raw.get('model_tier') or 'gemini-3.1-flash-tier-routed')
     try:
@@ -619,6 +669,9 @@ class VibeLiftRequestHandler(http.server.BaseHTTPRequestHandler):
     if self.path == '/api/what_if_simulate':
       self._send_json(srv.controller.simulate_what_if(body))
       return
+    if self.path == '/api/what_if_live':
+      self._send_json(srv.controller.what_if_live(body))
+      return
     if self.path == '/api/recompute_finops':
       self._send_json(srv.controller.recompute_finops(body))
       return
@@ -884,6 +937,10 @@ def register_api_routes(app: object, controller: VibeLiftRuntimeController) -> N
   @app.post('/api/what_if_simulate')
   def post_what_if_simulate(payload: dict = fastapi.Body(default={})):
     return controller.simulate_what_if(payload)
+
+  @app.post('/api/what_if_live')
+  def post_what_if_live(payload: dict = fastapi.Body(default={})):
+    return controller.what_if_live(payload)
 
   @app.get('/api/tokenomics_cockpit')
   def get_tokenomics_cockpit_endpoint():

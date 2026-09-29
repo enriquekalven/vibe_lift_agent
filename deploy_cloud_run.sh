@@ -91,6 +91,7 @@ ROLES=(
     "roles/aiplatform.viewer"
     "roles/logging.viewer"
     "roles/monitoring.viewer"
+    "roles/cloudtrace.user"
     "roles/run.viewer"
     "roles/bigquery.dataViewer"
     "roles/bigquery.jobUser"

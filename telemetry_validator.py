@@ -145,7 +145,7 @@ def validate_dashboard_state(
       tab='Tab 2: Goals & Metrics',
       metric_or_panel='active_agent.parameters (Baseline vs Current Delta %)',
       passed=param_math_ok and len(params) >= 4,
-      provenance='DERIVED_FROM_LIVE_TELEMETRY',
+      provenance='OPTIMIZER_SIMULATION' if live_mode else 'DERIVED_FROM_LIVE_TELEMETRY',
       source_dataset='alpha_evolve_optimizer.OptimizationParameter',
       evidence=f'Verified {len(params)} optimization parameters with exact delta_pct math.',
   )
@@ -168,47 +168,50 @@ def validate_dashboard_state(
       evidence=f'Verified {len(turns)} turn records synchronized with turn_summary.total_turns={summary_turns}.',
   )
 
-  what_if = state.get('what_if_default') if isinstance(state.get('what_if_default'), Mapping) else {}
-  _add_check(
-      check_id='TAB3-WHAT-IF-CANARY-SIMULATOR',
-      tab='Tab 3: Testing & History',
-      metric_or_panel='what_if_default (Canary Traffic & Cost Simulator)',
-      passed=bool(what_if.get('canary_rollout_command') and 'gcloud run services update-traffic' in str(what_if.get('canary_rollout_command'))),
-      provenance='INTERACTIVE_WHAT_IF_SIMULATOR',
-      source_dataset='VibeLift What-If Parametric Simulator (Labeled Projected Scenario)',
-      evidence='Interactive What-If Canary simulator explicitly labeled as projected scenario with valid gcloud CLI.',
-  )
+  if live_mode:
+    _add_live_finops_checks(state, fleet, fleet_agents, fleet_totals, _add_check)
+  else:
+    what_if = state.get('what_if_default') if isinstance(state.get('what_if_default'), Mapping) else {}
+    _add_check(
+        check_id='TAB3-WHAT-IF-CANARY-SIMULATOR',
+        tab='Tab 3: Testing & History',
+        metric_or_panel='what_if_default (Canary Traffic & Cost Simulator)',
+        passed=bool(what_if.get('canary_rollout_command') and 'gcloud run services update-traffic' in str(what_if.get('canary_rollout_command'))),
+        provenance='INTERACTIVE_WHAT_IF_SIMULATOR',
+        source_dataset='VibeLift What-If Parametric Simulator (Labeled Projected Scenario)',
+        evidence='Interactive What-If Canary simulator explicitly labeled as projected scenario with valid gcloud CLI.',
+    )
 
-  # --- TAB 4: Cost & Billing ---
-  tc = state.get('tokenomics_cockpit') if isinstance(state.get('tokenomics_cockpit'), Mapping) else {}
-  drift = tc.get('drift') if isinstance(tc.get('drift'), Mapping) else {}
-  exp_spend = float(drift.get('expected_naive_token_spend_usd') or 0.0)
-  rem_drift = float(drift.get('remediated_drift_total_usd') or 0.0)
-  unattr = float(drift.get('unattributed_usd') or 0.0)
-  actual_inv = float(drift.get('actual_reconciled_invoice_usd') or 0.0)
-  drift_balanced = abs((exp_spend + rem_drift + unattr) - actual_inv) < 0.05 and unattr == 0.0
-  _add_check(
-      check_id='TAB4-DRIFT-RECONCILIATION-ZERO-UNATTRIBUTED',
-      tab='Tab 4: Cost & Billing',
-      metric_or_panel='tokenomics_cockpit.drift (D1..D5 Token-to-Spend Ledger)',
-      passed=drift_balanced,
-      provenance='DERIVED_FROM_LIVE_TELEMETRY',
-      source_dataset='telemetry.MODEL_RATE_CARDS + FinOps D1..D5 Attribution Model',
-      evidence=f'Expected (${exp_spend:.2f}) + Drift (${rem_drift:.2f}) + Unattributed (${unattr:.2f}) == Reconciled (${actual_inv:.2f}).',
-  )
+    # --- TAB 4: Cost & Billing ---
+    tc = state.get('tokenomics_cockpit') if isinstance(state.get('tokenomics_cockpit'), Mapping) else {}
+    drift = tc.get('drift') if isinstance(tc.get('drift'), Mapping) else {}
+    exp_spend = float(drift.get('expected_naive_token_spend_usd') or 0.0)
+    rem_drift = float(drift.get('remediated_drift_total_usd') or 0.0)
+    unattr = float(drift.get('unattributed_usd') or 0.0)
+    actual_inv = float(drift.get('actual_reconciled_invoice_usd') or 0.0)
+    drift_balanced = abs((exp_spend + rem_drift + unattr) - actual_inv) < 0.05 and unattr == 0.0
+    _add_check(
+        check_id='TAB4-DRIFT-RECONCILIATION-ZERO-UNATTRIBUTED',
+        tab='Tab 4: Cost & Billing',
+        metric_or_panel='tokenomics_cockpit.drift (D1..D5 Token-to-Spend Ledger)',
+        passed=drift_balanced,
+        provenance='DERIVED_FROM_LIVE_TELEMETRY',
+        source_dataset='telemetry.MODEL_RATE_CARDS + FinOps D1..D5 Attribution Model',
+        evidence=f'Expected (${exp_spend:.2f}) + Drift (${rem_drift:.2f}) + Unattributed (${unattr:.2f}) == Reconciled (${actual_inv:.2f}).',
+    )
 
-  caching = tc.get('caching') if isinstance(tc.get('caching'), Mapping) else {}
-  flash_n = float(caching.get('flash_break_even_calls_per_hr') or 0.0)
-  pro_n = float(caching.get('pro_break_even_calls_per_hr') or 0.0)
-  _add_check(
-      check_id='TAB4-CACHE-BREAKEVEN-MATH',
-      tab='Tab 4: Cost & Billing',
-      metric_or_panel='tokenomics_cockpit.caching (N* = 1 + S / 0.9*P_in)',
-      passed=(abs(flash_n - 4.7) <= 0.1 and abs(pro_n - 5.0) <= 0.1),
-      provenance='DERIVED_FROM_LIVE_TELEMETRY',
-      source_dataset='Vertex AI Context Caching Rate Card Formula',
-      evidence=f'Verified Flash break-even N*={flash_n} calls/hr and Pro break-even N*={pro_n} calls/hr.',
-  )
+    caching = tc.get('caching') if isinstance(tc.get('caching'), Mapping) else {}
+    flash_n = float(caching.get('flash_break_even_calls_per_hr') or 0.0)
+    pro_n = float(caching.get('pro_break_even_calls_per_hr') or 0.0)
+    _add_check(
+        check_id='TAB4-CACHE-BREAKEVEN-MATH',
+        tab='Tab 4: Cost & Billing',
+        metric_or_panel='tokenomics_cockpit.caching (N* = 1 + S / 0.9*P_in)',
+        passed=(abs(flash_n - 4.7) <= 0.1 and abs(pro_n - 5.0) <= 0.1),
+        provenance='DERIVED_FROM_LIVE_TELEMETRY',
+        source_dataset='Vertex AI Context Caching Rate Card Formula',
+        evidence=f'Verified Flash break-even N*={flash_n} calls/hr and Pro break-even N*={pro_n} calls/hr.',
+    )
 
   # --- TAB 5: Users & Feedback ---
   uc = state.get('user_centric') if isinstance(state.get('user_centric'), Mapping) else {}
@@ -384,6 +387,10 @@ def validate_dashboard_state(
               'Deterministic rate-card calculations, cache break-even formulas (N* = 1 + S / 0.9*P_in), '
               'and D1..D5 drift attribution computed directly from observed token & call volumes.'
           ),
+          'OPTIMIZER_SIMULATION': (
+              'Optimizer parameters proposed on the Advanced tabs. The check verifies the arithmetic only; '
+              'these values are not telemetry.'
+          ),
           'INTERACTIVE_WHAT_IF_SIMULATOR': (
               'Explicitly labeled What-If Canary Simulator, Test Alert anomaly injection, and '
               'FinOps scenario sliders for testing configuration changes before deployment.'
@@ -391,6 +398,105 @@ def validate_dashboard_state(
       },
       'llm_judge': llm_judge_report,
   }
+
+
+def _add_live_finops_checks(state, fleet, fleet_agents, fleet_totals, add_check) -> None:
+  """Live mode: token economics, spend change and registrations must reconcile with raw telemetry."""
+  lf = fleet.get('live_finops') if isinstance(fleet.get('live_finops'), Mapping) else None
+  if lf is None:
+    lf = state.get('live_finops') if isinstance(state.get('live_finops'), Mapping) else {}
+  usage = fleet.get('model_usage') if isinstance(fleet.get('model_usage'), Mapping) else {}
+  ut = usage.get('totals') if isinstance(usage.get('totals'), Mapping) else {}
+
+  sim_absent = state.get('what_if_default') is None and state.get('tokenomics_cockpit') is None
+  add_check(
+      check_id='LIVE-NO-SIMULATOR-PAYLOADS',
+      tab='Tab 4: Cost & Billing',
+      metric_or_panel='what_if_default, tokenomics_cockpit, live_finops',
+      passed=sim_absent and bool(lf),
+      provenance='OBSERVED_GCP_TELEMETRY',
+      source_dataset='VibeLift server (live mode)',
+      evidence=('Simulator payloads are absent; cost panels use live_finops computed from telemetry.'
+                if sim_absent and lf else
+                f'FLAGGED: simulator payload present={not sim_absent}, live_finops present={bool(lf)}.'),
+  )
+
+  te = lf.get('token_economics') if isinstance(lf.get('token_economics'), Mapping) else {}
+  tt = te.get('totals') if isinstance(te.get('totals'), Mapping) else {}
+  pairs = (('calls', 'invocations'), ('input_tokens', 'input_tokens'), ('output_tokens', 'output_tokens'))
+  mism = [f'{a}={tt.get(a)} vs {b}={ut.get(b)}' for a, b in pairs if int(tt.get(a) or 0) != int(ut.get(b) or 0)]
+  if abs(float(tt.get('est_cost_usd') or 0) - float(ut.get('est_cost_usd') or 0)) > 0.005:
+    mism.append(f"cost {tt.get('est_cost_usd')} vs {ut.get('est_cost_usd')}")
+  agent_in = sum(int(r.get('input_tokens') or 0) for r in te.get('agents') or [] if isinstance(r, Mapping))
+  fleet_in = int(fleet_totals.get('input_tokens') or 0)
+  if agent_in != fleet_in:
+    mism.append(f'agent input tokens {agent_in} vs fleet total {fleet_in}')
+  add_check(
+      check_id='TAB4-TOKEN-ECONOMICS-RECONCILES',
+      tab='Tab 4: Cost & Billing',
+      metric_or_panel='live_finops.token_economics vs ge_fleet.model_usage / ge_fleet.totals',
+      passed=te.get('status') == 'LIVE' and not mism,
+      provenance='OBSERVED_GCP_TELEMETRY',
+      source_dataset='Cloud Monitoring publisher token_count + Cloud Trace / Cloud Logging gen_ai telemetry',
+      evidence=(f"Model totals match ({tt.get('calls')} calls, {tt.get('input_tokens')} in, {tt.get('output_tokens')} out, "
+                f"${tt.get('est_cost_usd')}); per-agent input tokens sum to the fleet total ({fleet_in})."
+                if te.get('status') == 'LIVE' and not mism else
+                f"FLAGGED: status={te.get('status')}; " + '; '.join(mism)),
+  )
+
+  sd = lf.get('spend_drift') if isinstance(lf.get('spend_drift'), Mapping) else {}
+  if sd.get('status') == 'LIVE':
+    drv = sum(float(d.get('change_usd') or 0) for d in sd.get('drivers') or [] if isinstance(d, Mapping))
+    change = float(sd.get('change_usd') or 0)
+    now_gap = abs(float(sd.get('cost_now_usd') or 0) - float(ut.get('est_cost_usd') or 0))
+    ok = abs(drv - change) <= 0.01 and now_gap <= 0.01
+    ev = (f'Drivers sum to ${drv:.4f} vs observed change ${change:.4f}; this-period cost ${sd.get("cost_now_usd")} '
+          f'vs model usage ${ut.get("est_cost_usd")}.')
+  else:
+    ok = sd.get('status') == 'NO_DATA'
+    ev = f"No previous-period data; the panel says so ({sd.get('reason')})." if ok else f'FLAGGED: spend_drift missing ({sd})'
+  add_check(
+      check_id='TAB4-SPEND-CHANGE-ADDITIVE',
+      tab='Tab 4: Cost & Billing',
+      metric_or_panel='live_finops.spend_drift (drivers of spend change)',
+      passed=ok,
+      provenance='DERIVED_FROM_LIVE_TELEMETRY',
+      source_dataset='Cloud Monitoring publisher token_count (this and previous period) x list price',
+      evidence=ev,
+  )
+
+  broken = [a for a in fleet_agents if isinstance(a, Mapping)
+            and (a.get('registration') or {}).get('status') in ('BACKEND_NOT_FOUND', 'NO_BACKEND')]
+  bad = [str(a.get('display_name')) for a in broken
+         if (a['registration'].get('status') == 'BACKEND_NOT_FOUND' and 'HTTP 404' not in str(a['registration'].get('evidence') or ''))
+         or not ((a['registration'].get('action') or {}).get('delete_command'))]
+  count_ok = int(fleet_totals.get('broken_registrations') or 0) == len(broken)
+  add_check(
+      check_id='TAB1-DEAD-REGISTRATION-EVIDENCE',
+      tab='Tab 1: Gemini Enterprise Agent Fleet',
+      metric_or_panel='ge_fleet.agents[].registration',
+      passed=not bad and count_ok,
+      provenance='OBSERVED_GCP_TELEMETRY',
+      source_dataset='aiplatform.googleapis.com reasoningEngines.get + run.googleapis.com services.list',
+      evidence=(f'{len(broken)} broken registration(s), each with HTTP 404 (or missing-backend) evidence and a cleanup command.'
+                if not bad and count_ok else
+                f'FLAGGED: without evidence/command: {bad}; totals.broken_registrations='
+                f"{fleet_totals.get('broken_registrations')} vs {len(broken)} flagged."),
+  )
+
+  unsourced = [str(a.get('display_name')) for a in fleet_agents if isinstance(a, Mapping)
+               and int(((a.get('metrics') or {}).get('llm_calls')) or 0) > 0
+               and not (a.get('metrics') or {}).get('token_source')]
+  add_check(
+      check_id='TAB1-AGENT-TOKEN-SOURCES',
+      tab='Tab 1: Gemini Enterprise Agent Fleet',
+      metric_or_panel='ge_fleet.agents[].metrics.token_source',
+      passed=not unsourced,
+      provenance='OBSERVED_GCP_TELEMETRY',
+      source_dataset='Cloud Logging gen_ai inference events + Cloud Trace gen_ai spans',
+      evidence=('Every agent with LLM calls names its token source (Cloud Logging or Cloud Trace).'
+                if not unsourced else f'FLAGGED: token counts without a source: {unsourced}'),
+  )
 
 
 def run_llm_as_judge_audit(

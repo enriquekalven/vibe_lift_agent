@@ -497,6 +497,21 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .attention-list li { display: flex; gap: 10px; align-items: flex-start; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
     .attention-list li:last-child { border-bottom: none; }
     .sev-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; flex: none; }
+    body.live-data .sim-panel { display: none !important; }
+    body:not(.live-data) .live-only { display: none !important; }
+    .token-na { color: #b45309; font-size: 11.5px; font-weight: 600; }
+    .cell-sub { display: block; font-size: 10.5px; color: var(--text-secondary); margin-top: 2px; white-space: nowrap; font-family: var(--font-sans, inherit); font-weight: 400; }
+    .cleanup-row { padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+    .cleanup-row:last-child { border-bottom: none; }
+    .cleanup-evidence { color: var(--text-secondary); font-size: 11.5px; margin-top: 3px; word-break: break-word; }
+    .cleanup-cmd { display: flex; gap: 8px; align-items: flex-start; margin-top: 6px; }
+    .cleanup-cmd code { flex: 1; font-family: var(--font-mono); font-size: 11px; background: #f8fafc; border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; word-break: break-all; }
+    .live-note { font-size: 11.5px; color: var(--text-secondary); margin-top: 8px; }
+    .live-sub { font-size: 12.5px; font-weight: 700; margin: 16px 0 6px; color: var(--text-primary); }
+    .whatif-live-form { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-bottom: 12px; }
+    .whatif-live-form label { display: block; font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 3px; }
+    .whatif-live-form select, .whatif-live-form input { font-size: 12.5px; padding: 5px 7px; border: 1px solid var(--border); border-radius: 6px; }
+    .wi-result-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 10px 0; }
     .chart-empty { font-size: 12.5px; color: var(--text-secondary); padding: 18px 0; }
     .adv-toggle { display:inline-flex; align-items:center; gap:6px; }
     .adv-toggle[aria-pressed="true"] { background:#1e293b; color:#fff; border-color:#1e293b; }
@@ -790,9 +805,25 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           <div class="chart-source">Source: BigQuery audit logs &amp; agent telemetry (sessions, last 7 days; does not follow Time range)</div>
         </div>
       </div>
+      <div class="panel trend-panel">
+        <div class="panel-header"><div class="panel-title"><span>Tokens by agent</span></div></div>
+        <div id="execChartTokens"></div>
+        <div class="chart-legend">
+          <span><i style="background:#2563eb"></i>Input</span>
+          <span><i style="background:#10b981"></i>Output</span>
+        </div>
+        <div class="chart-source" id="execSrcTokens"></div>
+      </div>
       <div class="panel" style="margin-top:14px;">
         <div class="panel-header"><div class="panel-title"><span>Needs attention</span></div></div>
         <ul class="attention-list" id="execAttention"></ul>
+      </div>
+      <div class="panel hidden" id="execCleanupPanel" style="margin-top:14px;">
+        <div class="panel-header">
+          <div class="panel-title"><span>Clean up: agents whose backend no longer exists</span><span class="badge badge-red" id="execCleanupCount"></span></div>
+          <div style="font-size:12px;color:var(--text-secondary);">Each registration below points at an Agent Engine or Cloud Run service that returned HTTP 404, or has no backend configured. People who pick these agents in Gemini Enterprise get errors. Review each one, then run the command yourself; VibeLift never deletes anything.</div>
+        </div>
+        <div id="execCleanup"></div>
       </div>
     </section>
 
@@ -1059,7 +1090,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
 
-      <div class="panel" id="whatIfSimulatorPanel">
+      <div class="panel sim-panel" id="whatIfSimulatorPanel">
         <div class="panel-header">
           <div class="panel-title">
             <span>What-If Cost, Model &amp; Safe Rollout Simulator</span>
@@ -1210,7 +1241,63 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         <ul id="fleetNotes" class="fleet-notes"></ul>
       </div>
 
-      <div class="subview-bar adv-only">
+      <div class="panel live-only" id="liveTokenEconomicsPanel">
+        <div class="panel-header">
+          <div class="panel-title"><span>Token economics by agent</span><span id="liveTeBadge" class="badge badge-blue">&mdash;</span></div>
+          <div id="liveTeScope" style="font-size:12px;color:var(--text-secondary);"></div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Agent</th><th>Requests</th><th>LLM calls</th><th>Calls / request</th><th>Input</th><th>Output</th><th>Tokens / request</th><th>Models</th><th>Source</th>
+              </tr>
+            </thead>
+            <tbody id="liveTeAgentsBody"></tbody>
+          </table>
+        </div>
+        <div id="liveTeGe"></div>
+      </div>
+
+      <div class="panel live-only" id="liveSpendDriftPanel">
+        <div class="panel-header">
+          <div class="panel-title"><span>Why model spend changed vs the previous period</span><span id="liveDriftBadge" class="badge badge-blue">&mdash;</span></div>
+          <div id="liveDriftScope" style="font-size:12px;color:var(--text-secondary);"></div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Driver</th><th>Change</th><th>Share of change</th><th>What it means</th></tr></thead>
+            <tbody id="liveDriftBody"></tbody>
+          </table>
+        </div>
+        <div class="live-sub">By model</div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Model</th><th>Previous period</th><th>This period</th><th>Change</th><th>Calls (previous &rarr; this)</th></tr></thead>
+            <tbody id="liveDriftModelsBody"></tbody>
+          </table>
+        </div>
+        <div class="live-note" id="liveDriftNote"></div>
+      </div>
+
+      <div class="panel live-only adv-only" id="liveWhatIfPanel">
+        <div class="panel-header">
+          <div class="panel-title"><span>What-if: projection from observed usage</span><span class="badge badge-yellow">Projection</span></div>
+          <div style="font-size:12px;color:var(--text-secondary);">Recomputes this period's observed tokens at a different list price or cache share. Token counts stay the same; quality and latency are not modelled.</div>
+        </div>
+        <div class="whatif-live-form">
+          <div><label for="wiKind">Scenario</label><select id="wiKind" onchange="onLiveWhatIfKind()"><option value="model_switch">Switch model</option><option value="cache_share">Change cache-read share</option></select></div>
+          <div class="wi-switch"><label for="wiFrom">From model (observed)</label><select id="wiFrom"></select></div>
+          <div class="wi-switch"><label for="wiTo">To model (list price)</label><select id="wiTo"></select></div>
+          <div class="wi-switch"><label for="wiShare">Share of tokens moved (%)</label><input id="wiShare" type="number" min="0" max="100" value="50" style="width:90px"></div>
+          <div class="wi-cache hidden"><label for="wiModel">Model (observed)</label><select id="wiModel"></select></div>
+          <div class="wi-cache hidden"><label for="wiCache">Target cache-read share (%)</label><input id="wiCache" type="number" min="0" max="100" value="50" style="width:90px"></div>
+          <button class="btn btn-primary" onclick="runLiveWhatIf()">Project</button>
+        </div>
+        <div id="liveWhatIfResult"><div class="live-note">Pick a scenario. The baseline is the observed usage for the selected time range.</div></div>
+      </div>
+
+      <div class="subview-bar adv-only sim-panel">
         <div style="font-size:12px;font-weight:700;color:var(--text-primary);">
           Cost &amp; Billing View (Choose a focused section):
         </div>
@@ -1224,7 +1311,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
 
       <!-- SUB-VIEW 1: COST PER HELPFUL ANSWER (CpO), BILL DIFFERENCES & CLOUD BILLING SKU TABLE -->
-      <div class="panel adv-only" id="tokenomicsCpoDriftPanel">
+      <div class="panel adv-only sim-panel" id="tokenomicsCpoDriftPanel">
         <div class="panel-header">
           <div class="panel-title">
             <span>1. Cost per Helpful Answer (CpO), Why Bills Differ from Token Counts &amp; Log Matching</span>
@@ -1332,7 +1419,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
 
       <!-- SUB-VIEW 2: PRICING OPTIONS, CONSUMPTION PORTFOLIO & CACHE BREAK-EVEN CALCULATOR -->
-      <div class="panel hidden adv-only" id="consumptionAndCachingPanel">
+      <div class="panel hidden adv-only sim-panel" id="consumptionAndCachingPanel">
         <div class="panel-header">
           <div class="panel-title">
             <span>2. Pricing Options, Model Tiers &amp; Prompt Cache Break-Even Calculator (N*)</span>
@@ -1439,7 +1526,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
 
       <!-- SUB-VIEW 3: CODE FIXES (FIN-01..05), STEP-BY-STEP SAVINGS, @COST_GUARD & FINANCE SUMMARY -->
-      <div class="panel hidden adv-only" id="cockpitFinopsAndTcoPanel">
+      <div class="panel hidden adv-only sim-panel" id="cockpitFinopsAndTcoPanel">
         <div class="panel-header">
           <div class="panel-title">
             <span>3. Code Cost Fixes (<span class="mono">FIN-01..FIN-05</span>), Step-by-Step Savings, <span class="mono">@cost_guard</span> &amp; Finance Summary</span>
@@ -1539,7 +1626,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
 
       <!-- SUB-VIEW 4: API SPEND LIMITS (SLIDE #30), EXTENSION OVERHEAD & TOKEN BREAKDOWN -->
-      <div class="panel hidden adv-only" id="apigeeAndExtensionsPanel">
+      <div class="panel hidden adv-only sim-panel" id="apigeeAndExtensionsPanel">
         <div class="panel-header">
           <div class="panel-title">
             <span>4. Apigee API Spend Limits &amp; Tool Context Savings</span>
@@ -1899,6 +1986,13 @@ async def handle_agent_turn(message_envelope):
       document.body.classList.toggle('simple-mode', !on);
       document.addEventListener('DOMContentLoaded', function() { applyAdvancedMode(on); });
     })();
+    window.addEventListener('load', function deepLinkTab() {
+      const mt = /[?&]tab=([0-9])/.exec(location.search);
+      if (!mt) return;
+      const t = Number(mt[1]);
+      if (ADVANCED_ONLY_TABS.indexOf(t) >= 0 && !isAdvancedMode()) applyAdvancedMode(true);
+      switchTab(t);
+    });
 
     function switchTab(tabIndex) {
       const validTabs = [0, 1, 2, 3, 4, 5, 6];
@@ -2000,6 +2094,15 @@ async def handle_agent_turn(message_envelope):
     function renderState(state) {
       if (!state) return;
       currentState = state;
+      document.body.classList.toggle('live-data', state.live_data === true);
+      if (state.live_data === true) {
+        // The simulator sub-view bar is hidden in live mode, so show the live panels it used to toggle.
+        ['billingReconciliationPanel', 'tokenCategoryAlertsPanel'].forEach(function(id) {
+          const n = document.getElementById(id);
+          if (n) n.classList.remove('hidden');
+        });
+        if (state.live_finops && !liveFinopsFromFleet) renderLiveFinops(state.live_finops);
+      }
       if (state.all_agents && typeof state.all_agents === 'object') {
         Object.keys(state.all_agents).forEach(function(k) {
           allAgentsCache[k] = state.all_agents[k];
@@ -3619,6 +3722,8 @@ async def handle_agent_turn(message_envelope):
       inventory: 'GE agent inventory',
       agent_engine_metrics: 'Agent Engine metrics',
       agent_token_logs: 'Agent token logs',
+      agent_token_traces: 'Agent token traces',
+      ge_assistant_tokens: 'GE assistant token traces',
       cloud_run_metrics: 'Cloud Run metrics',
       model_usage: 'Vertex AI model usage',
       ge_traffic: 'GE assistant traffic',
@@ -3731,6 +3836,19 @@ async def handle_agent_turn(message_envelope):
       t.error_rate_pct = t.requests ? Math.round(10000 * (t.errors_5xx || 0) / t.requests) / 100 : null;
       const stamps = agents.map(function(a) { return (a.metrics || {}).last_activity; }).filter(Boolean).sort();
       t.last_activity = stamps.length ? stamps[stamps.length - 1] : null;
+      t.broken_registrations = agents.filter(isBrokenRegistration).length;
+      t.unverified_registrations = agents.filter(function(a) { return (a.registration || {}).status === 'UNVERIFIED'; }).length;
+      const gau = fleet.ge_assistant_usage;
+      if (gau && gau.by_engine) {
+        const be = {};
+        const gt = {llm_calls: 0, input_tokens: 0, output_tokens: 0, cached_tokens: 0, conversations: 0};
+        Object.keys(gau.by_engine).forEach(function(k) {
+          if (!engineMatchesScope(k, geScope)) return;
+          be[k] = gau.by_engine[k];
+          Object.keys(gt).forEach(function(f) { gt[f] += Number(gau.by_engine[k][f] || 0); });
+        });
+        out.ge_assistant_usage = Object.assign({}, gau, {by_engine: be, totals: gt});
+      }
       out.totals = t;
       out.__shared_runtimes = shared;
       return out;
@@ -4029,8 +4147,51 @@ async def handle_agent_turn(message_envelope):
         el('div', 'chart-empty', [scoped ? 'No Gemini Enterprise audit-log activity for this scope.' :
           'Loading users from BigQuery… (demo users are never shown in live mode)']));
 
+      // Tokens by agent (each runtime once) + Gemini Enterprise built-in assistant per app
+      const engineNames = {};
+      (fleet.engines || []).forEach(function(e) { engineNames[e.engine_key || ((e.location || 'global') + '/' + e.engine_id)] = e.display_name || e.engine_id; });
+      const tokRows = runtimes.filter(function(rt) {
+        const mm = m(rt.agent);
+        return mm.input_tokens != null && (Number(mm.input_tokens) + Number(mm.output_tokens || 0)) > 0;
+      }).map(function(rt) {
+        const mm = m(rt.agent);
+        return {label: rtLabel(rt), total: Number(mm.input_tokens) + Number(mm.output_tokens || 0), segments: [
+          {name: 'Input', value: Number(mm.input_tokens), color: '#2563eb'},
+          {name: 'Output', value: Number(mm.output_tokens || 0), color: '#10b981'}]};
+      });
+      const gau = fleet.ge_assistant_usage;
+      Object.keys((gau && gau.by_engine) || {}).forEach(function(k) {
+        const g = gau.by_engine[k];
+        const tot = Number(g.input_tokens || 0) + Number(g.output_tokens || 0);
+        if (tot > 0) tokRows.push({label: 'GE assistant · ' + (engineNames[k] || g.engine_id), total: tot, segments: [
+          {name: 'Input', value: Number(g.input_tokens || 0), color: '#2563eb'},
+          {name: 'Output', value: Number(g.output_tokens || 0), color: '#10b981'}]});
+      });
+      tokRows.sort(function(a, b) { return b.total - a.total; });
+      const noTok = runtimes.filter(function(rt) {
+        const mm = m(rt.agent);
+        return Number(mm.requests || 0) > 0 && mm.input_tokens == null;
+      });
+      const tokBox = document.getElementById('execChartTokens');
+      if (tokBox) tokBox.replaceChildren(hbarChart(tokRows.slice(0, 8), null, fmtTokens));
+      const srcTok = document.getElementById('execSrcTokens');
+      if (srcTok) srcTok.textContent = 'Source: OpenTelemetry gen_ai data the agents export (Cloud Trace spans, Cloud Logging events) · ' + win +
+        (tokRows.length > 8 ? ' · top 8 of ' + tokRows.length : '') +
+        (noTok.length ? ' · no token data from ' + noTok.length + ' agent(s) with traffic: ' + noTok.map(rtLabel).join(', ') : '');
+
       // Needs attention: rules over the live payload only
       const items = [];
+      const broken = agents.filter(isBrokenRegistration);
+      if (broken.length) items.push({sev: 2, text: broken.length + ' agent registration(s) point at a backend that no longer exists, so people who pick them get errors: ' +
+        broken.slice(0, 4).map(function(a) { return a.display_name || a.agent_id; }).join(', ') + (broken.length > 4 ? '…' : '') + '. See Clean up below.'});
+      runtimes.forEach(function(rt) {
+        const mm = m(rt.agent);
+        const r = Number(mm.requests || 0), c = Number(mm.llm_calls || 0);
+        if (r > 0 && c / r >= 20) items.push({sev: 2, text: rtLabel(rt) + ': ' + fmtInt(c) + ' LLM calls for ' + fmtInt(r) + ' requests (' +
+          fmtTokens(Number(mm.input_tokens || 0) + Number(mm.output_tokens || 0)) + ' tokens) ' + win + '. Possible agent loop; check its traces.'});
+      });
+      if (noTok.length) items.push({sev: 0, text: noTok.length + ' agent(s) with traffic export no token data: ' + noTok.map(rtLabel).slice(0, 3).join(', ') +
+        (noTok.length > 3 ? '…' : '') + '. For Agent Engine, deploy with GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=true.'});
       runtimes.forEach(function(rt) {
         const a = rt.agent;
         const mm = m(a);
@@ -4052,13 +4213,268 @@ async def handle_agent_turn(message_envelope):
         const colors = ['#94a3b8', '#f59e0b', '#ef4444'];
         att.replaceChildren();
         if (!items.length) att.appendChild(el('li', null, [el('span', 'sev-dot', []), 'Nothing needs attention right now.']));
-        items.slice(0, 6).forEach(function(it) {
+        items.slice(0, 8).forEach(function(it) {
           const dot = el('span', 'sev-dot', []);
           dot.style.background = colors[it.sev];
           att.appendChild(el('li', null, [dot, el('span', null, [it.text])]));
         });
       }
+      const cleanupPanel = document.getElementById('execCleanupPanel');
+      if (cleanupPanel) {
+        cleanupPanel.classList.toggle('hidden', !broken.length);
+        const cnt = document.getElementById('execCleanupCount');
+        if (cnt) cnt.textContent = broken.length + ' to review';
+        const box = document.getElementById('execCleanup');
+        box.replaceChildren();
+        broken.forEach(function(a) {
+          const r = a.registration || {};
+          const act = r.action || {};
+          const cmd = String(act.delete_command || '');
+          const btn = el('button', 'btn', ['Copy']);
+          btn.addEventListener('click', function() { copyText(cmd, btn); });
+          box.appendChild(el('div', 'cleanup-row', [
+            el('div', null, [el('strong', null, [a.display_name || a.agent_id]),
+              ' · ' + geRegionLabel(agentLocation(a)) + ' · ' + (a.engine_display_name || a.engine_id || '—')]),
+            el('div', 'cleanup-evidence', ['Evidence: ' + String(r.evidence || '—') + (r.checked_at ? ' Checked ' + fmtAgo(r.checked_at) + '.' : '')]),
+            act.summary ? el('div', 'cleanup-evidence', ['Action: ' + act.summary]) : null,
+            cmd ? el('div', 'cleanup-cmd', [el('code', null, [cmd]), btn]) : null,
+          ]));
+        });
+      }
       notifyHostSizeChanged();
+    }
+
+    function isBrokenRegistration(a) {
+      const st = (a.registration || {}).status;
+      return st === 'BACKEND_NOT_FOUND' || st === 'NO_BACKEND';
+    }
+
+    function shortTokenSource(src) {
+      src = String(src || '');
+      if (src.indexOf('Trace') >= 0) return 'Cloud Trace';
+      if (src.indexOf('Logging') >= 0) return 'Cloud Logging';
+      return src;
+    }
+
+    function tokenCell(a) {
+      const m = a.metrics || {};
+      const kind = (a.backend || {}).kind;
+      if (m.input_tokens != null) {
+        const src = String(m.token_source || '');
+        const td = el('td', 'mono', [fmtTokens(m.input_tokens) + ' / ' + fmtTokens(m.output_tokens),
+          src ? el('span', 'cell-sub', [shortTokenSource(src)]) : null]);
+        td.title = src ? 'Source: ' + src : 'No traffic in this window (token sources checked).';
+        return td;
+      }
+      if (Number(m.requests || 0) > 0 && kind === 'agent_engine') {
+        const td = el('td', null, [el('span', 'token-na', ['Not emitted']), el('span', 'cell-sub', ['no gen_ai telemetry'])]);
+        td.title = (a.notes || []).join(' ') ||
+          'This agent served requests but exported no gen_ai token data to Cloud Logging or Cloud Trace.';
+        return td;
+      }
+      if (Number(m.requests || 0) > 0 && kind === 'cloud_run') {
+        const td = el('td', null, [el('span', 'token-na', ['Not measured']), el('span', 'cell-sub', ['Cloud Run: requests only'])]);
+        td.title = 'Cloud Run reports request metrics only; VibeLift has no per-service token source for Cloud Run.';
+        return td;
+      }
+      return el('td', 'mono', ['—']);
+    }
+
+    function registrationBadge(a) {
+      const r = a.registration || {};
+      if (isBrokenRegistration(a)) {
+        const b = badge(r.status === 'NO_BACKEND' ? 'no backend' : 'backend deleted', 'badge-red');
+        b.title = String(r.evidence || '') + ((r.action || {}).summary ? ' ' + r.action.summary : '');
+        return b;
+      }
+      if (r.status === 'UNVERIFIED') {
+        const b = badge('backend unverified', 'badge-yellow');
+        b.title = String(r.evidence || '');
+        return b;
+      }
+      return null;
+    }
+
+    function copyText(text, btn) {
+      const done = function(ok) {
+        if (!btn) return;
+        btn.textContent = ok ? 'Copied' : 'Copy blocked: select the text';
+        setTimeout(function() { btn.textContent = 'Copy'; }, 2500);
+      };
+      try {
+        navigator.clipboard.writeText(text).then(function() { done(true); }, function() { done(false); });
+      } catch (e) { done(false); }
+    }
+
+    function fmtInterval(iv) {
+      if (!iv || !iv.start || !iv.end) return '—';
+      const o = {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'};
+      return new Date(iv.start).toLocaleString([], o) + ' – ' + new Date(iv.end).toLocaleString([], o);
+    }
+
+    function signedUsd(v) {
+      const n = Number(v || 0);
+      return (n > 0 ? '+' : (n < 0 ? '−' : '')) + fmtUsd(Math.abs(n));
+    }
+
+    function tdText(text, cls) { return el('td', cls || null, [text]); }
+
+    function fillSelect(id, values) {
+      const sel = document.getElementById(id);
+      if (!sel) return;
+      const prev = sel.value;
+      sel.replaceChildren();
+      (values || []).forEach(function(v) { const o = el('option', null, [v]); o.value = v; sel.appendChild(o); });
+      if ((values || []).indexOf(prev) >= 0) sel.value = prev;
+    }
+
+    let liveFinopsFromFleet = false;
+    function renderLiveFinops(lf) {
+      if (!lf || typeof lf !== 'object') return;
+      const te = lf.token_economics || {};
+      const win = windowLabel(te.window_hours);
+      const tt = te.totals || {};
+      const teBadge = document.getElementById('liveTeBadge');
+      if (teBadge) teBadge.textContent = te.status === 'LIVE' ? fmtUsd(tt.est_cost_usd) + ' · ' + fmtInt(tt.calls) + ' model calls' : '—';
+      const teScope = document.getElementById('liveTeScope');
+      if (teScope) teScope.textContent = te.status === 'LIVE'
+        ? win + ' (' + fmtInterval(te.interval) + '). ' + (te.agents_note || '') + ' Project-wide model spend: ' + fmtUsd(tt.est_cost_usd) + ' at list price.'
+        : (te.reason || 'Unavailable.');
+      const teBody = document.getElementById('liveTeAgentsBody');
+      if (teBody) {
+        teBody.replaceChildren();
+        (te.agents || []).forEach(function(r) {
+          teBody.appendChild(el('tr', null, [
+            tdText(r.display_name || '—'),
+            tdText(fmtInt(r.requests), 'mono'),
+            tdText(fmtInt(r.llm_calls), 'mono'),
+            tdText(r.llm_calls_per_request == null ? '—' : String(r.llm_calls_per_request), 'mono'),
+            tdText(fmtTokens(r.input_tokens), 'mono'),
+            tdText(fmtTokens(r.output_tokens), 'mono'),
+            tdText(r.tokens_per_request == null ? '—' : fmtTokens(r.tokens_per_request), 'mono'),
+            tdText((r.models || []).join(', ') || '—', 'mono'),
+            tdText(shortTokenSource(r.token_source) || '—'),
+          ]));
+        });
+        (te.agents_without_token_telemetry || []).forEach(function(r) {
+          const td = el('td', 'token-na', [r.runs_on === 'cloud_run' ? 'Not measured (Cloud Run reports requests only)' : 'No gen_ai token data exported']);
+          td.colSpan = 7;
+          teBody.appendChild(el('tr', 'fleet-row-muted', [tdText(r.display_name || '—'), tdText(fmtInt(r.requests), 'mono'), td]));
+        });
+        if (!teBody.children.length) {
+          const td = el('td', 'fleet-empty', [te.status === 'LIVE' ? 'No agent token data in this window.' : (te.reason || 'Unavailable.')]);
+          td.colSpan = 9;
+          teBody.appendChild(el('tr', null, [td]));
+        }
+      }
+      const geBox = document.getElementById('liveTeGe');
+      if (geBox) {
+        geBox.replaceChildren();
+        const ge = te.ge_assistant || [];
+        if (ge.length) {
+          const head = el('thead', null, [el('tr', null, ['GE app', 'Assistant', 'Model calls', 'Input', 'Output', 'Conversations', 'Models']
+            .map(function(h) { return el('th', null, [h]); }))]);
+          const body = el('tbody', null, ge.map(function(g) {
+            return el('tr', null, [
+              tdText(g.app || g.engine_key), tdText(Object.keys(g.assistant_agents || {}).join(', ') || '—'),
+              tdText(fmtInt(g.llm_calls), 'mono'), tdText(fmtTokens(g.input_tokens), 'mono'), tdText(fmtTokens(g.output_tokens), 'mono'),
+              tdText(fmtInt(g.conversations), 'mono'), tdText(Object.keys(g.models || {}).join(', ') || '—', 'mono')]);
+          }));
+          geBox.appendChild(el('div', 'live-sub', ['Gemini Enterprise built-in assistant']));
+          geBox.appendChild(el('div', 'table-scroll', [el('table', null, [head, body])]));
+          geBox.appendChild(el('div', 'live-note', ['Source: Cloud Trace spans exported by Gemini Enterprise (cloud.platform gcp.gemini_enterprise). ' +
+            'These calls are not in the Vertex AI model spend above.']));
+        } else if (te.ge_assistant_status === 'UNAVAILABLE') {
+          geBox.appendChild(el('div', 'live-note', ['Gemini Enterprise assistant token traces are unavailable (see data source status on the Agents tab).']));
+        }
+      }
+
+      const sd = lf.spend_drift || {};
+      const dBadge = document.getElementById('liveDriftBadge');
+      const dScope = document.getElementById('liveDriftScope');
+      const dBody = document.getElementById('liveDriftBody');
+      const dmBody = document.getElementById('liveDriftModelsBody');
+      const dNote = document.getElementById('liveDriftNote');
+      if (dBody) dBody.replaceChildren();
+      if (dmBody) dmBody.replaceChildren();
+      if (sd.status !== 'LIVE') {
+        if (dBadge) { dBadge.textContent = '—'; dBadge.className = 'badge badge-blue'; }
+        if (dScope) dScope.textContent = sd.reason || 'Unavailable.';
+        if (dNote) dNote.textContent = '';
+      } else {
+        if (dBadge) {
+          dBadge.textContent = fmtUsd(sd.cost_before_usd) + ' → ' + fmtUsd(sd.cost_now_usd) +
+            (sd.change_pct == null ? '' : ' (' + (sd.change_pct > 0 ? '+' : '') + sd.change_pct + '%)');
+          dBadge.className = 'badge ' + (Number(sd.change_usd) > 0 ? 'badge-yellow' : 'badge-green');
+        }
+        if (dScope) dScope.textContent = 'This period: ' + fmtInterval(sd.current_interval) + '. Previous: ' +
+          fmtInterval(sd.previous_interval) + '. ' + (sd.method || '');
+        (sd.drivers || []).forEach(function(d) {
+          if (dBody) dBody.appendChild(el('tr', null, [
+            tdText(d.name), tdText(signedUsd(d.change_usd), 'mono'),
+            tdText(d.share_of_change_pct == null ? '—' : d.share_of_change_pct + '%', 'mono'), tdText(d.description)]));
+        });
+        (sd.by_model || []).forEach(function(r) {
+          if (dmBody) dmBody.appendChild(el('tr', null, [
+            tdText(r.model, 'mono'), tdText(fmtUsd(r.cost_before_usd), 'mono'), tdText(fmtUsd(r.cost_now_usd), 'mono'),
+            tdText(signedUsd(r.change_usd), 'mono'), tdText(fmtInt(r.calls_before) + ' → ' + fmtInt(r.calls_now), 'mono')]));
+        });
+        if (dNote) dNote.textContent = 'Source: Vertex AI model usage metrics (Cloud Monitoring) for both periods × list price. ' +
+          'The drivers add up to the observed change; computed remainder: $' + Math.abs(Number(sd.unexplained_usd || 0)).toFixed(4) + '.' +
+          ((sd.models_without_rate_card || []).length ? ' Not priced (no list price on file): ' + sd.models_without_rate_card.join(', ') + '.' : '');
+      }
+
+      fillSelect('wiFrom', lf.what_if_models || []);
+      fillSelect('wiModel', lf.what_if_models || []);
+      fillSelect('wiTo', lf.rate_card_models || []);
+    }
+
+    function onLiveWhatIfKind() {
+      const cache = document.getElementById('wiKind').value === 'cache_share';
+      document.querySelectorAll('.wi-switch').forEach(function(n) { n.classList.toggle('hidden', cache); });
+      document.querySelectorAll('.wi-cache').forEach(function(n) { n.classList.toggle('hidden', !cache); });
+    }
+
+    async function runLiveWhatIf() {
+      const kind = document.getElementById('wiKind').value;
+      const body = {kind: kind, window_hours: fleetWindowHours};
+      if (kind === 'cache_share') {
+        body.model = document.getElementById('wiModel').value;
+        body.target_cache_share_pct = Number(document.getElementById('wiCache').value);
+      } else {
+        body.from_model = document.getElementById('wiFrom').value;
+        body.to_model = document.getElementById('wiTo').value;
+        body.share_pct = Number(document.getElementById('wiShare').value);
+      }
+      const box = document.getElementById('liveWhatIfResult');
+      box.replaceChildren(el('div', 'live-note', ['Computing from observed usage…']));
+      let res = null;
+      if (!isEmbedded()) {
+        try {
+          const r = await fetch('/api/what_if_live', {method: 'POST', credentials: 'same-origin',
+            headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+          if (r.ok) res = await r.json();
+        } catch (e) { res = null; }
+      }
+      if (!res) {
+        res = {status: 'ERROR', error: isEmbedded()
+          ? 'Projections run on the VibeLift server. Open the full dashboard to use them.'
+          : 'The projection service did not respond.'};
+      }
+      box.replaceChildren();
+      if (res.status !== 'PROJECTION') {
+        box.appendChild(el('div', 'fleet-error', [String(res.error || res.status || 'Projection failed.')]));
+        return;
+      }
+      box.appendChild(el('div', null, [el('strong', null, [res.scenario || 'Projection'])]));
+      box.appendChild(el('div', 'wi-result-grid', [
+        kpiCard('Observed spend', fmtUsd(res.observed_baseline_usd), fmtInterval(res.interval)),
+        kpiCard('Change', signedUsd(res.change_usd), res.moved_cost_before_usd != null
+          ? fmtUsd(res.moved_cost_before_usd) + ' → ' + fmtUsd(res.moved_cost_after_usd) + ' for the moved tokens'
+          : (res.observed_cache_share_pct != null ? 'observed cache-read share ' + res.observed_cache_share_pct + '%' : '')),
+        kpiCard('Projected spend', fmtUsd(res.projected_total_usd), 'same period, list price'),
+      ]));
+      box.appendChild(el('div', 'live-note', ['Assumptions: ' + (res.assumptions || []).join(' ')]));
     }
 
     function kpiCard(label, value, sub) {
@@ -4091,6 +4507,8 @@ async def handle_agent_turn(message_envelope):
       try { renderExecOverview(fleet, currentState ? currentState.user_centric : null); } catch (e) { console.warn('overview', e); }
       if (!fleet || !Array.isArray(fleet.agents)) return;
       lastFleet = fleet;
+      const rawLf = (geRawFleet && geRawFleet.live_finops) || fleet.live_finops;
+      if (rawLf) { liveFinopsFromFleet = true; renderLiveFinops(rawLf); }
       if (fleet.window_hours) {
         fleetWindowHours = Number(fleet.window_hours);
         const sel = document.getElementById('fleetWindow');
@@ -4133,7 +4551,10 @@ async def handle_agent_turn(message_envelope):
           ? fmtTokens(usage.input_tokens) + ' in / ' + fmtTokens(usage.output_tokens) + ' out · ' + fmtInt(usage.invocations) + ' calls'
             + (unrated ? ' · ' + unrated + ' model(s) without rate card' : '')
           : 'unavailable'),
-        kpiCard('GE assistant calls · project', traffic ? fmtInt(traffic.assistant_requests) : '—', 'StreamAssist requests, ' + win)
+        kpiCard('GE assistant calls · project', traffic ? fmtInt(traffic.assistant_requests) : '—', 'StreamAssist requests, ' + win +
+          (fleet.ge_assistant_usage && fleet.ge_assistant_usage.totals
+            ? ' · assistant tokens ' + fmtTokens(fleet.ge_assistant_usage.totals.input_tokens) + ' in / ' +
+              fmtTokens(fleet.ge_assistant_usage.totals.output_tokens) + ' out (Cloud Trace)' : ''))
       );
 
       const body = document.getElementById('fleetAgentsBody');
@@ -4169,6 +4590,7 @@ async def handle_agent_turn(message_envelope):
             el('div', 'fleet-agent-tags', [
               badge(a.state || 'UNKNOWN', a.state === 'ENABLED' ? 'badge-green' : 'badge-yellow'),
               a.sharing_scope ? badge(String(a.sharing_scope).replace(/_/g, ' ').toLowerCase(), 'badge-blue') : null,
+              registrationBadge(a),
             ]),
           ]),
           el('td', null, [badge(a.type_label || a.type, 'badge-blue')]),
@@ -4177,7 +4599,7 @@ async def handle_agent_turn(message_envelope):
           el('td', 'mono', [m.requests == null ? '—' : fmtInt(m.errors_4xx) + ' / ' + fmtInt(m.errors_5xx)]),
           el('td', 'mono', [m.latency_p50_ms == null && m.latency_p95_ms == null ? '—' : fmtMs(m.latency_p50_ms) + ' / ' + fmtMs(m.latency_p95_ms)]),
           el('td', 'mono', [fmtInt(m.llm_calls)]),
-          el('td', 'mono', [m.input_tokens == null ? '—' : fmtTokens(m.input_tokens) + ' / ' + fmtTokens(m.output_tokens)]),
+          tokenCell(a),
           el('td', 'mono', [fmtInt(m.conversations)]),
           lastCell,
         ]));
@@ -4215,6 +4637,10 @@ async def handle_agent_turn(message_envelope):
       if (fleet.token_log_scan && fleet.token_log_scan.truncated) {
         notes.appendChild(el('li', null, ['Token log scan reached its cap (' + fleet.token_log_scan.entries_scanned
           + ' entries); agent token totals are lower bounds for this window.']));
+      }
+      if (fleet.token_log_scan && fleet.token_log_scan.traces_truncated) {
+        notes.appendChild(el('li', null, ['Trace scan reached its page cap (' + fleet.token_log_scan.traces_scanned
+          + ' traces); trace-based token totals are lower bounds for this window.']));
       }
     }
 

@@ -94,6 +94,10 @@ class FakeGoogleApi:
       return self._logging(body or {})
     if parts.netloc == 'us-central1-aiplatform.googleapis.com':
       return {'displayName': 'service-desk-agent', 'spec': {'agentFramework': 'google-adk'}}
+    if parts.netloc == 'cloudtrace.googleapis.com':
+      return {'traces': []}  # Agents in this fixture report tokens through Cloud Logging.
+    if parts.netloc == 'run.googleapis.com':
+      return {'services': [{'name': f'projects/{PROJECT}/locations/us-central1/services/vibe-lift-agent'}]}
     raise ge_fleet.FleetSourceError(404, f'Unexpected URL {url}')
 
   def count(self, fragment):
@@ -259,7 +263,14 @@ class GeFleetCollectionTest(unittest.TestCase):
     self.assertAlmostEqual(usage['totals']['est_cost_usd'], expected)
     self.assertEqual(usage['totals']['invocations'], 52)
     self.assertEqual(payload['ge_traffic']['assistant_requests'], 7)
-    self.assertEqual(payload['token_log_scan'], {'entries_scanned': 4, 'truncated': False})
+    self.assertEqual(payload['token_log_scan'], {'entries_scanned': 4, 'truncated': False,
+                                                 'traces_scanned': 0, 'traces_truncated': False})
+    agents = _by_name(payload)
+    self.assertEqual(agents['IT Service Desk']['registration']['status'], 'OK')
+    self.assertEqual(agents['VibeLift Analytics & FinOps']['registration']['status'], 'OK')
+    self.assertEqual(agents['Deep Research']['registration']['status'], 'NOT_CHECKED')
+    self.assertEqual(payload['totals']['broken_registrations'], 0)
+    self.assertIn('model_usage_previous', payload)
     self.assertEqual(payload['errors'], [])
     self.assertEqual(set(payload['source_status'].values()), {'ok'})
 

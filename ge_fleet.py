@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 
 _SCOPE = 'https://www.googleapis.com/auth/cloud-platform'
 _MONITORING = 'https://monitoring.googleapis.com/v3'
+_TRACE = 'https://cloudtrace.googleapis.com/v1'
 _LOGGING = 'https://logging.googleapis.com/v2'
 _AIPLATFORM = 'https://{location}-aiplatform.googleapis.com/v1'
 _HTTP_TIMEOUT_S = 25.0
@@ -221,6 +222,189 @@ def runtime_backend_key(agent: dict[str, Any]) -> str:
   if backend.get('resource') or backend.get('url'):
     return f"{kind}:{backend.get('resource') or backend.get('url')}"
   return f"agent:{agent.get('resource_name') or agent.get('agent_id')}"
+
+
+_TRACE_ENGINE_RE = re.compile(r'reasoningEngines/(\d+)')
+
+
+def _span_engine_id(labels: dict[str, Any]) -> str | None:
+  for key in ('cloud.resource_id', 'cloud.resource.id', 'g.co/r/aiplatform.googleapis.com/ReasoningEngine/reasoning_engine_id'):
+    match = _TRACE_ENGINE_RE.search(str(labels.get(key) or ''))
+    if match:
+      return match.group(1)
+  service = str(labels.get('service.name') or '')
+  return service if service.isdigit() else None
+
+
+def aggregate_trace_usage(traces: list[dict[str, Any]], engine_ids: list[str]) -> dict[str, dict[str, Any]]:
+  """Sums gen_ai token usage per Agent Engine from Cloud Trace spans, counting each model call once.
+
+  ADK's call_llm span and the GenAI SDK's generate_content child span both carry the same usage
+  attributes; only the innermost span with usage is counted.
+  """
+  stats: dict[str, dict[str, Any]] = {
+      i: {'llm_calls': 0, 'input_tokens': 0, 'output_tokens': 0, 'cached_tokens': 0, 'last_activity': None,
+          '_conversations': set(), '_models': collections.Counter()}
+      for i in engine_ids
+  }
+  for trace in traces:
+    spans = trace.get('spans') or []
+    trace_engine = next((e for e in (_span_engine_id(sp.get('labels') or {}) for sp in spans) if e), None)
+    usage = [sp for sp in spans if any(k in (sp.get('labels') or {}) for k in ('gen_ai.usage.input_tokens', 'gen_ai.usage.output_tokens'))]
+    wrappers = {sp.get('parentSpanId') for sp in usage}
+    for sp in usage:
+      if sp.get('spanId') in wrappers:
+        continue  # A child span reports the same call.
+      labels = sp.get('labels') or {}
+      engine = _span_engine_id(labels) or trace_engine
+      if engine not in stats:
+        continue
+      st = stats[engine]
+      st['llm_calls'] += 1
+      st['input_tokens'] += _to_int(labels.get('gen_ai.usage.input_tokens'))
+      st['output_tokens'] += _to_int(labels.get('gen_ai.usage.output_tokens'))
+      for key, value in labels.items():
+        if key.startswith('gen_ai.usage.') and 'cache' in key:
+          st['cached_tokens'] += _to_int(value)
+      conv = labels.get('gen_ai.conversation.id') or labels.get('gcp.vertex.agent.session_id')
+      if conv:
+        st['_conversations'].add(conv)
+      model = labels.get('gen_ai.response.model') or labels.get('gen_ai.request.model')
+      if model:
+        st['_models'][model] += 1
+      stamp = sp.get('endTime')
+      if stamp and (st['last_activity'] is None or stamp > st['last_activity']):
+        st['last_activity'] = stamp
+  for st in stats.values():
+    st['conversations'] = len(st.pop('_conversations'))
+    st['models'] = [m for m, _ in st.pop('_models').most_common(3)]
+  return stats
+
+
+_GE_RESOURCE_RE = re.compile(r'locations/([^/]+)/collections/[^/]+/engines/([^/]+)(?:/assistants/[^/]+/agents/([^/]+))?')
+
+
+def aggregate_ge_assistant_usage(traces: list[dict[str, Any]]) -> dict[str, Any]:
+  """Sums gen_ai token usage of Gemini Enterprise's own assistant, per GE app and assistant agent.
+
+  Gemini Enterprise exports generate_content spans (cloud.platform=gcp.gemini_enterprise) whose
+  cloud.resource.id names the app (engine) and the assistant agent (e.g. core_assistant).
+  """
+  by_engine: dict[str, dict[str, Any]] = {}
+  for trace in traces:
+    spans = trace.get('spans') or []
+    usage = [sp for sp in spans if any(k in (sp.get('labels') or {}) for k in ('gen_ai.usage.input_tokens', 'gen_ai.usage.output_tokens'))]
+    wrappers = {sp.get('parentSpanId') for sp in usage}
+    for sp in usage:
+      if sp.get('spanId') in wrappers:
+        continue
+      labels = sp.get('labels') or {}
+      if labels.get('cloud.platform') != 'gcp.gemini_enterprise':
+        continue
+      match = _GE_RESOURCE_RE.search(str(labels.get('cloud.resource.id') or labels.get('cloud.resource_id') or ''))
+      if not match:
+        continue
+      key = f'{match.group(1)}/{match.group(2)}'
+      st = by_engine.setdefault(key, {
+          'engine_key': key, 'location': match.group(1), 'engine_id': match.group(2),
+          'llm_calls': 0, 'input_tokens': 0, 'output_tokens': 0, 'cached_tokens': 0,
+          'last_activity': None, '_conversations': set(), '_models': collections.Counter(),
+          '_agents': collections.Counter()})
+      st['llm_calls'] += 1
+      st['input_tokens'] += _to_int(labels.get('gen_ai.usage.input_tokens'))
+      st['output_tokens'] += _to_int(labels.get('gen_ai.usage.output_tokens'))
+      for k, value in labels.items():
+        if k.startswith('gen_ai.usage.') and 'cache' in k:
+          st['cached_tokens'] += _to_int(value)
+      if labels.get('gen_ai.conversation.id'):
+        st['_conversations'].add(labels['gen_ai.conversation.id'])
+      model = labels.get('gen_ai.response.model') or labels.get('gen_ai.request.model')
+      if model:
+        st['_models'][model] += 1
+      st['_agents'][match.group(3) or 'assistant'] += 1
+      stamp = sp.get('endTime')
+      if stamp and (st['last_activity'] is None or stamp > st['last_activity']):
+        st['last_activity'] = stamp
+  totals = {'llm_calls': 0, 'input_tokens': 0, 'output_tokens': 0, 'cached_tokens': 0, 'conversations': 0}
+  for st in by_engine.values():
+    st['conversations'] = len(st.pop('_conversations'))
+    st['models'] = dict(st.pop('_models'))
+    st['assistant_agents'] = dict(st.pop('_agents'))
+    for k in totals:
+      totals[k] += st[k]
+  return {'by_engine': by_engine, 'totals': totals}
+
+
+_RESOURCE_LOCATION_RE = re.compile(r'locations/([^/]+)/')
+_RESOURCE_PROJECT_RE = re.compile(r'^projects/([^/]+)/')
+
+
+def _registration_action(agent: dict[str, Any]) -> dict[str, str]:
+  """Cleanup steps for a GE registration whose backend is gone (never executed automatically)."""
+  name = str(agent.get('resource_name') or '')
+  loc_match = _RESOURCE_LOCATION_RE.search(name)
+  proj_match = _RESOURCE_PROJECT_RE.match(name)
+  base = _de_base(loc_match.group(1) if loc_match else 'global')
+  project = proj_match.group(1) if proj_match else ''
+  return {
+      'summary': ('Remove this agent from Gemini Enterprise, or redeploy its backend and update the '
+                  'registration to point at the new one.'),
+      'delete_command': (
+          'curl -X DELETE -H "Authorization: Bearer $(gcloud auth print-access-token)" '
+          f'-H "X-Goog-User-Project: {project}" "{base}/{name}"'
+      ) if name else '',
+  }
+
+
+def assess_registration(
+    agent: dict[str, Any],
+    results: dict[tuple[str, ...], Any],
+    checked_at: str,
+    default_project: str | None = None,
+) -> dict[str, Any]:
+  """Classifies whether a GE agent's backend still exists, using only API responses as evidence.
+
+  Statuses: OK, BACKEND_NOT_FOUND (API returned 404 / service absent from the project's list),
+  NO_BACKEND (ADK registration without an Agent Engine reference), UNVERIFIED (lookup failed or the
+  backend's project is unknown) and NOT_CHECKED (agent types hosted by Gemini Enterprise itself).
+  """
+  backend = agent.get('backend') or {}
+  kind = backend.get('kind')
+  out: dict[str, Any] = {'status': 'NOT_CHECKED', 'evidence': None, 'checked_at': checked_at}
+  if agent.get('type') == 'ADK':
+    resource = backend.get('resource')
+    if not resource:
+      out.update(status='NO_BACKEND', evidence='The Gemini Enterprise registration has no Agent Engine (reasoningEngine) reference.')
+    else:
+      meta = results.get(('re_meta', resource))
+      url = f"{_AIPLATFORM.format(location=backend.get('location') or 'us-central1')}/{resource}"
+      if meta is None:
+        out.update(status='UNVERIFIED', evidence=f'Agent Engine lookup failed (not a 404): GET {url}')
+      elif meta.get('exists') is False:
+        out.update(status='BACKEND_NOT_FOUND', evidence=f"GET {url} returned HTTP {meta.get('http_status', 404)} (Agent Engine does not exist).")
+      else:
+        out.update(status='OK', evidence=f'GET {url} returned the Agent Engine.')
+  elif kind == 'cloud_run' and backend.get('service'):
+    service = backend['service']
+    explicit_project = backend.get('project')
+    project = explicit_project or default_project
+    services = results.get(('run_inventory', project)) if project else None
+    if services is None:
+      out.update(status='UNVERIFIED', evidence=f'Could not list Cloud Run services in project {project}.')
+    elif service in services:
+      out.update(status='OK', evidence=f"Cloud Run service '{service}' exists in project {project}.")
+    elif not explicit_project:
+      # The hashed run.app URL does not say which project hosts the service; it may live elsewhere.
+      out.update(status='UNVERIFIED', evidence=(
+          f"Cloud Run service '{service}' is not in project {project}, and its run.app URL does not "
+          'encode the hosting project.'))
+    else:
+      out.update(status='BACKEND_NOT_FOUND', evidence=(
+          f"Cloud Run service '{service}' is not in project {project} "
+          f'(services.list across all regions returned {len(services)} services).'))
+  if out['status'] in ('BACKEND_NOT_FOUND', 'NO_BACKEND'):
+    out['action'] = _registration_action(agent)
+  return out
 
 
 def cloud_run_service_from_url(url: str) -> dict[str, str] | None:
@@ -413,6 +597,7 @@ class GeminiEnterpriseFleetService:
     self.ttl_seconds = float(os.environ.get('VIBELIFT_FLEET_TTL_SECONDS', '60'))
     # Forced refreshes inside this interval are served from cache (protects API quotas).
     self.min_refresh_interval_s = float(os.environ.get('VIBELIFT_FLEET_MIN_REFRESH_SECONDS', '10'))
+    self.max_trace_pages = int(os.environ.get('VIBELIFT_TRACE_MAX_PAGES', '6'))
     self.default_window_hours = _clamp_window(os.environ.get('VIBELIFT_FLEET_WINDOW_HOURS', '24'), 24)
     self.max_log_entries = int(os.environ.get('VIBELIFT_TOKEN_LOG_MAX_ENTRIES', '3000'))
     self._api = api or _GoogleApi(quota_project=self.project_id)
@@ -615,8 +800,9 @@ class GeminiEnterpriseFleetService:
       group_by: list[str],
       aligner: str = 'ALIGN_SUM',
       reducer: str = 'REDUCE_SUM',
+      end_offset_s: int = 0,
   ) -> list[tuple[dict[str, str], float]]:
-    end = _utcnow()
+    end = _utcnow() - datetime.timedelta(seconds=end_offset_s)
     params = [
         ('filter', metric_filter),
         ('interval.startTime', _iso(end - datetime.timedelta(seconds=window_s))),
@@ -797,10 +983,69 @@ class GeminiEnterpriseFleetService:
       s['models'] = [m for m, _ in s.pop('_models').most_common(3)]
     return {'by_engine': stats, 'entries_scanned': scanned, 'truncated': truncated}
 
+  def _trace_usage(self, project: str, engine_ids: list[str], window_s: int) -> dict[str, Any]:
+    """Per-engine gen_ai token usage from Cloud Trace spans exported by Agent Engine telemetry."""
+    traces, truncated = self._list_traces(project, '+cloud.platform:gcp.agent_engine', window_s)
+    return {'by_engine': aggregate_trace_usage(traces, engine_ids), 'traces_scanned': len(traces), 'truncated': truncated}
+
+  def _ge_assistant_usage(self, window_s: int) -> dict[str, Any]:
+    """Gemini Enterprise assistant token usage per app, from Cloud Trace (gcp.gemini_enterprise spans)."""
+    traces, truncated = self._list_traces(self.project_id, '+cloud.platform:gcp.gemini_enterprise', window_s)
+    out = aggregate_ge_assistant_usage(traces)
+    out.update({
+        'traces_scanned': len(traces), 'truncated': truncated,
+        'scope': f'Gemini Enterprise assistant model calls exported to Cloud Trace in {self.project_id}',
+    })
+    return out
+
+  def _list_traces(self, project: str, trace_filter: str, window_s: int) -> tuple[list[dict[str, Any]], bool]:
+    end = _utcnow()
+    params = {
+        'startTime': _iso(end - datetime.timedelta(seconds=window_s)),
+        'endTime': _iso(end),
+        'view': 'COMPLETE',
+        'pageSize': '500',
+        'filter': trace_filter,
+    }
+    traces: list[dict[str, Any]] = []
+    truncated = False
+    token = ''
+    for page_no in range(self.max_trace_pages):
+      query = dict(params, **({'pageToken': token} if token else {}))
+      page = self._api.call('GET', f'{_TRACE}/projects/{project}/traces?{urllib.parse.urlencode(query)}')
+      traces.extend(page.get('traces', []))
+      token = page.get('nextPageToken', '')
+      if not token:
+        break
+      if page_no == self.max_trace_pages - 1:
+        truncated = True
+    return traces, truncated
+
   def _reasoning_engine_meta(self, resource: str, location: str) -> dict[str, Any]:
-    data = self._api.call('GET', f'{_AIPLATFORM.format(location=location)}/{resource}')
+    try:
+      data = self._api.call('GET', f'{_AIPLATFORM.format(location=location)}/{resource}')
+    except FleetSourceError as exc:
+      if exc.status == 404:
+        return {'exists': False, 'http_status': 404}
+      raise  # Permission or transient errors are not evidence that the engine is gone.
     spec = data.get('spec') or {}
-    return {'display_name': data.get('displayName'), 'framework': spec.get('agentFramework')}
+    return {'exists': True, 'display_name': data.get('displayName'), 'framework': spec.get('agentFramework')}
+
+  def _cloud_run_services(self, project: str) -> set[str]:
+    """Names of every Cloud Run service in the project (all regions). Raises if the list is incomplete."""
+    names: set[str] = set()
+    token = ''
+    for _ in range(_MAX_PAGES):
+      url = f'https://run.googleapis.com/v2/projects/{project}/locations/-/services?pageSize=500'
+      if token:
+        url += f'&pageToken={urllib.parse.quote(token)}'
+      page = self._api.call('GET', url)
+      for svc in page.get('services', []):
+        names.add(str(svc.get('name', '')).rsplit('/', 1)[-1])
+      token = page.get('nextPageToken', '')
+      if not token:
+        return names
+    raise FleetSourceError(0, 'Cloud Run service list exceeded the page limit; existence not verified.')
 
   def _rate_cards(self) -> dict[str, dict[str, float]]:
     cards = {
@@ -821,18 +1066,24 @@ class GeminiEnterpriseFleetService:
         logger.warning('Ignoring invalid VIBELIFT_RATE_CARDS_JSON: %s', exc)
     return cards
 
-  def _model_usage(self, window_s: int) -> dict[str, Any]:
+  def rate_cards(self) -> dict[str, dict[str, float]]:
+    """List-price rate cards (USD per 1M tokens) used for every cost estimate."""
+    return self._rate_cards()
+
+  def _model_usage(self, window_s: int, end_offset_s: int = 0) -> dict[str, Any]:
     token_rows = self._timeseries(
         self.project_id,
         'metric.type="aiplatform.googleapis.com/publisher/online_serving/token_count"',
         window_s,
         ['resource.label.model_user_id', 'metric.label.type'],
+        end_offset_s=end_offset_s,
     )
     invocation_rows = self._timeseries(
         self.project_id,
         'metric.type="aiplatform.googleapis.com/publisher/online_serving/model_invocation_count"',
         window_s,
         ['resource.label.model_user_id'],
+        end_offset_s=end_offset_s,
     )
     models: dict[str, dict[str, Any]] = {}
 
@@ -881,7 +1132,14 @@ class GeminiEnterpriseFleetService:
         totals[key] += row[key]
       rows.append(row)
     totals['est_cost_usd'] = round(totals['est_cost_usd'], 4)
-    return {'scope': f'Project-wide Vertex AI model usage in {self.project_id}', 'models': rows, 'totals': totals}
+    end = _utcnow() - datetime.timedelta(seconds=end_offset_s)
+    return {
+        'scope': f'Project-wide Vertex AI model usage in {self.project_id}',
+        'models': rows,
+        'totals': totals,
+        'interval': {'start': _iso(end - datetime.timedelta(seconds=window_s)), 'end': _iso(end)},
+        'rate_cards': {r['model']: cards[r['model']] for r in rows if r['model'] in cards},
+    }
 
   def _ge_traffic(self, window_s: int) -> dict[str, Any]:
     rows = self._timeseries(
@@ -939,6 +1197,7 @@ class GeminiEnterpriseFleetService:
         jobs[('re_cpu', project)] = pool.submit(self._sum_by, project, f'{re_metric}/cpu/allocation_time', 'reasoning_engine_id', id_list, window_s)
         jobs[('re_mem', project)] = pool.submit(self._sum_by, project, f'{re_metric}/memory/allocation_time', 'reasoning_engine_id', id_list, window_s)
         jobs[('re_tokens', project)] = pool.submit(self._genai_usage, project, id_list, window_s)
+        jobs[('re_trace_tokens', project)] = pool.submit(self._trace_usage, project, id_list, window_s)
         jobs[('re_series', project)] = pool.submit(self._request_series, project, f'{re_metric}/request_count', 'reasoning_engine_id', id_list, window_s, bucket_s)
       for project, services in services_by_project.items():
         svc_list = sorted(services)
@@ -948,25 +1207,34 @@ class GeminiEnterpriseFleetService:
         jobs[('run_series', project)] = pool.submit(self._request_series, project, 'run.googleapis.com/request_count', 'service_name', svc_list, window_s, bucket_s)
       for resource, location in engine_meta_jobs.items():
         jobs[('re_meta', resource)] = pool.submit(self._reasoning_engine_meta, resource, location)
+      run_projects = {a['backend'].get('project') or self.project_id for a in agents
+                      if a['backend'].get('kind') == 'cloud_run' and a['backend'].get('service')}
+      for project in sorted(run_projects):
+        jobs[('run_inventory', project)] = pool.submit(self._cloud_run_services, project)
       jobs[('model_usage',)] = pool.submit(self._model_usage, window_s)
+      jobs[('model_usage_prev',)] = pool.submit(self._model_usage, window_s, window_s)
       jobs[('ge_traffic',)] = pool.submit(self._ge_traffic, window_s)
+      jobs[('ge_assistant_tokens',)] = pool.submit(self._ge_assistant_usage, window_s)
 
       results: dict[tuple[str, ...], Any] = {}
       source_names = {
           're_requests': 'Agent Engine request metrics', 're_latency': 'Agent Engine latency metrics',
           're_cpu': 'Agent Engine vCPU metrics', 're_mem': 'Agent Engine memory metrics',
-          're_tokens': 'Agent GenAI token logs', 'run_requests': 'Cloud Run request metrics',
+          're_tokens': 'Agent GenAI token logs', 're_trace_tokens': 'Agent GenAI trace spans',
+          'run_requests': 'Cloud Run request metrics',
           'run_latency': 'Cloud Run latency metrics', 'run_billable': 'Cloud Run billable time',
           're_meta': 'Agent Engine metadata', 'model_usage': 'Vertex AI model token metrics',
           'ge_traffic': 'Gemini Enterprise API traffic',
+          'ge_assistant_tokens': 'Gemini Enterprise assistant trace spans',
           're_series': 'Agent Engine request history', 'run_series': 'Cloud Run request history',
+          'run_inventory': 'Cloud Run service list', 'model_usage_prev': 'Vertex AI model token metrics (previous period)',
       }
       for key, future in jobs.items():
         try:
           results[key] = future.result()
         except Exception as exc:  # Each source degrades independently.
           results[key] = None
-          if key[0] != 're_meta':
+          if key[0] not in ('re_meta', 'run_inventory'):  # Shown per agent as UNVERIFIED instead.
             errors.append({'source': source_names.get(key[0], key[0]), 'detail': str(exc)[:300]})
 
     def source_state(prefix: str) -> str:
@@ -976,12 +1244,15 @@ class GeminiEnterpriseFleetService:
       return 'ok' if all(results[k] is not None for k in keys) else 'error'
 
     for name, prefix in (('agent_engine_metrics', 're_requests'), ('agent_token_logs', 're_tokens'),
+                         ('agent_token_traces', 're_trace_tokens'),
                          ('cloud_run_metrics', 'run_requests'), ('model_usage', 'model_usage'),
-                         ('ge_traffic', 'ge_traffic')):
+                         ('ge_traffic', 'ge_traffic'), ('ge_assistant_tokens', 'ge_assistant_tokens')):
       status[name] = source_state(prefix)
 
+    checked_at = _iso(_utcnow())
     for agent in agents:
       self._apply_telemetry(agent, results)
+      agent['registration'] = assess_registration(agent, results, checked_at, self.project_id)
 
     telemetry_agents = [a for a in agents if a['metrics']['requests'] is not None]
     # The same runtime (Cloud Run service / Agent Engine) can be registered as an
@@ -1000,6 +1271,9 @@ class GeminiEnterpriseFleetService:
         'by_type': dict(collections.Counter(a['type'] for a in agents)),
         'with_runtime_telemetry': len(telemetry_agents),
         'unique_runtimes': len(unique_runtime_agents),
+        'broken_registrations': sum(
+            1 for a in agents if a['registration']['status'] in ('BACKEND_NOT_FOUND', 'NO_BACKEND')),
+        'unverified_registrations': sum(1 for a in agents if a['registration']['status'] == 'UNVERIFIED'),
     }
     for key in ('requests', 'errors_4xx', 'errors_5xx', 'llm_calls', 'input_tokens', 'output_tokens', 'cached_tokens', 'conversations'):
       values = [a['metrics'][key] for a in unique_runtime_agents if a['metrics'].get(key) is not None]
@@ -1013,6 +1287,7 @@ class GeminiEnterpriseFleetService:
     totals['last_activity'] = max(stamps) if stamps else None
 
     token_results = [results[k] for k in results if k[0] == 're_tokens' and results[k]]
+    trace_results = [results[k] for k in results if k[0] == 're_trace_tokens' and results[k]]
     return {
         'source': 'gemini_enterprise',
         'project_id': self.project_id,
@@ -1025,11 +1300,15 @@ class GeminiEnterpriseFleetService:
         'agents': agents,
         'totals': totals,
         'model_usage': results.get(('model_usage',)),
+        'model_usage_previous': results.get(('model_usage_prev',)),
         'ge_traffic': results.get(('ge_traffic',)),
+        'ge_assistant_usage': results.get(('ge_assistant_tokens',)),
         'trend': build_request_trend(agents, results, window_s, bucket_s, self.project_id),
         'token_log_scan': {
             'entries_scanned': sum(r['entries_scanned'] for r in token_results),
             'truncated': any(r['truncated'] for r in token_results),
+            'traces_scanned': sum(r['traces_scanned'] for r in trace_results),
+            'traces_truncated': any(r['truncated'] for r in trace_results),
         },
         'source_status': status,
         'errors': errors,
@@ -1060,14 +1339,28 @@ class GeminiEnterpriseFleetService:
         metrics['vcpu_hours'] = round(cpu[rid] / 3600.0, 4)
       if mem is not None and rid in mem:
         metrics['memory_gib_hours'] = round(mem[rid] / 3600.0, 4)
-      tokens = pick('re_tokens')
-      if tokens is not None and rid in tokens['by_engine']:
-        usage = tokens['by_engine'][rid]
+      tokens, traced = pick('re_tokens'), pick('re_trace_tokens')
+      log_usage = (tokens or {}).get('by_engine', {}).get(rid) if tokens is not None else None
+      trace_usage = (traced or {}).get('by_engine', {}).get(rid) if traced is not None else None
+      usage, source = None, None
+      if log_usage and log_usage['llm_calls']:
+        usage, source = log_usage, 'Cloud Logging: OpenTelemetry gen_ai inference events'
+      elif trace_usage and trace_usage['llm_calls']:
+        usage, source = trace_usage, 'Cloud Trace: OpenTelemetry gen_ai spans'
+      elif tokens is not None and traced is not None and not metrics.get('requests'):
+        usage = log_usage  # Both sources checked and the agent had no traffic: a true zero.
+      if usage is not None:
         for key in ('llm_calls', 'input_tokens', 'output_tokens', 'cached_tokens', 'conversations', 'last_activity'):
           metrics[key] = usage[key]
         if usage.get('models'):
           backend['models'] = usage['models']
-        agent['data_sources'].append('Cloud Logging: OpenTelemetry gen_ai inference events')
+      if source:
+        metrics['token_source'] = source
+        agent['data_sources'].append(source)
+      elif metrics.get('requests') and tokens is not None and traced is not None:
+        agent['notes'].append(
+            'Served requests but emitted no gen_ai token telemetry (logs or traces). Deploy with '
+            'GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=true to measure tokens.')
       meta = results.get(('re_meta', backend.get('resource')))
       if meta:
         backend['display_name'] = meta.get('display_name')
