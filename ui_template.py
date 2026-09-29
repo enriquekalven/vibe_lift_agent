@@ -470,6 +470,34 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .fleet-error { background: #fef2f2; color: #991b1b; padding: 6px 10px; border-radius: 6px; margin-bottom: 6px; word-break: break-word; }
     .fleet-notes { font-size: 11px; color: var(--text-secondary); margin: 12px 0 0 16px; padding: 0; }
     .hidden { display: none !important; }
+    body.simple-mode .adv-only { display: none !important; }
+    .exec-headline { font-size: 15px; line-height: 1.5; color: var(--text-primary); background: var(--surface);
+      border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; margin-bottom: 14px; }
+    .exec-headline .muted { color: var(--text-secondary); font-size: 12px; display:block; margin-top:4px; }
+    .exec-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 14px; }
+    @media (max-width: 900px) { .exec-grid { grid-template-columns: 1fr; } }
+    .exec-grid .panel { margin-bottom: 0; }
+    .chart-source { font-size: 11px; color: var(--text-secondary); margin-top: 10px; }
+    .hbar-row { display: grid; grid-template-columns: 170px 1fr 64px; align-items: center; gap: 10px; margin: 7px 0; font-size: 12.5px; }
+    .hbar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
+    .hbar-track { height: 14px; background: #f1f5f9; border-radius: 4px; overflow: hidden; display: flex; }
+    .hbar-seg { height: 100%; }
+    .hbar-val { text-align: right; font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); }
+    .chart-legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 11.5px; color: var(--text-secondary); margin-top: 8px; }
+    .chart-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+    .donut-wrap { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+    .donut-legend { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; min-width: 180px; flex: 1; }
+    .donut-legend-row { display: grid; grid-template-columns: 14px 1fr auto; gap: 8px; align-items: center; }
+    .donut-legend-row i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+    .donut-legend-row .v { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); }
+    .attention-list { list-style: none; margin: 0; padding: 0; }
+    .attention-list li { display: flex; gap: 10px; align-items: flex-start; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+    .attention-list li:last-child { border-bottom: none; }
+    .sev-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; flex: none; }
+    .chart-empty { font-size: 12.5px; color: var(--text-secondary); padding: 18px 0; }
+    .adv-toggle { display:inline-flex; align-items:center; gap:6px; }
+    .adv-toggle[aria-pressed="true"] { background:#1e293b; color:#fff; border-color:#1e293b; }
+    .verify-chip { font-size:11.5px; padding:4px 10px; }
     details.role-disclosure {
       background: #f8fafc;
       border: 1px solid var(--border);
@@ -502,74 +530,74 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       />
       <div>
         <div class="brand-title">VibeLift | Analytics Platform for Agent Optimization</div>
-        <div class="brand-subtitle">
+        <div class="brand-subtitle adv-only">
           Agent Health, Speed, Cost &amp; Quality &bull; <span class="mono">@vibelift_telemetry</span>
         </div>
       </div>
       <div style="display:inline-flex;align-items:center;gap:8px;padding:4px 10px;background:#f1f5f9;border-radius:6px;border:1px solid #e2e8f0;font-size:11.5px;font-weight:600;color:#334155;">
         <span>GCP: <strong id="gcpProjectText" class="mono">&#x2026;</strong> (<span id="gcpRegionText" class="mono">&#x2026;</span>)</span>
-        <span class="badge badge-green" style="font-size:10px;">Cloud Run ACTIVE</span>
       </div>
     </div>
     <div class="action-bar">
       <button id="btnModeFullscreen" class="btn btn-fullscreen-toggle" onclick="toggleDisplayMode()" title="Toggle between Right Side Panel and Fullscreen">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg> Fullscreen
       </button>
-      <span id="activeGenBadge" class="badge badge-blue">ACTIVE CONFIG: REV 14</span>
-      <button class="btn" id="syncGcpBtn" onclick="syncGcpTelemetry()" title="Fetch live telemetry from Cloud Logging & Gemini Enterprise">
-        Sync GCP Telemetry
+      <span id="activeGenBadge" class="badge badge-blue adv-only">ACTIVE CONFIG</span>
+      <button class="btn verify-chip" onclick="toggleTelemetryValidatorDrawer()" id="toggleTelemetryValidatorBtn" title="See which data source backs each number">
+        Data check: <span id="telemetryValidatorSummaryBadge" class="mono">checking&hellip;</span>
       </button>
-      <button class="btn btn-danger" onclick="triggerApi('/api/inject_anomaly')">
+      <button class="btn" id="syncGcpBtn" onclick="syncGcpTelemetry()" title="Sync GCP Telemetry (Cloud Monitoring, BigQuery, Gemini Enterprise)">
+        Refresh
+      </button>
+      <button class="btn btn-danger adv-only" onclick="triggerApi('/api/inject_anomaly')" title="Sandbox: injects a simulated anomaly">
         Test Alert
       </button>
-      <button class="btn btn-primary" onclick="triggerApi('/api/evolve_generation')">
+      <button class="btn btn-primary adv-only" onclick="triggerApi('/api/evolve_generation')" title="Sandbox: runs one optimizer generation">
         Run Optimizer
       </button>
-      <button class="btn" onclick="triggerApi('/api/reset')">
+      <button class="btn adv-only" onclick="triggerApi('/api/reset')">
         Reset
+      </button>
+      <button class="btn adv-toggle" id="advancedToggleBtn" aria-pressed="false" onclick="toggleAdvancedMode()" title="Show optimizer, simulators, FinOps deep-dives and SDK tools">
+        Advanced &#9662;
       </button>
     </div>
   </header>
 
   <nav class="tabs-bar" aria-label="Dashboard Navigation">
-    <button id="tabBtn0" class="tab-btn active" onclick="switchTab(0)">
-      <span class="tab-step-pill live-pill"><span class="live-dot"></span>1</span>
-      Gemini Enterprise Agent Fleet
+    <button id="tabBtn6" class="tab-btn active" onclick="switchTab(6)">
+      Overview
     </button>
-    <button id="tabBtn1" class="tab-btn" onclick="switchTab(1)">
-      <span class="tab-step-pill">2</span>
-      Goals &amp; Metrics
-    </button>
-    <button id="tabBtn2" class="tab-btn" onclick="switchTab(2)">
-      <span class="tab-step-pill">3</span>
-      Testing &amp; History
+    <button id="tabBtn0" class="tab-btn" onclick="switchTab(0)" title="Gemini Enterprise Agent Fleet">
+      <span class="tab-step-pill live-pill"><span class="live-dot"></span></span>
+      Agents
     </button>
     <button id="tabBtn3" class="tab-btn" onclick="switchTab(3)">
-      <span class="tab-step-pill">4</span>
-      Cost &amp; Billing
+      Cost
     </button>
     <button id="tabBtn4" class="tab-btn" onclick="switchTab(4)">
-      <span class="tab-step-pill">5</span>
-      Users &amp; Feedback
+      Users
     </button>
-    <button id="tabBtn5" class="tab-btn" onclick="switchTab(5)">
-      <span class="tab-step-pill">6</span>
-      Tools &amp; SDK (<span class="mono">@vibelift_telemetry</span>)
+    <button id="tabBtn1" class="tab-btn adv-only" onclick="switchTab(1)">
+      Goals &amp; Metrics
+    </button>
+    <button id="tabBtn2" class="tab-btn adv-only" onclick="switchTab(2)">
+      Optimizer &amp; Testing
+    </button>
+    <button id="tabBtn5" class="tab-btn adv-only" onclick="switchTab(5)">
+      SDK &amp; Tools
     </button>
   </nav>
 
   <main class="container">
     <!-- COMPACT SUMMARY BAR: KEY NUMBERS, COLLAPSIBLE ROLE GUIDE & OPTIONAL DATA SEARCH -->
-    <section class="panel" id="smeExecutivePulseBar" style="margin-bottom:16px;padding:14px 18px;">
+    <section class="panel adv-only" id="smeExecutivePulseBar" style="margin-bottom:16px;padding:14px 18px;">
       <div class="panel-header" style="margin-bottom:10px;padding-bottom:8px;">
         <div class="panel-title">
           <span>Summary: Cost per Helpful Answer, Resolution Rate &amp; Monthly Cloud Bill</span>
-          <span class="badge badge-green" id="northStarDeltaBadge">-95.2% Cost / CSAT-Positive Resolved Session</span>
+          <span class="badge badge-green" id="northStarDeltaBadge">&mdash;</span>
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-          <button class="btn" onclick="toggleTelemetryValidatorDrawer()" id="toggleTelemetryValidatorBtn" title="Verify every tab and metric against real BigQuery &amp; Cloud Monitoring telemetry">
-            Telemetry Grounding: <span id="telemetryValidatorSummaryBadge" class="mono">10/10 Verified</span>
-          </button>
           <button class="btn" onclick="toggleNl2SqlDrawer()" id="toggleNl2SqlBtn">
             Search Data in Plain English
           </button>
@@ -590,6 +618,39 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </details>
 
+      <div id="nl2sqlCopilotDrawer" class="hidden" style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+          <div style="font-size:12px;font-weight:700;color:var(--text-primary);">
+            Ask a Question in Plain English (Generates BigQuery SQL on <span class="mono">aive_logs</span> &amp; Agent Logs)
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button class="btn" style="padding:4px 9px;font-size:11.5px;" onclick="runNl2SqlPreset('Compare cost per 1k turns and prompt cache savings across agents')">Cost &amp; Cache by Agent</button>
+            <button class="btn" style="padding:4px 9px;font-size:11.5px;" onclick="runNl2SqlPreset('Show token category breakdown for thinking vs context bloat vs background overhead')">Token Usage by Type</button>
+            <button class="btn" style="padding:4px 9px;font-size:11.5px;" onclick="runNl2SqlPreset('List top power users by user_ldap token spend and CSAT')">Top Users by Spend</button>
+            <button class="btn" style="padding:4px 9px;font-size:11.5px;" onclick="runNl2SqlPreset('Detect runaway agent loops and thinking token anomalies')">Stuck Loop Alerts</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+          <input id="nl2sqlQuestionInput" type="text" style="flex:1;min-width:260px;padding:7px 11px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;" value="Compare cost per 1k turns and prompt cache savings across agents" />
+          <button class="btn btn-primary" onclick="runNl2SqlQuery()">Run Search</button>
+        </div>
+        <div id="nl2sqlSummaryText" style="font-size:12.5px;font-weight:600;color:var(--g-green);margin-bottom:8px;"></div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;">
+          <div>
+            <div style="font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px;">Generated BigQuery SQL</div>
+            <pre class="diff-pre" id="nl2sqlSqlPre" style="max-height:145px;"></pre>
+          </div>
+          <div class="table-scroll" style="max-height:165px;">
+            <table>
+              <thead id="nl2sqlResultHead"></thead>
+              <tbody id="nl2sqlResultBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="telemetryValidatorSection">
       <div id="telemetryValidatorDrawer" class="hidden" style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px;">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
           <div>
@@ -625,40 +686,10 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
 
-      <div id="nl2sqlCopilotDrawer" class="hidden" style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
-          <div style="font-size:12px;font-weight:700;color:var(--text-primary);">
-            Ask a Question in Plain English (Generates BigQuery SQL on <span class="mono">aive_logs</span> &amp; Agent Logs)
-          </div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;">
-            <button class="btn" style="padding:4px 9px;font-size:11.5px;" onclick="runNl2SqlPreset('Compare cost per 1k turns and prompt cache savings across agents')">Cost &amp; Cache by Agent</button>
-            <button class="btn" style="padding:4px 9px;font-size:11.5px;" onclick="runNl2SqlPreset('Show token category breakdown for thinking vs context bloat vs background overhead')">Token Usage by Type</button>
-            <button class="btn" style="padding:4px 9px;font-size:11.5px;" onclick="runNl2SqlPreset('List top power users by user_ldap token spend and CSAT')">Top Users by Spend</button>
-            <button class="btn" style="padding:4px 9px;font-size:11.5px;" onclick="runNl2SqlPreset('Detect runaway agent loops and thinking token anomalies')">Stuck Loop Alerts</button>
-          </div>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
-          <input id="nl2sqlQuestionInput" type="text" style="flex:1;min-width:260px;padding:7px 11px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;" value="Compare cost per 1k turns and prompt cache savings across agents" />
-          <button class="btn btn-primary" onclick="runNl2SqlQuery()">Run Search</button>
-        </div>
-        <div id="nl2sqlSummaryText" style="font-size:12.5px;font-weight:600;color:var(--g-green);margin-bottom:8px;"></div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;">
-          <div>
-            <div style="font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px;">Generated BigQuery SQL</div>
-            <pre class="diff-pre" id="nl2sqlSqlPre" style="max-height:145px;"></pre>
-          </div>
-          <div class="table-scroll" style="max-height:165px;">
-            <table>
-              <thead id="nl2sqlResultHead"></thead>
-              <tbody id="nl2sqlResultBody"></tbody>
-            </table>
-          </div>
-        </div>
-      </div>
     </section>
 
     <!-- Persistent Agent & Optimizer Selector Banner -->
-    <section id="demoSelectorBanner" class="selector-banner hidden">
+    <section id="demoSelectorBanner" class="selector-banner hidden adv-only">
       <div style="display:flex;flex-direction:column;gap:10px;">
         <div>
           <div class="selector-label">1. Choose Agent to Inspect</div>
@@ -695,8 +726,49 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
     </section>
 
+    <!-- TAB 6: EXECUTIVE OVERVIEW (charts computed client-side from live /api/state only) -->
+    <section id="tabPanel6">
+      <div class="exec-headline" id="execHeadline">Loading live data from Google Cloud&hellip;</div>
+      <div class="kpi-grid" id="execKpis"></div>
+      <div class="exec-grid">
+        <div class="panel">
+          <div class="panel-header"><div class="panel-title"><span>Requests by agent</span></div></div>
+          <div id="execChartRequests"></div>
+          <div class="chart-legend">
+            <span><i style="background:#2563eb"></i>Successful</span>
+            <span><i style="background:#f59e0b"></i>Rejected (4xx)</span>
+            <span><i style="background:#ef4444"></i>Server error (5xx)</span>
+          </div>
+          <div class="chart-source" id="execSrcRequests"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><div class="panel-title"><span>Model spend by model</span></div></div>
+          <div id="execChartSpend"></div>
+          <div class="chart-source" id="execSrcSpend"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><div class="panel-title"><span>Agent fleet mix</span></div></div>
+          <div id="execChartMix"></div>
+          <div class="chart-source">Source: Gemini Enterprise agent inventory (Discovery Engine API)</div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><div class="panel-title"><span>Most active users</span></div></div>
+          <div id="execChartUsers"></div>
+          <div class="chart-legend">
+            <span><i style="background:#10b981"></i>People</span>
+            <span><i style="background:#94a3b8"></i>Service accounts</span>
+          </div>
+          <div class="chart-source">Source: BigQuery audit logs &amp; agent telemetry (sessions, last 7 days)</div>
+        </div>
+      </div>
+      <div class="panel" style="margin-top:14px;">
+        <div class="panel-header"><div class="panel-title"><span>Needs attention</span></div></div>
+        <ul class="attention-list" id="execAttention"></ul>
+      </div>
+    </section>
+
     <!-- TAB 0: LIVE GEMINI ENTERPRISE AGENT FLEET (real inventory joined with real telemetry) -->
-    <section id="tabPanel0">
+    <section id="tabPanel0" class="hidden">
       <div class="panel">
         <div class="panel-header">
           <div class="panel-title">
@@ -741,39 +813,10 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         <div id="fleetErrors" class="fleet-errors hidden"></div>
       </div>
 
-      <div class="panel">
-        <div class="panel-header">
-          <div class="panel-title">
-            <span>Vertex AI model usage</span>
-            <span id="modelCostBadge" class="badge badge-green">&mdash;</span>
-          </div>
-          <div id="modelScopeText" style="font-size:12px;color:var(--text-secondary);"></div>
-        </div>
-        <div class="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Model</th>
-                <th>Calls</th>
-                <th>Input</th>
-                <th>Output</th>
-                <th>Cache read</th>
-                <th>Cache write</th>
-                <th>Cache share</th>
-                <th>Est. cost (list price)</th>
-              </tr>
-            </thead>
-            <tbody id="modelUsageBody"></tbody>
-          </table>
-        </div>
-        <ul id="fleetNotes" class="fleet-notes"></ul>
-      </div>
-
-      <div class="panel">
+      <div class="panel adv-only">
         <div class="panel-header">
           <div class="panel-title">
             <span>Safety Alerts &amp; Automatic Protections</span>
-            <span class="badge badge-green">3 Live Production Rules Active</span>
           </div>
           <div style="font-size:12px;color:var(--text-secondary);">
             Watches for stuck reasoning loops, oversized chat history, and repeated tool retries across Cloud Run and Vertex AI.
@@ -782,7 +825,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         <div id="watchOutAlarmsContainer" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;"></div>
       </div>
 
-      <div class="panel">
+      <div class="panel adv-only">
         <div class="panel-header">
           <div class="panel-title">
             <span>Cloud Run Services &amp; Support Ticket Stream</span>
@@ -825,7 +868,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
 
-      <div class="tab-footer-nav">
+      <div class="tab-footer-nav adv-only">
         <span>Step 1 of 6: Checked live agent fleet health and active alerts.</span>
         <button class="btn btn-primary" onclick="switchTab(1)">Next Step: Goals &amp; Metrics (Tab 2) &rarr;</button>
       </div>
@@ -943,7 +986,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
 
-      <div class="tab-footer-nav">
+      <div class="tab-footer-nav adv-only">
         <button class="btn" onclick="switchTab(0)">&larr; Back: Fleet &amp; Health</button>
         <span>Step 2 of 6: Reviewed target goals and 5-layer metrics.</span>
         <button class="btn btn-primary" onclick="switchTab(2)">Next Step: Testing &amp; History (Tab 3) &rarr;</button>
@@ -1108,7 +1151,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         <div id="actionsTimelineContainer"></div>
       </div>
 
-      <div class="tab-footer-nav">
+      <div class="tab-footer-nav adv-only">
         <button class="btn" onclick="switchTab(1)">&larr; Back: Goals &amp; Metrics</button>
         <span>Step 3 of 6: Tested rollout settings and inspected change history.</span>
         <button class="btn btn-primary" onclick="switchTab(3)">Next Step: Cost &amp; Billing (Tab 4) &rarr;</button>
@@ -1117,7 +1160,35 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- TAB 3: COST & BILLING (WITH FOCUSED SUB-VIEW SELECTOR SO IT IS NEVER BUSY) -->
     <section id="tabPanel3" class="hidden">
-      <div class="subview-bar">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Model usage &amp; estimated cost (list price)</span>
+            <span id="modelCostBadge" class="badge badge-green">&mdash;</span>
+          </div>
+          <div id="modelScopeText" style="font-size:12px;color:var(--text-secondary);"></div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>Calls</th>
+                <th>Input</th>
+                <th>Output</th>
+                <th>Cache read</th>
+                <th>Cache write</th>
+                <th>Cache share</th>
+                <th>Est. cost (list price)</th>
+              </tr>
+            </thead>
+            <tbody id="modelUsageBody"></tbody>
+          </table>
+        </div>
+        <ul id="fleetNotes" class="fleet-notes"></ul>
+      </div>
+
+      <div class="subview-bar adv-only">
         <div style="font-size:12px;font-weight:700;color:var(--text-primary);">
           Cost &amp; Billing View (Choose a focused section):
         </div>
@@ -1131,7 +1202,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
 
       <!-- SUB-VIEW 1: COST PER HELPFUL ANSWER (CpO), BILL DIFFERENCES & CLOUD BILLING SKU TABLE -->
-      <div class="panel" id="tokenomicsCpoDriftPanel">
+      <div class="panel adv-only" id="tokenomicsCpoDriftPanel">
         <div class="panel-header">
           <div class="panel-title">
             <span>1. Cost per Helpful Answer (CpO), Why Bills Differ from Token Counts &amp; Log Matching</span>
@@ -1204,7 +1275,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
 
-      <div class="panel" id="billingReconciliationPanel">
+      <div class="panel adv-only" id="billingReconciliationPanel">
         <div class="panel-header">
           <div class="panel-title">
             <span>Cloud Billing SKU Comparison, Reserved Capacity (GSU) Advisor &amp; Platform Hosting Cost</span>
@@ -1239,7 +1310,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
 
       <!-- SUB-VIEW 2: PRICING OPTIONS, CONSUMPTION PORTFOLIO & CACHE BREAK-EVEN CALCULATOR -->
-      <div class="panel hidden" id="consumptionAndCachingPanel">
+      <div class="panel hidden adv-only" id="consumptionAndCachingPanel">
         <div class="panel-header">
           <div class="panel-title">
             <span>2. Pricing Options, Model Tiers &amp; Prompt Cache Break-Even Calculator (N*)</span>
@@ -1346,7 +1417,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
 
       <!-- SUB-VIEW 3: CODE FIXES (FIN-01..05), STEP-BY-STEP SAVINGS, @COST_GUARD & FINANCE SUMMARY -->
-      <div class="panel hidden" id="cockpitFinopsAndTcoPanel">
+      <div class="panel hidden adv-only" id="cockpitFinopsAndTcoPanel">
         <div class="panel-header">
           <div class="panel-title">
             <span>3. Code Cost Fixes (<span class="mono">FIN-01..FIN-05</span>), Step-by-Step Savings, <span class="mono">@cost_guard</span> &amp; Finance Summary</span>
@@ -1446,10 +1517,10 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
 
       <!-- SUB-VIEW 4: API SPEND LIMITS (SLIDE #30), EXTENSION OVERHEAD & TOKEN BREAKDOWN -->
-      <div class="panel hidden" id="apigeeAndExtensionsPanel">
+      <div class="panel hidden adv-only" id="apigeeAndExtensionsPanel">
         <div class="panel-header">
           <div class="panel-title">
-            <span>4. Apigee API Spend Limits (Slide #30) &amp; Tool Context Savings</span>
+            <span>4. Apigee API Spend Limits &amp; Tool Context Savings</span>
             <span class="badge badge-green">Spend Caps &bull; Automatic Traffic Pause &bull; Knowledge Catalog (7x Smaller Prompts)</span>
           </div>
           <div style="font-size:12px;color:var(--text-secondary);">
@@ -1488,7 +1559,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
 
-      <div class="panel hidden" id="tokenCategoryAlertsPanel">
+      <div class="panel hidden adv-only" id="tokenCategoryAlertsPanel">
         <div class="panel-header">
           <div class="panel-title">
             <span>Token Usage by Type &amp; Stuck Loop Alerts</span>
@@ -1530,7 +1601,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
 
-      <div class="tab-footer-nav">
+      <div class="tab-footer-nav adv-only">
         <button class="btn" onclick="switchTab(2)">&larr; Back: Testing &amp; History</button>
         <span>Step 4 of 6: Reviewed unit costs, cloud billing, and spend limits.</span>
         <button class="btn btn-primary" onclick="switchTab(4)">Next Step: Users &amp; Feedback (Tab 5) &rarr;</button>
@@ -1539,12 +1610,12 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- TAB 4: USERS, TOP SPENDERS & CUSTOMER FEEDBACK -->
     <section id="tabPanel4" class="hidden">
-      <div class="kpi-grid" id="userCentricKpis"></div>
+      <div class="kpi-grid adv-only" id="userCentricKpis"></div>
 
-      <div class="panel">
+      <div class="panel adv-only">
         <div class="panel-header">
           <div class="panel-title">
-            <span>User Groups &amp; Monthly Savings (4,000 &ndash; 10,000 Daily Users)</span>
+            <span>User Groups &amp; Monthly Savings (modeled)</span>
             <span class="badge badge-green" id="oauthGovernanceBadge">OAuth 2.0 Cross-Project Consent &amp; PDD Verified</span>
           </div>
           <div style="font-size:12px;color:var(--text-secondary);">
@@ -1574,7 +1645,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="panel">
         <div class="panel-header">
           <div class="panel-title">
-            <span>Top Users by Token Spend &amp; Satisfaction (<span class="mono">user_ldap</span>)</span>
+            <span>Top users</span>
             <span class="badge badge-blue">Per-User Spend &amp; Loop Check</span>
           </div>
           <div style="font-size:12px;color:var(--text-secondary);">
@@ -1606,14 +1677,14 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="panel">
         <div class="panel-header">
           <div class="panel-title">
-            <span>User Ratings (CSAT) &amp; Feedback Log (<span class="mono">aive_logs</span>)</span>
+            <span>Recent activity &amp; feedback</span>
             <span class="badge badge-green">BigQuery <span class="mono">aive_logs.ratings_log</span> &amp; <span class="mono">agent_usage_log</span></span>
           </div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <button class="btn" onclick="emitLiveAiveUsageEvent()">+ Log Sample Usage Event</button>
+            <button class="btn adv-only" onclick="emitLiveAiveUsageEvent()">+ Log Sample Usage Event</button>
           </div>
         </div>
-        <div class="add-param-form" style="margin-top:0;margin-bottom:12px;">
+        <div class="add-param-form adv-only" style="margin-top:0;margin-bottom:12px;">
           <div class="field-group">
             <label>User Email / LDAP</label>
             <input id="csatEmailInput" type="text" value="enriq@google.com" />
@@ -1673,7 +1744,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
 
-      <div class="tab-footer-nav">
+      <div class="tab-footer-nav adv-only">
         <button class="btn" onclick="switchTab(3)">&larr; Back: Cost &amp; Billing</button>
         <span>Step 5 of 6: Reviewed user groups, top spenders, and user feedback.</span>
         <button class="btn btn-primary" onclick="switchTab(5)">Next Step: Tools &amp; SDK (Tab 6) &rarr;</button>
@@ -1771,7 +1842,7 @@ async def handle_agent_turn(message_envelope):
         </div>
       </div>
 
-      <div class="tab-footer-nav">
+      <div class="tab-footer-nav adv-only">
         <button class="btn" onclick="switchTab(4)">&larr; Back: Users &amp; Feedback</button>
         <span>Step 6 of 6: Inspected tool token usage and @vibelift_telemetry SDK stream.</span>
         <button class="btn btn-primary" onclick="switchTab(0)">Back to Start: Gemini Enterprise Agent Fleet (Tab 1) &rarr;</button>
@@ -1780,9 +1851,38 @@ async def handle_agent_turn(message_envelope):
   </main>
 
   <script>
+    const ADVANCED_ONLY_TABS = [1, 2, 5];
+    let currentTabIndex = 6;
+    function isAdvancedMode() {
+      return !document.body.classList.contains('simple-mode');
+    }
+    function applyAdvancedMode(on) {
+      document.body.classList.toggle('simple-mode', !on);
+      const btn = document.getElementById('advancedToggleBtn');
+      if (btn) {
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        btn.innerHTML = on ? 'Advanced &#9652;' : 'Advanced &#9662;';
+      }
+      try { localStorage.setItem('vibelift.advanced', on ? '1' : '0'); } catch (e) {}
+      if (!on && ADVANCED_ONLY_TABS.indexOf(currentTabIndex) >= 0) switchTab(6);
+      notifyHostSizeChanged();
+    }
+    function toggleAdvancedMode() {
+      applyAdvancedMode(!isAdvancedMode());
+    }
+    (function initAdvancedMode() {
+      let saved = null;
+      try { saved = localStorage.getItem('vibelift.advanced'); } catch (e) {}
+      const on = saved === '1' || /[?&]advanced=1/.test(location.search);
+      document.body.classList.toggle('simple-mode', !on);
+      document.addEventListener('DOMContentLoaded', function() { applyAdvancedMode(on); });
+    })();
+
     function switchTab(tabIndex) {
-      const validTabs = [0, 1, 2, 3, 4, 5];
-      const tab = validTabs.indexOf(Number(tabIndex)) >= 0 ? Number(tabIndex) : 0;
+      const validTabs = [0, 1, 2, 3, 4, 5, 6];
+      let tab = validTabs.indexOf(Number(tabIndex)) >= 0 ? Number(tabIndex) : 6;
+      if (!isAdvancedMode() && ADVANCED_ONLY_TABS.indexOf(tab) >= 0) tab = 6;
+      currentTabIndex = tab;
       validTabs.forEach(function(i) {
         const btn = document.getElementById('tabBtn' + i);
         const panel = document.getElementById('tabPanel' + i);
@@ -1790,7 +1890,7 @@ async def handle_agent_turn(message_envelope):
         if (panel) panel.classList.toggle('hidden', tab !== i);
       });
       const banner = document.getElementById('demoSelectorBanner');
-      if (banner) banner.classList.toggle('hidden', tab === 0);
+      if (banner) banner.classList.toggle('hidden', tab === 0 || tab === 6 || tab === 3 || tab === 4);
       notifyHostSizeChanged();
     }
 
@@ -2083,6 +2183,7 @@ async def handle_agent_turn(message_envelope):
       }
 
       renderUserCentricAndDecorator(state.user_centric, state.decorator_events);
+      try { renderExecOverview(state.ge_fleet || execLastFleet, state.user_centric); } catch (e) { console.warn('overview', e); }
       renderSmeControlPlane(state);
       notifyHostSizeChanged();
     }
@@ -2173,7 +2274,7 @@ async def handle_agent_turn(message_envelope):
       if (sumBadge) {
         const passed = val.passed_count ?? 0;
         const total = val.total_checks ?? 0;
-        sumBadge.textContent = passed + '/' + total + ' Verified (' + (val.overall_status || 'VERIFIED') + ')';
+        sumBadge.textContent = (total ? (passed + '/' + total + (passed === total ? ' \u2713' : ' \u26a0')) : '\u2014');
       }
       const judgeBox = document.getElementById('telemetryValidatorJudgeBox');
       if (judgeBox) {
@@ -2794,8 +2895,8 @@ async def handle_agent_turn(message_envelope):
             el('td', 'mono', [u.total_tokens_m + 'M']),
             el('td', 'mono', [u.thinking_tokens_k + 'k']),
             el('td', 'mono', [u.background_tokens_k + 'k']),
-            el('td', 'mono', [u.cache_hit_pct + '%']),
-            el('td', 'mono', [(u.avg_csat ?? 4.9) + ' ★']),
+            el('td', 'mono', [u.cache_hit_pct == null ? '—' : u.cache_hit_pct + '%']),
+            el('td', 'mono', [u.avg_csat == null ? 'no ratings' : u.avg_csat + ' ★']),
             el('td', 'mono', ['$' + Number(u.monthly_cost_usd || 0).toFixed(2)]),
             el('td', null, [badge(st, stCls)]),
           ]));
@@ -3270,8 +3371,8 @@ async def handle_agent_turn(message_envelope):
           kpiBox.replaceChildren(
             kpiCard(
               'Active Enterprise Users (DAU)',
-              fmtInt(uc.total_active_dau || 6840),
-              'Supported Scale: ' + (uc.supported_dau_capacity || '4,000 – 10,000 DAU')
+              (uc.total_active_dau != null ? fmtInt(uc.total_active_dau) : '\u2014'),
+              'Supported Scale: ' + (uc.supported_dau_capacity || 'n/a')
             ),
             kpiCard(
               'Cost per 1k Turns (Baseline → Now)',
@@ -3319,7 +3420,7 @@ async def handle_agent_turn(message_envelope):
               el('td', null, [s.attached_agent]),
               el('td', 'mono', [fmtInt(s.calls_24h)]),
               el('td', 'mono', [s.prompt_tokens_m + 'M']),
-              el('td', 'mono', [s.cache_hit_pct + '%']),
+              el('td', 'mono', [s.cache_hit_pct == null ? '—' : s.cache_hit_pct + '%']),
               el('td', 'mono', [s.context_bloat_pct + '%']),
               el('td', null, [s.optimization_applied]),
               el('td', 'mono', [badge('$' + fmtInt(s.monthly_saved_usd) + '/mo', 'badge-green')]),
@@ -3340,7 +3441,7 @@ async def handle_agent_turn(message_envelope):
             el('td', 'mono', [ev.skill_or_mcp]),
             el('td', null, [ev.user_cohort]),
             el('td', 'mono', [ev.latency_ms + ' ms']),
-            el('td', 'mono', [ev.cache_hit_pct + '%']),
+            el('td', 'mono', [ev.cache_hit_pct == null ? '—' : ev.cache_hit_pct + '%']),
             el('td', 'mono', [ev.context_bloat_pct + '%']),
             el('td', 'mono', [ev.idle_ratio_pct + '%']),
             el('td', null, [badge(ev.status, 'badge-green')]),
@@ -3425,6 +3526,224 @@ async def handle_agent_turn(message_envelope):
       ge_traffic: 'GE assistant traffic',
     };
 
+    const EXEC_PALETTE = ['#2563eb', '#0ea5e9', '#10b981', '#f59e0b', '#8b5cf6', '#14b8a6', '#64748b', '#ef4444'];
+    let execLastFleet = null;
+
+    function hbarChart(rows, maxVal, fmt) {
+      const wrap = el('div', null, []);
+      if (!rows.length) return el('div', 'chart-empty', ['No activity recorded in this window.']);
+      const max = maxVal || Math.max.apply(null, rows.map(function(r) { return r.total; })) || 1;
+      rows.forEach(function(r) {
+        const track = el('div', 'hbar-track', []);
+        r.segments.forEach(function(sg) {
+          if (!sg.value) return;
+          const seg = el('div', 'hbar-seg', []);
+          seg.style.width = (100 * sg.value / max).toFixed(2) + '%';
+          seg.style.background = sg.color;
+          seg.title = sg.name + ': ' + fmtInt(sg.value);
+          track.appendChild(seg);
+        });
+        const lbl = el('div', 'hbar-label', [r.label]);
+        lbl.title = r.label;
+        wrap.appendChild(el('div', 'hbar-row', [lbl, track, el('div', 'hbar-val', [fmt ? fmt(r.total) : fmtInt(r.total)])]));
+      });
+      return wrap;
+    }
+
+    function donutChart(slices, centerTop, centerBottom, fmt) {
+      const total = slices.reduce(function(a, x) { return a + x.value; }, 0);
+      if (!total) return el('div', 'chart-empty', ['No data in this window.']);
+      const NS = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(NS, 'svg');
+      svg.setAttribute('viewBox', '0 0 120 120');
+      svg.setAttribute('width', '150');
+      svg.setAttribute('height', '150');
+      const r = 46, c = 2 * Math.PI * r;
+      let offset = 0;
+      const bg = document.createElementNS(NS, 'circle');
+      bg.setAttribute('cx', '60'); bg.setAttribute('cy', '60'); bg.setAttribute('r', String(r));
+      bg.setAttribute('fill', 'none'); bg.setAttribute('stroke', '#f1f5f9'); bg.setAttribute('stroke-width', '16');
+      svg.appendChild(bg);
+      slices.forEach(function(sl) {
+        if (!sl.value) return;
+        const len = c * sl.value / total;
+        const circ = document.createElementNS(NS, 'circle');
+        circ.setAttribute('cx', '60'); circ.setAttribute('cy', '60'); circ.setAttribute('r', String(r));
+        circ.setAttribute('fill', 'none'); circ.setAttribute('stroke', sl.color); circ.setAttribute('stroke-width', '16');
+        circ.setAttribute('stroke-dasharray', len.toFixed(3) + ' ' + (c - len).toFixed(3));
+        circ.setAttribute('stroke-dashoffset', (-offset).toFixed(3));
+        circ.setAttribute('transform', 'rotate(-90 60 60)');
+        const t = document.createElementNS(NS, 'title');
+        t.textContent = sl.label + ': ' + (fmt ? fmt(sl.value) : fmtInt(sl.value));
+        circ.appendChild(t);
+        svg.appendChild(circ);
+        offset += len;
+      });
+      [[centerTop, '58', '15', '700', '#0f172a'], [centerBottom, '74', '8.5', '500', '#475569']].forEach(function(cfg) {
+        const tx = document.createElementNS(NS, 'text');
+        tx.setAttribute('x', '60'); tx.setAttribute('y', cfg[1]); tx.setAttribute('text-anchor', 'middle');
+        tx.setAttribute('font-size', cfg[2]); tx.setAttribute('font-weight', cfg[3]); tx.setAttribute('fill', cfg[4]);
+        tx.textContent = cfg[0];
+        svg.appendChild(tx);
+      });
+      const legend = el('div', 'donut-legend', []);
+      slices.forEach(function(sl) {
+        const sw = el('i', null, []);
+        sw.style.background = sl.color;
+        const pct = (100 * sl.value / total).toFixed(sl.value / total < 0.1 ? 1 : 0) + '%';
+        legend.appendChild(el('div', 'donut-legend-row', [sw, el('span', null, [sl.label]),
+          el('span', 'v', [(fmt ? fmt(sl.value) : fmtInt(sl.value)) + ' · ' + pct])]));
+      });
+      const box = el('div', 'donut-wrap', []);
+      box.appendChild(svg);
+      box.appendChild(legend);
+      return box;
+    }
+
+    function renderExecOverview(fleet, uc) {
+      if (fleet && typeof fleet === 'object' && Array.isArray(fleet.agents)) execLastFleet = fleet;
+      fleet = execLastFleet;
+      const headline = document.getElementById('execHeadline');
+      if (!headline) return;
+      if (!fleet) return;
+      const agents = fleet.agents || [];
+      const totals = fleet.totals || {};
+      const win = windowLabel(fleet.window_hours);
+      const mu = fleet.model_usage || {};
+      const muTotals = mu.totals || {};
+      const models = (mu.models || []).slice();
+      const m = function(a) { return a.metrics || {}; };
+      // One runtime can be registered as several GE agents; group so metrics are counted once.
+      const runtimeKey = function(a) {
+        const b = a.backend || {};
+        if (b.kind === 'cloud_run' && b.service) return 'cloud_run:' + b.service;
+        if (b.resource || b.url) return (b.kind || '') + ':' + (b.resource || b.url);
+        return 'agent:' + (a.resource_name || a.agent_id);
+      };
+      const runtimes = [];
+      const byKey = {};
+      agents.forEach(function(a) {
+        const k = runtimeKey(a);
+        if (!byKey[k]) { byKey[k] = {agent: a, names: []}; runtimes.push(byKey[k]); }
+        const nm = a.display_name || a.agent_id;
+        if (byKey[k].names.indexOf(nm) < 0) byKey[k].names.push(nm);
+        byKey[k].count = (byKey[k].count || 0) + 1;
+      });
+      const rtLabel = function(rt) {
+        return rt.names.join(' / ') + (rt.count > 1 ? ' (' + rt.count + ' registrations)' : '');
+      };
+      const active = agents.filter(function(a) { return Number(m(a).requests || 0) > 0 || Number(m(a).llm_calls || 0) > 0; });
+      const req = Number(totals.requests || 0), e4 = Number(totals.errors_4xx || 0), e5 = Number(totals.errors_5xx || 0);
+      const spend = muTotals.est_cost_usd;
+      const users = ((uc && uc.power_users_ldap) || []);
+      const people = users.filter(function(u) { return String(u.status || '').indexOf('HUMAN') >= 0; });
+      const sas = users.filter(function(u) { return String(u.status || '').indexOf('SERVICE') >= 0; });
+
+      headline.replaceChildren(
+        el('strong', null, [fmtInt(totals.enabled) + ' of ' + fmtInt(totals.agents) + ' agents enabled']),
+        ' · ' + fmtInt(active.length) + ' received traffic, handling ' + fmtInt(req) + ' requests ' +
+        (e5 ? 'with ' + fmtInt(e5) + ' server error' + (e5 === 1 ? '' : 's') : 'with no server errors') +
+        '. Estimated model spend: ' + (spend == null ? 'n/a' : fmtUsd(spend)) + '.',
+        el('span', 'muted', ['Project ' + (fleet.project_id || '—') + ' · ' + win + ' · updated ' +
+          (fleet.generated_at ? new Date(fleet.generated_at).toLocaleTimeString() : '—') +
+          ' · spend is tokens × Vertex AI list price, not your invoice'])
+      );
+
+      const kpis = document.getElementById('execKpis');
+      if (kpis) {
+        kpis.replaceChildren(
+          kpiCard('Agents enabled', fmtInt(totals.enabled) + ' / ' + fmtInt(totals.agents), fmtInt(active.length) + ' with traffic · ' + win),
+          kpiCard('Requests', fmtInt(req), (req ? (100 * e5 / req).toFixed(2) : '0.00') + '% server errors · ' + fmtInt(e4) + ' rejected (4xx)'),
+          kpiCard('Est. model spend', spend == null ? '—' : fmtUsd(spend), fmtInt(muTotals.invocations) + ' model calls · list price'),
+          kpiCard('Active people', users.length ? fmtInt(people.length) : '—',
+            users.length ? ('+ ' + fmtInt(sas.length) + ' service accounts · 7 days') : 'loading from BigQuery…')
+        );
+      }
+
+      // Requests by agent (stacked ok / 4xx / 5xx), top 8
+      const reqRows = runtimes.map(function(rt) {
+        const a = rt.agent;
+        const mm = m(a);
+        const r = Number(mm.requests || 0), x4 = Number(mm.errors_4xx || 0), x5 = Number(mm.errors_5xx || 0);
+        return {label: rtLabel(rt), total: r, segments: [
+          {name: 'Successful', value: Math.max(0, r - x4 - x5), color: '#2563eb'},
+          {name: 'Rejected (4xx)', value: x4, color: '#f59e0b'},
+          {name: 'Server error (5xx)', value: x5, color: '#ef4444'},
+        ]};
+      }).filter(function(r) { return r.total > 0; }).sort(function(a, b) { return b.total - a.total; }).slice(0, 8);
+      const reqBox = document.getElementById('execChartRequests');
+      if (reqBox) reqBox.replaceChildren(hbarChart(reqRows));
+      const srcReq = document.getElementById('execSrcRequests');
+      if (srcReq) srcReq.textContent = 'Source: Cloud Monitoring (Cloud Run + Agent Engine) · ' + win +
+        (runtimes.length - reqRows.length > 0 ? ' · ' + (runtimes.length - reqRows.length) + ' agents with no requests not shown' : '');
+
+      // Spend by model (donut)
+      models.sort(function(a, b) { return Number(b.est_cost_usd || 0) - Number(a.est_cost_usd || 0); });
+      const spendSlices = models.filter(function(x) { return Number(x.est_cost_usd || 0) > 0; }).map(function(x, i) {
+        return {label: x.model, value: Number(x.est_cost_usd), color: EXEC_PALETTE[i % EXEC_PALETTE.length]};
+      });
+      const spendBox = document.getElementById('execChartSpend');
+      if (spendBox) spendBox.replaceChildren(donutChart(spendSlices, spend == null ? '—' : fmtUsd(spend), win, function(v) { return fmtUsd(v); }));
+      const srcSpend = document.getElementById('execSrcSpend');
+      if (srcSpend) {
+        const noCard = (muTotals.models_without_rate_card || []);
+        srcSpend.textContent = 'Source: Vertex AI model usage metrics (Cloud Monitoring) × published list price · ' + win +
+          (noCard.length ? ' · no price on file for: ' + noCard.join(', ') : '');
+      }
+
+      // Fleet mix by type (donut)
+      const typeNames = {ADK: 'ADK (code)', A2A: 'A2A', LOW_CODE: 'No-code', MANAGED: 'Google-managed'};
+      const byType = totals.by_type || {};
+      const mixSlices = Object.keys(byType).sort(function(a, b) { return byType[b] - byType[a]; }).map(function(k, i) {
+        return {label: typeNames[k] || k, value: Number(byType[k] || 0), color: EXEC_PALETTE[i % EXEC_PALETTE.length]};
+      });
+      const mixBox = document.getElementById('execChartMix');
+      if (mixBox) mixBox.replaceChildren(donutChart(mixSlices, fmtInt(totals.agents), 'agents'));
+
+      // Most active users
+      const userRows = users.slice().sort(function(a, b) { return Number(b.sessions_7d || 0) - Number(a.sessions_7d || 0); })
+        .slice(0, 6).map(function(u) {
+          const human = String(u.status || '').indexOf('HUMAN') >= 0;
+          const v = Number(u.sessions_7d || 0);
+          return {label: u.user_ldap || u.user_email || '—', total: v,
+            segments: [{name: human ? 'Person' : 'Service account', value: v, color: human ? '#10b981' : '#94a3b8'}]};
+        });
+      const usersBox = document.getElementById('execChartUsers');
+      if (usersBox) usersBox.replaceChildren(users.length ? hbarChart(userRows) :
+        el('div', 'chart-empty', ['Loading users from BigQuery… (demo users are never shown in live mode)']));
+
+      // Needs attention: rules over the live payload only
+      const items = [];
+      runtimes.forEach(function(rt) {
+        const a = rt.agent;
+        const mm = m(a);
+        if (Number(mm.errors_5xx || 0) > 0) items.push({sev: 2, text: rtLabel(rt) + ': ' + fmtInt(mm.errors_5xx) + ' server error(s) (5xx) ' + win + '.'});
+        const r = Number(mm.requests || 0), x4 = Number(mm.errors_4xx || 0);
+        if (r >= 20 && x4 / r > 0.2) items.push({sev: 1, text: rtLabel(rt) + ': ' + Math.round(100 * x4 / r) + '% of requests rejected (4xx). Usually auth or permission failures; check callers.'});
+      });
+      const idle = agents.filter(function(a) { return a.state === 'ENABLED' && m(a).requests === 0 && !Number(m(a).llm_calls || 0); });
+      if (idle.length) items.push({sev: 0, text: idle.length + ' enabled agent(s) had zero requests ' + win + ': ' +
+        idle.slice(0, 3).map(function(a) { return a.display_name || a.agent_id; }).join(', ') + (idle.length > 3 ? '…' : '') + '.'});
+      const disabled = agents.filter(function(a) { return a.state && a.state !== 'ENABLED'; });
+      if (disabled.length) items.push({sev: 0, text: disabled.length + ' agent(s) are disabled or private.'});
+      const noCard = (muTotals.models_without_rate_card || []);
+      if (noCard.length) items.push({sev: 1, text: 'Spend for ' + noCard.join(', ') + ' is not included (no list price on file).'});
+      (fleet.errors || []).slice(0, 2).forEach(function(er) { items.push({sev: 1, text: 'Data source warning: ' + String(er)}); });
+      items.sort(function(a, b) { return b.sev - a.sev; });
+      const att = document.getElementById('execAttention');
+      if (att) {
+        const colors = ['#94a3b8', '#f59e0b', '#ef4444'];
+        att.replaceChildren();
+        if (!items.length) att.appendChild(el('li', null, [el('span', 'sev-dot', []), 'Nothing needs attention right now.']));
+        items.slice(0, 6).forEach(function(it) {
+          const dot = el('span', 'sev-dot', []);
+          dot.style.background = colors[it.sev];
+          att.appendChild(el('li', null, [dot, el('span', null, [it.text])]));
+        });
+      }
+      notifyHostSizeChanged();
+    }
+
     function kpiCard(label, value, sub) {
       return el('div', 'kpi-card', [
         el('div', 'kpi-label', [label]),
@@ -3447,6 +3766,7 @@ async def handle_agent_turn(message_envelope):
     }
 
     function renderFleet(fleet) {
+      try { renderExecOverview(fleet, currentState ? currentState.user_centric : null); } catch (e) { console.warn('overview', e); }
       if (!fleet || !Array.isArray(fleet.agents)) return;
       lastFleet = fleet;
       if (fleet.window_hours) {

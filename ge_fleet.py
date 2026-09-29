@@ -129,6 +129,21 @@ def parse_bool(value: Any) -> bool:
   return str(value or '').strip().lower() in ('1', 'true', 'yes', 'on')
 
 
+def runtime_backend_key(agent: dict[str, Any]) -> str:
+  """Returns a key identifying the runtime serving an agent (shared runtimes share a key)."""
+  backend = agent.get('backend') or {}
+  kind = str(backend.get('kind') or 'unknown')
+  if kind == 'cloud_run' and backend.get('service'):
+    # Metrics are queried per service name in the monitored project, and the same
+    # service can be referenced by both its hashed and numbered run.app URLs.
+    return f"cloud_run:{backend['service']}"
+  if kind == 'agent_engine' and backend.get('resource'):
+    return f"agent_engine:{backend['resource']}"
+  if backend.get('resource') or backend.get('url'):
+    return f"{kind}:{backend.get('resource') or backend.get('url')}"
+  return f"agent:{agent.get('resource_name') or agent.get('agent_id')}"
+
+
 def cloud_run_service_from_url(url: str) -> dict[str, str] | None:
   """Derives the Cloud Run service (and project/region when encoded) from a run.app URL."""
   host = (urllib.parse.urlparse(url).hostname or '').lower()
@@ -806,17 +821,28 @@ class GeminiEnterpriseFleetService:
       self._apply_telemetry(agent, results)
 
     telemetry_agents = [a for a in agents if a['metrics']['requests'] is not None]
+    # The same runtime (Cloud Run service / Agent Engine) can be registered as an
+    # agent in several GE engines; its metrics must only be counted once.
+    unique_runtime_agents = []
+    seen_backends: set[str] = set()
+    for a in agents:
+      backend_key = runtime_backend_key(a)
+      if backend_key in seen_backends:
+        continue
+      seen_backends.add(backend_key)
+      unique_runtime_agents.append(a)
     totals: dict[str, Any] = {
         'agents': len(agents),
         'enabled': sum(1 for a in agents if a['state'] == 'ENABLED'),
         'by_type': dict(collections.Counter(a['type'] for a in agents)),
         'with_runtime_telemetry': len(telemetry_agents),
+        'unique_runtimes': len(unique_runtime_agents),
     }
     for key in ('requests', 'errors_4xx', 'errors_5xx', 'llm_calls', 'input_tokens', 'output_tokens', 'cached_tokens', 'conversations'):
-      values = [a['metrics'][key] for a in agents if a['metrics'].get(key) is not None]
+      values = [a['metrics'][key] for a in unique_runtime_agents if a['metrics'].get(key) is not None]
       totals[key] = sum(values) if values else None
     for fkey in ('vcpu_hours', 'memory_gib_hours', 'billable_instance_hours'):
-      fvals = [float(a['metrics'][fkey]) for a in agents if a['metrics'].get(fkey) is not None]
+      fvals = [float(a['metrics'][fkey]) for a in unique_runtime_agents if a['metrics'].get(fkey) is not None]
       totals[fkey] = round(sum(fvals), 4) if fvals else None
     totals['error_rate_pct'] = (
         round((totals['errors_5xx'] or 0) / totals['requests'] * 100, 2) if totals.get('requests') else None)

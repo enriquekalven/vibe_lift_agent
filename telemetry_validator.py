@@ -105,20 +105,30 @@ def validate_dashboard_state(
       evidence=f'Verified {len(fleet_agents)} registered agents matching totals.agents={reported_agent_count}.',
   )
 
-  sum_calls = sum(
-      int((a.get('telemetry') or {}).get('calls') or 0)
-      for a in fleet_agents
-      if isinstance(a, Mapping)
-  )
-  tot_calls = int(fleet_totals.get('calls') or 0)
+  # Recompute request volume from per-agent metrics, counting each runtime once.
+  try:
+    from ge_fleet import runtime_backend_key  # pylint: disable=g-import-not-at-top
+  except ImportError:  # pragma: no cover
+    runtime_backend_key = lambda a: str(a.get('agent_id'))
+  seen_rt: set[str] = set()
+  sum_calls = 0
+  for a in fleet_agents:
+    if not isinstance(a, Mapping):
+      continue
+    rk = runtime_backend_key(dict(a))
+    if rk in seen_rt:
+      continue
+    seen_rt.add(rk)
+    sum_calls += int(((a.get('metrics') or {}).get('requests')) or 0)
+  tot_calls = int(fleet_totals.get('requests') or 0)
   _add_check(
       check_id='TAB1-CALL-VOLUME-SUM',
       tab='Tab 1: Gemini Enterprise Agent Fleet',
-      metric_or_panel='ge_fleet.totals.calls vs sum(agent.telemetry.calls)',
+      metric_or_panel='ge_fleet.totals.requests vs sum(agent.metrics.requests), one per runtime',
       passed=(sum_calls == tot_calls),
       provenance='OBSERVED_GCP_TELEMETRY',
       source_dataset='monitoring.googleapis.com/v3 (reasoning_engine + cloud_run + publisher)',
-      evidence=f'Agent call sum ({sum_calls}) matches fleet total ({tot_calls}).',
+      evidence=f'Per-runtime request sum ({sum_calls}) vs fleet total ({tot_calls}) across {len(seen_rt)} runtimes.',
   )
 
   # --- TAB 2: Goals & Metrics ---
@@ -214,19 +224,31 @@ def validate_dashboard_state(
       for u in power_users
   )
   if live_mode:
-    leaked_mock_ldaps = sorted(set(user_ldaps) & BANNED_MOCK_LDAPS_IN_LIVE_MODE)
-    no_mock_users = len(leaked_mock_ldaps) == 0 and len(user_ldaps) > 0
+    # Provenance check, not a name blocklist: every row must carry a live status
+    # and a BigQuery source tag. Seed/demo rows have neither.
+    live_statuses = ('LIVE_HUMAN_PRINCIPAL', 'SERVICE_ACCOUNT_TELEMETRY')
+    ungrounded = sorted(
+        str(u.get('user_ldap') or '?')
+        for u in power_users
+        if isinstance(u, Mapping)
+        and not (
+            str(u.get('status') or '') in live_statuses
+            and (u.get('source_tables') or '[' in str(u.get('department') or ''))
+        )
+    )
+    no_mock_users = len(ungrounded) == 0 and len(user_ldaps) > 0
     _add_check(
         check_id='TAB5-NO-FAKE-POWER-USERS',
         tab='Tab 5: Users & Feedback',
         metric_or_panel='user_centric.power_users_ldap',
-        passed=no_mock_users and has_defined_csat_and_cost,
+        passed=no_mock_users,
         provenance='OBSERVED_GCP_TELEMETRY',
         source_dataset='project-maui.ds_ge_audit_raw.cloudaudit_googleapis_com_data_access + sre_triage_agent_telemetry',
         evidence=(
-            f'Verified 100% real GCP principals ({", ".join(user_ldaps)}); zero mocked personas.'
+            f'All {len(user_ldaps)} users trace to BigQuery audit/OTel rows ({", ".join(user_ldaps)}).'
             if no_mock_users
-            else f'FLAGGED: Mocked LDAPs found in live mode: {leaked_mock_ldaps}'
+            else (f'FLAGGED: users without BigQuery provenance: {ungrounded}'
+                  if ungrounded else 'FLAGGED: no users loaded from BigQuery yet.')
         ),
     )
   else:
@@ -393,7 +415,10 @@ def run_llm_as_judge_audit(
               'user_ldap': u.get('user_ldap'),
               'user_email': u.get('user_email'),
               'sessions_7d': u.get('sessions_7d'),
-              'top_task_type': u.get('top_task_type'),
+              'status': u.get('status'),
+              'source_tables': u.get('source_tables') or u.get('department'),
+              'avg_csat': u.get('avg_csat'),
+              'cache_hit_pct': u.get('cache_hit_pct'),
           }
           for u in (uc.get('power_users_ldap') or [])
           if isinstance(u, Mapping)
@@ -412,7 +437,8 @@ def run_llm_as_judge_audit(
       + project_id
       + '`.\n'
       'Verify that:\n'
-      '1. No fabricated demo users (such as sbahirat, russellmyers, rseshadri, sloona) appear when in live GCP mode.\n'
+      '1. Every user row carries BigQuery provenance (status LIVE_HUMAN_PRINCIPAL/SERVICE_ACCOUNT_TELEMETRY '
+      'and a source table); per-user metrics that are not measured must be null, not invented constants.\n'
       '2. Fleet totals, BigQuery audit principals, and OTel GenAI token spans are grounded in real telemetry.\n'
       '3. What-If simulators and rate-card projections are clearly distinguished from observed telemetry.\n\n'
       'Respond ONLY with a valid JSON object matching this exact schema:\n'

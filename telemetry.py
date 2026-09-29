@@ -840,10 +840,15 @@ def log_csat_rating(
   return entry
 
 
-def get_recent_aive_logs() -> dict[str, list[dict[str, object]]]:
-  """Returns recent `aive_logs` (`agent_usage_log` and `ratings_log`) records."""
+def get_recent_aive_logs(live_only: bool = False) -> dict[str, list[dict[str, object]]]:
+  """Returns recent `aive_logs` (`agent_usage_log` and `ratings_log`) records.
+
+  Args:
+    live_only: When True (live GCP mode), never return seed/demo rows; if live
+      BigQuery rows have not arrived yet, only runtime-ingested rows are returned.
+  """
   with _AIVE_LOGS_LOCK:
-    if _LIVE_GCP_AIVE_USAGE_LOGS is not None or _LIVE_GCP_AIVE_RATINGS_LOGS is not None:
+    if live_only or _LIVE_GCP_AIVE_USAGE_LOGS is not None or _LIVE_GCP_AIVE_RATINGS_LOGS is not None:
       return {
           'usage_logs': [dict(x) for x in _RUNTIME_AIVE_USAGE_LOGS] + [dict(x) for x in (_LIVE_GCP_AIVE_USAGE_LOGS or [])],
           'ratings_logs': [dict(x) for x in _RUNTIME_AIVE_RATINGS_LOGS] + [dict(x) for x in (_LIVE_GCP_AIVE_RATINGS_LOGS or [])],

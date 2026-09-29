@@ -175,7 +175,18 @@ class VibeLiftRuntimeController:
     support_events = self.gcp_telemetry.fetch_gemini_enterprise_support_telemetry(
         limit=6, non_blocking=fast_mcp
     )
-    if not support_events:
+    live_gcp = self._is_live_gcp()
+    if live_gcp:
+      # Never show demo personas in live mode: if BigQuery principals have not
+      # loaded yet, show an empty table with an explicit loading status.
+      live_bq = self.optimizer._live_bq_insights
+      if not (isinstance(live_bq, dict) and live_bq.get('power_users_ldap')):
+        user_centric = dict(user_centric)
+        user_centric['power_users_ldap'] = []
+        user_centric['collection_mode'] = (
+            'LIVE GCP: BigQuery principals still loading (no demo data shown)'
+        )
+    if not support_events and not live_gcp:
       support_events = [
           {
               'event_timestamp': '2026-09-29T04:12:18Z',
@@ -228,7 +239,7 @@ class VibeLiftRuntimeController:
         'tokenomics_cockpit': tokenomics_cockpit,
         'persona_playbooks': persona_playbooks,
         'what_if_default': what_if_default,
-        'aive_logs': telemetry.get_recent_aive_logs(),
+        'aive_logs': telemetry.get_recent_aive_logs(live_only=live_gcp),
         'nl2sql_default': nl2sql_default,
         'decorator_events': telemetry.get_recent_decorator_events(),
         'summary': turn_summary_dict,
