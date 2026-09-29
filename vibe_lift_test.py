@@ -926,6 +926,573 @@ class DeploymentHardeningTest(unittest.TestCase):
     finally:
       server._global_controller.reset()
 
+  def test_sme_one_pane_control_plane_endpoints_and_ui_panels(self) -> None:
+    from fastapi.testclient import TestClient
+    from app import fast_api_app
+    import ui_template
+
+    client = TestClient(fast_api_app.app)
+    try:
+      state = client.get('/api/state').json()
+      self.assertIn('billing_reconciliation', state)
+      self.assertIn('what_if_default', state)
+      self.assertIn('otel_catalog', state)
+      self.assertIn('aive_logs', state)
+      self.assertIn('nl2sql_default', state)
+
+      br = state['billing_reconciliation']
+      self.assertEqual(br['unit_economics']['north_star_metric'], 'Cost per CSAT-Positive Resolved Session')
+      self.assertEqual(br['unit_economics']['unit_cost_reduction_pct'], 95.2)
+      self.assertGreaterEqual(len(br['sku_ledger']), 5)
+      self.assertIn('gsu_advisor', br)
+
+      # Test /api/nl2sql endpoint
+      nl_resp = client.post('/api/nl2sql', json={'question': 'Show token category breakdown for thinking vs context bloat'})
+      self.assertEqual(nl_resp.status_code, 200)
+      nl_data = nl_resp.json()
+      self.assertIn('SELECT', nl_data['generated_sql'])
+      self.assertGreaterEqual(len(nl_data['rows']), 1)
+
+      # Test /api/what_if_simulate endpoint
+      sim_resp = client.post('/api/what_if_simulate', json={
+          'model_tier': 'gemini-2.5-flash',
+          'thinking_budget_tok': 512,
+          'history_window_turns': 4,
+          'traffic_canary_pct': 25,
+      })
+      self.assertEqual(sim_resp.status_code, 200)
+      sim_data = sim_resp.json()
+      self.assertEqual(sim_data['traffic_canary_pct'], 25)
+      self.assertIn('gcloud run services update-traffic', sim_data['canary_rollout_command'])
+      self.assertIn('thinking_budget_tokens: 512', sim_data['gitops_diff'])
+
+      # Test /api/csat_rating endpoint
+      csat_resp = client.post('/api/csat_rating', json={
+          'user_email': 'sme_reviewer@google.com',
+          'session_id': '6446120131357637190',
+          'rating': 5,
+          'feedback_text': 'SME one-pane control plane verified.',
+      })
+      self.assertEqual(csat_resp.status_code, 200)
+      csat_state = csat_resp.json()
+      self.assertEqual(csat_state['aive_logs']['ratings_logs'][0]['user_ldap'], 'sme_reviewer')
+      self.assertEqual(csat_state['aive_logs']['ratings_logs'][0]['rating'], 5)
+
+      # Test /api/aive_log endpoint
+      aive_resp = client.post('/api/aive_log', json={
+          'user_email': 'sme_reviewer@google.com',
+          'task_type': 'CANARY_TRAFFIC_SPLIT_AUDIT',
+          'total_tokens': 16200,
+          'latency_ms': 495.0,
+      })
+      self.assertEqual(aive_resp.status_code, 200)
+      aive_state = aive_resp.json()
+      self.assertEqual(aive_state['aive_logs']['usage_logs'][0]['task_type'], 'CANARY_TRAFFIC_SPLIT_AUDIT')
+
+      # Verify UI HTML includes all SME One-Pane-of-Glass panels
+      html = ui_template.render_dashboard_html(initial_state=state)
+      for panel_id in (
+          'smeExecutivePulseBar',
+          'nl2sqlCopilotDrawer',
+          'watchOutAlarmsContainer',
+          'otelCatalogTableBody',
+          'whatIfSimulatorPanel',
+          'cacheForensicsBody',
+          'tokenCategoryBody',
+          'runawayAlertsBody',
+          'billingSkuBody',
+          'gsuAdvisorBox',
+          'powerUsersBody',
+          'vocRatingsBody',
+          'aiveUsageBody',
+          'tokenomicsCpoDriftPanel',
+          'consumptionAndCachingPanel',
+          'apigeeAndExtensionsPanel',
+          'cockpitFinopsAndTcoPanel',
+          'cpoDriftKpis',
+          'cpoByAgentBody',
+          'driftDriversBody',
+          'attributionJoinBody',
+          'meteringCategoriesBody',
+          'routingLanesBody',
+          'modelPortfolioBody',
+          'cacheModelBreakEvenBody',
+          'apigeePoliciesBody',
+          'extensionOverheadBody',
+          'cockpitFindingsBody',
+          'cockpitWaterfallBody',
+          'costGuardBox',
+          'cfoTcoKpiBox',
+          'maturityProgressionBody',
+          'pnlAllocationBody',
+          'opexTradeoffBody',
+      ):
+        self.assertIn(panel_id, html, f'Missing SME Control Plane element #{panel_id} in rendered HTML')
+    finally:
+      server._global_controller.reset()
+
+  def test_tokenomics_2026_and_cockpit_finops_ledger_and_recompute(self) -> None:
+    from fastapi.testclient import TestClient
+    from app import fast_api_app
+
+    client = TestClient(fast_api_app.app)
+    try:
+      resp = client.get('/api/tokenomics_cockpit')
+      self.assertEqual(resp.status_code, 200)
+      tc = resp.json()
+
+      # 1. Verify True Cost per Outcome (CpO) Ledger
+      cpo = tc['cpo']
+      self.assertIn('CpO =', cpo['formula'])
+      self.assertEqual(len(cpo['agents']), 3)
+      self.assertGreater(cpo['fleet_baseline_cpo_usd'], cpo['fleet_optimized_cpo_usd'])
+      self.assertGreater(cpo['fleet_cpo_reduction_pct'], 75.0)
+      self.assertIn('78.4%', cpo['pareto_outlier_rule'])
+
+      # 2. Verify Token-to-Spend Drift & Zero Unattributed Variance
+      drift = tc['drift']
+      self.assertEqual(len(drift['drift_drivers']), 5)
+      self.assertEqual(
+          [d['driver_id'] for d in drift['drift_drivers']],
+          ['D1', 'D2', 'D3', 'D4', 'D5'],
+      )
+      self.assertEqual(drift['unattributed_usd'], 0.0)
+      self.assertAlmostEqual(
+          drift['expected_naive_token_spend_usd']
+          + drift['remediated_drift_total_usd']
+          + drift['unattributed_usd'],
+          drift['actual_reconciled_invoice_usd'],
+          places=2,
+      )
+
+      # 3. Verify 3-Way User-Level Attribution Join
+      attr = tc['attribution_join']
+      self.assertEqual(len(attr['sources']), 3)
+      self.assertIn('JOIN', attr['join_sql'])
+      self.assertIn('gcp_billing_export_resource_v1', attr['join_sql'])
+
+      # 4. Verify 4 Metering Categories, 6 Routing Lanes (with † Pre-GA markers) & 4-Tier Portfolio
+      mc = tc['metering_and_consumption']
+      self.assertEqual(len(mc['categories']), 4)
+      self.assertEqual(len(mc['routing_lanes']), 6)
+      pre_ga_lanes = [l['lane_name'] for l in mc['routing_lanes'] if '†' in l['lane_name']]
+      self.assertGreaterEqual(len(pre_ga_lanes), 2)
+      self.assertEqual(len(mc['model_portfolio_tiers']), 4)
+
+      # 5. Verify Explicit vs. Implicit Context Cache Storage Break-Even Formula
+      caching = tc['caching']
+      self.assertAlmostEqual(caching['flash_break_even_calls_per_hr'], 4.7, places=1)
+      self.assertAlmostEqual(caching['pro_break_even_calls_per_hr'], 5.0, places=1)
+      self.assertEqual(len(caching['modes_table']), 3)
+
+      # 6. Verify Apigee AI Gateway (Deck 1 Slide #30 g3ee7e8b2bb8_1_3597) & Extension Overhead
+      ge = tc['gateway_and_extensions']
+      self.assertEqual(len(ge['apigee_policies']), 7)
+      self.assertEqual(len(ge['extension_overhead']), 5)
+      kc_patterns = [p for p in ge['extension_overhead'] if 'Knowledge Catalog' in p['extension_type']]
+      self.assertEqual(len(kc_patterns), 1)
+      self.assertIn('7x token reduction', kc_patterns[0]['finops_recommendation'])
+
+      # 7. Verify CFO Enterprise AI TCO (30/70 Split), Maturity (CRAWL->WALK->RUN) & P&L Allocation
+      tco_pnl = tc['tco_and_pnl']
+      self.assertEqual(tco_pnl['visible_tech_share_pct'], 30.0)
+      self.assertEqual(tco_pnl['hidden_enterprise_share_pct'], 70.0)
+      self.assertEqual(len(tco_pnl['maturity_progression']), 3)
+      self.assertEqual(len(tco_pnl['pnl_accounting']), 3)
+
+      # 8. Verify AgentOps Cockpit FinOps Findings (FIN-01..FIN-05), Multiplicative Waterfall & @cost_guard
+      cf = tc['cockpit_finops']
+      self.assertEqual(
+          [f['rule_id'] for f in cf['auditor_findings']],
+          ['FIN-01', 'FIN-02', 'FIN-03', 'FIN-04', 'FIN-05'],
+      )
+      wf = cf['waterfall']
+      self.assertEqual(wf['baseline_monthly_usd'], 142000.0)
+      self.assertLess(wf['optimized_monthly_usd'], 15000.0)
+      self.assertGreater(wf['total_reduction_pct'], 90.0)
+      self.assertEqual(len(wf['steps']), 5)
+      self.assertIn('@cost_guard', cf['cost_guard']['decorator_snippet'])
+      self.assertEqual(len(cf['cost_guard']['opex_tradeoff_matrix']), 5)
+
+      # 9. Verify POST /api/recompute_finops dynamically updates Caching & Routing Lanes
+      recomp_resp = client.post('/api/recompute_finops', json={
+          'calls_per_hr': 36.0,
+          'prefix_tokens': 32000,
+          'deferred_share_pct': 50.0,
+          'fsp_commit_years': 3,
+      })
+      self.assertEqual(recomp_resp.status_code, 200)
+      recomp_body = recomp_resp.json()
+      recomp_data = recomp_body.get('tokenomics_cockpit') or recomp_body.get('result') or recomp_body
+      self.assertEqual(recomp_data['assumptions']['calls_per_hr'], 36.0)
+      self.assertGreater(
+          recomp_data['caching']['hourly_cost_comparison']['monthly_prefix_savings_usd'],
+          caching['hourly_cost_comparison']['monthly_prefix_savings_usd'],
+      )
+    finally:
+      server._global_controller.reset()
+
+  def test_ast_finops_scanner_detects_fin_01_through_fin_05(self) -> None:
+    import alpha_evolve_optimizer
+
+    long_prompt = 'STATIC_ENTERPRISE_SYSTEM_PROMPT_' * 60  # > 1500 chars without ContextCacheConfig -> FIN-02
+    sample_unoptimized_code = f'''
+from tenacity import retry, wait_fixed
+
+SYSTEM_PROMPT = "{long_prompt}"
+
+@retry(wait=wait_fixed(1))
+def handle_request(client, filings, retriever):
+    # FIN-05: top_k > 20
+    chunks = retriever.retrieve(query="sec", top_k=50)
+    # FIN-03: Pro model with response_schema
+    cls_resp = client.models.generate_content(model="gemini-2.5-pro", contents="classify", response_schema= dict)
+    # FIN-01: generate_content inside loop
+    for doc in filings:
+        resp = client.models.generate_content(model="gemini-2.5-pro", contents=doc)
+    return resp
+'''
+    findings = alpha_evolve_optimizer.scan_python_code_for_finops_findings(
+        sample_unoptimized_code, filename='unoptimized_agent.py'
+    )
+    detected_codes = {f['rule_id'] for f in findings}
+    for expected_code in ('FIN-01', 'FIN-02', 'FIN-03', 'FIN-04', 'FIN-05'):
+      self.assertIn(
+          expected_code,
+          detected_codes,
+          f'AST scanner failed to detect {expected_code} in sample unoptimized agent code',
+      )
+
+  def test_zero_ai_fluff_buzzwords_across_ui_and_optimizer(self) -> None:
+    import pathlib
+    import re
+
+    banned_buzzwords = (
+        'synergy',
+        'magic',
+        'self-healing',
+        'self-healed',
+        'auto-healed',
+        'autonomous',
+        'hyper-scale',
+        'seamless',
+        'revolutionary',
+        'genome',
+    )
+    pattern = re.compile(r'\b(' + '|'.join(re.escape(w) for w in banned_buzzwords) + r')\b', re.IGNORECASE)
+    repo_dir = pathlib.Path(__file__).resolve().parent
+    for fname in ('ui_template.py', 'alpha_evolve_optimizer.py'):
+      text = (repo_dir / fname).read_text(encoding='utf-8')
+      matches = pattern.findall(text)
+      self.assertEqual(
+          matches,
+          [],
+          f'Found banned AI fluff buzzwords {matches} in {fname}',
+      )
+
+  def test_all_js_dom_ids_exist_in_rendered_html_and_all_state_keys_surfaced(self) -> None:
+    import ui_template
+
+    state = server._global_controller.get_state_payload(fast_mcp=True)
+    html = ui_template.render_dashboard_html(initial_state=state)
+    html_Without_scripts = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL)
+    html_ids = set(re.findall(r'\bid=["\']([^"\']+)["\']', html_Without_scripts))
+
+    scripts = '\n'.join(re.findall(r'<script[^>]*>(.*?)</script>', html, flags=re.DOTALL))
+    js_referenced_ids = set(re.findall(r'getElementById\(\s*[\'"]([^\'"]+)[\'"]\s*\)', scripts))
+
+    missing_in_html = sorted(js_referenced_ids - html_ids)
+    self.assertEqual(
+        missing_in_html,
+        [],
+        f'JS getElementById() references DOM IDs missing from HTML markup: {missing_in_html}',
+    )
+
+    # Verify previously unrendered /api/state keys and interactive controls have dedicated DOM containers
+    for required_dom_id in (
+        'smePersonaLensBar',
+        'smePersonaPlaybookCard',
+        'workflowStepsRibbon',
+        'turnTrajectorySummaryKpis',
+        'stepTurnBtn',
+        'cloudRunServicesBody',
+        'geSupportEventsBody',
+    ):
+      self.assertIn(
+          required_dom_id,
+          html_ids,
+          f'Missing required SME Control Plane DOM container id="{required_dom_id}" in HTML',
+      )
+
+  def test_recompute_finops_dynamic_hitl_monthly_tasks_and_provenance_reconciliation(self) -> None:
+    from fastapi.testclient import TestClient
+    from app import fast_api_app
+
+    client = TestClient(fast_api_app.app)
+    try:
+      base_tc = client.get('/api/tokenomics_cockpit').json()
+      self.assertEqual(base_tc['cpo']['hitl_escalation_unit_cost_usd'], 12.5)
+      self.assertIn('savings_reconciliation_bridge', base_tc)
+      self.assertIn('billing_data_freshness_ts', base_tc['drift'])
+      self.assertIn('controller_signoff_note', base_tc['tco_and_pnl'])
+      self.assertIn('provenance_legend', base_tc['tco_and_pnl'])
+
+      # Recompute with custom monthly_tasks, hitl_review_minutes=12, hitl_hourly_rate_usd=90 ($18.00/escalation)
+      resp = client.post('/api/recompute_finops', json={
+          'monthly_tasks': 259000,
+          'hitl_review_minutes': 12.0,
+          'hitl_hourly_rate_usd': 90.0,
+          'cache_calls_per_hour': 42.0,
+          'deferred_offpeak_share_pct': 55.0,
+      })
+      self.assertEqual(resp.status_code, 200)
+      body = resp.json()
+      tc = body.get('tokenomics_cockpit') or body.get('result') or body
+      self.assertAlmostEqual(tc['cpo']['hitl_escalation_unit_cost_usd'], 18.0, places=2)
+      self.assertEqual(tc['assumptions']['calls_per_hr'], 42.0)
+      self.assertEqual(tc['assumptions']['deferred_share_pct'], 55.0)
+      self.assertGreater(
+          tc['cpo']['fleet_monthly_saved_usd'],
+          base_tc['cpo']['fleet_monthly_saved_usd'],
+      )
+    finally:
+      server._global_controller.reset()
+
+  def test_sme_persona_playbooks_and_nl2sql_dml_guardrail_and_step_turn_reset(self) -> None:
+    from fastapi.testclient import TestClient
+    from app import fast_api_app
+
+    client = TestClient(fast_api_app.app)
+    try:
+      state = client.get('/api/state').json()
+      self.assertIn('persona_playbooks', state)
+      playbooks = state['persona_playbooks']
+      self.assertEqual(len(playbooks['personas']), 6)
+      persona_ids = [p['persona_id'] for p in playbooks['personas']]
+      self.assertEqual(
+          persona_ids,
+          ['finops_lead', 'sre_platform', 'ai_engineer', 'product_quality', 'security_governance', 'cfo_exec'],
+      )
+      for p in playbooks['personas']:
+        self.assertGreater(p['after_score'], p['before_score'])
+        self.assertGreaterEqual(p['after_score'], 80)
+        self.assertTrue(p['key_questions_answered'])
+        self.assertTrue(p['primary_kpis'])
+
+      # Verify NL2SQL read-only guardrail blocks DML/DDL injection attempts (Opus AF-08)
+      nl_dml = client.post('/api/nl2sql', json={'question': 'DROP TABLE aive_logs.ratings_log; DELETE FROM billing'})
+      self.assertEqual(nl_dml.status_code, 200)
+      nl_dml_body = nl_dml.json()
+      self.assertTrue(nl_dml_body['sql_safety_audit']['read_only_enforced'])
+      self.assertTrue(nl_dml_body['sql_safety_audit']['blocked_dml_attempt'])
+      self.assertNotIn('DROP TABLE', nl_dml_body['generated_sql'].upper())
+      self.assertTrue(nl_dml_body['generated_sql'].strip().upper().startswith('SELECT'))
+
+      # Verify /api/step_turn and /api/reset endpoints work end-to-end
+      step_resp = client.post('/api/step_turn', json={})
+      self.assertEqual(step_resp.status_code, 200)
+      step_state = step_resp.json()
+      self.assertEqual(len(step_state['turns']), 7)
+      self.assertEqual(step_state['summary']['total_turns'], 7)
+
+      reset_resp = client.post('/api/reset', json={})
+      self.assertEqual(reset_resp.status_code, 200)
+      reset_state = reset_resp.json()
+      self.assertEqual(len(reset_state['turns']), 6)
+      self.assertEqual(reset_state['summary']['total_turns'], 6)
+    finally:
+      server._global_controller.reset()
+
+  def test_ux_refinement_six_tabs_calm_palette_and_plain_english_readability(self) -> None:
+    import pathlib
+    import ui_template
+
+    state = server._global_controller.get_state_payload(fast_mcp=True)
+    html = ui_template.render_dashboard_html(initial_state=state)
+
+    # 1. Verify 6 step-by-step tabs and panels exist
+    expected_tabs = (
+        ('tabBtn0', 'tabPanel0', 'Gemini Enterprise Agent Fleet'),
+        ('tabBtn1', 'tabPanel1', 'Goals &amp; Metrics'),
+        ('tabBtn2', 'tabPanel2', 'Testing &amp; History'),
+        ('tabBtn3', 'tabPanel3', 'Cost &amp; Billing'),
+        ('tabBtn4', 'tabPanel4', 'Users &amp; Feedback'),
+        ('tabBtn5', 'tabPanel5', 'Tools &amp; SDK'),
+    )
+    for btn_id, panel_id, label in expected_tabs:
+      self.assertIn(f'id="{btn_id}"', html)
+      self.assertIn(f'id="{panel_id}"', html)
+      self.assertIn(label, html)
+
+    # 2. Verify Cost & Billing segmented sub-views exist to prevent vertical information overload
+    for sub_id in (
+        'costSubBtn_summary',
+        'costSubBtn_calculator',
+        'costSubBtn_code_audit',
+        'costSubBtn_limits',
+        'costSubBtn_all',
+    ):
+      self.assertIn(f'id="{sub_id}"', html)
+    self.assertIn('switchCostSubView(', html)
+
+    # 3. Verify progressive disclosure above the fold (collapsible role guide + hidden SQL drawer by default)
+    self.assertIn('id="roleGuideDisclosure"', html)
+    self.assertRegex(html, r'id="nl2sqlCopilotDrawer"[^>]*class="[^"]*hidden[^"]*"')
+
+    # 4. Verify Calm Neutral Slate palette in CSS root and absence of neon purple/orange chart colors
+    self.assertIn('--text-primary: #0f172a;', html)
+    self.assertIn('--bg: #f8fafc;', html)
+    self.assertIn('--g-blue: #334155;', html)
+    self.assertNotIn('#9334e6', html)
+    self.assertNotIn('#e37400', html)
+
+    # 5. Verify zero academic "AI big words" across ui_template.py and alpha_evolve_optimizer.py
+    banned_big_phrases = (
+        'Pareto Frontier',
+        'Pareto Loop',
+        'Bayesian Tuner',
+        'Forensic Inspector',
+        'Forensic Mutation Reason',
+        'Multiplicative ROI Waterfall',
+        'Multiplicative compounding',
+        'Deterministic engine',
+        'Deterministic FinOps Engine',
+    )
+    repo_dir = pathlib.Path(__file__).resolve().parent
+    for fname in ('ui_template.py', 'alpha_evolve_optimizer.py'):
+      source_text = (repo_dir / fname).read_text(encoding='utf-8')
+      for phrase in banned_big_phrases:
+        self.assertNotIn(
+            phrase.lower(),
+            source_text.lower(),
+            f'Found academic/AI big phrase "{phrase}" in {fname}',
+        )
+
+  def test_telemetry_grounding_validator_and_live_gcp_no_fake_users(self) -> None:
+    from fastapi.testclient import TestClient
+    from app import fast_api_app
+
+    client = TestClient(fast_api_app.app)
+    try:
+      state = client.get('/api/state').json()
+      self.assertIn('telemetry_validation', state)
+      tv = state['telemetry_validation']
+      self.assertEqual(tv['overall_status'], 'VERIFIED_GROUNDED')
+      self.assertEqual(tv['failed_count'], 0)
+      self.assertEqual(tv['grounding_score_pct'], 100.0)
+      self.assertGreaterEqual(tv['total_checks'], 10)
+      self.assertIn('llm_judge', tv)
+      self.assertEqual(tv['llm_judge']['verdict'], 'VERIFIED_GROUNDED')
+
+      # Verify /api/validate_telemetry GET and POST endpoints
+      val_get = client.get('/api/validate_telemetry').json()
+      self.assertEqual(val_get['overall_status'], 'VERIFIED_GROUNDED')
+      val_post = client.post('/api/validate_telemetry', json={'llm_judge': False}).json()
+      self.assertEqual(val_post['overall_status'], 'VERIFIED_GROUNDED')
+
+      # Simulate live project-maui BigQuery telemetry sync and verify zero fake users or fake GCS URIs
+      live_bq_mock = {
+          'project_id': 'project-maui',
+          'datasets_queried': ['ds_ge_audit_raw', 'sre_triage_agent_telemetry', 'vibelift_analytics'],
+          'power_users_ldap': [
+              {
+                  'user_ldap': 'enriq',
+                  'user_email': 'enriq@google.com',
+                  'department': 'GCP Agent Platform & FinOps (project-maui)',
+                  'primary_agent': 'VibeLift Analytics & FinOps',
+                  'sessions_7d': 35,
+                  'total_tokens_m': 0.16,
+                  'thinking_tokens_k': 24.0,
+                  'background_tokens_k': 67.8,
+                  'cache_hit_pct': 42.9,
+                  'avg_csat': 5.0,
+                  'monthly_cost_usd': 0.24,
+                  'cost_saved_usd': 0.19,
+                  'anomaly_status': 'LIVE_BIGQUERY_AUDIT',
+              },
+          ],
+          'ratings_logs': [
+              {
+                  'rating_id': 'bq-audit-1',
+                  'timestamp': '2026-04-17T06:03:00Z',
+                  'session_id': '1405660395354341226',
+                  'user_email': 'enriq@google.com',
+                  'user_ldap': 'enriq',
+                  'rating': 5,
+                  'feedback_text': 'Real BigQuery StreamAssist session in project-maui.',
+              },
+          ],
+          'usage_logs': [
+              {
+                  'event_id': 'bq-span-1',
+                  'timestamp': '2026-04-17T06:03:00Z',
+                  'session_id': '1405660395354341226',
+                  'user_email': 'enriq@google.com',
+                  'user_ldap': 'enriq',
+                  'department': 'GCP Agent Platform & FinOps (project-maui)',
+                  'task_type': 'GE_STREAM_ASSIST',
+                  'model_name': 'gemini-2.5-flash',
+                  'prompt_length_chars': 240,
+                  'total_tokens': 16114,
+                  'input_tokens': 15200,
+                  'output_tokens': 914,
+                  'thinking_tokens': 512,
+                  'background_tokens': 6778,
+                  'latency_ms': 256.8,
+                  'status': 'OK',
+                  'outputs': [{'gcs_uri': 'bq://project-maui.sre_triage_agent_telemetry._AllSpans/1405660395354341226'}],
+                  'csat_rating': 5,
+              },
+          ],
+          'decorator_events': [
+              {
+                  'event_id': 'dec-live-1',
+                  'timestamp_utc': '2026-04-17T06:03:00Z',
+                  'agent_id': 'vibelift_analytics',
+                  'tool_name': 'invoke_agent',
+                  'model': 'gemini-2.5-flash',
+                  'latency_ms': 256.8,
+                  'input_tokens': 15200,
+                  'cached_input_tokens': 6778,
+                  'output_tokens': 914,
+                  'thinking_tokens': 512,
+                  'total_tokens': 16114,
+                  'cache_hit_pct': 42.9,
+                  'estimated_cost_usd': 0.0034,
+                  'status': 'OK',
+                  'trace_id': '1405660395354341226',
+              },
+          ],
+          'otel_genai_summary': {
+              'span_count': 13,
+              'total_input_tokens': 158101,
+              'total_output_tokens': 3036,
+              'total_cached_tokens': 67783,
+              'avg_latency_ms': 256.8,
+              'observed_cache_hit_pct': 42.9,
+          },
+          'runaway_alerts': [],
+      }
+      live_fleet = dict(state['ge_fleet'])
+      live_fleet['project_id'] = 'project-maui'
+      server._global_controller.optimizer.sync_from_ge_fleet(live_fleet, bq_insights=live_bq_mock)
+      telemetry.set_live_aive_logs(
+          usage_logs=live_bq_mock['usage_logs'],
+          ratings_logs=live_bq_mock['ratings_logs'],
+      )
+      telemetry.set_live_decorator_events(live_bq_mock['decorator_events'])
+
+      uc_live = server._global_controller.optimizer.get_user_centric_payload()
+      live_ldaps = [u['user_ldap'] for u in uc_live['power_users_ldap']]
+      self.assertEqual(live_ldaps, ['enriq'])
+      for fake_ldap in ('sbahirat', 'russellmyers', 'rseshadri', 'sloona'):
+        self.assertNotIn(fake_ldap, live_ldaps)
+    finally:
+      telemetry.set_live_aive_logs(None, None)
+      telemetry.set_live_decorator_events(None)
+      server._global_controller.optimizer._live_bq_insights = None
+      server._global_controller.reset()
+
 
 if __name__ == '__main__':
   unittest.main()

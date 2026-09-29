@@ -12,20 +12,20 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   <link rel="icon" type="image/jpeg" href="__VIBELIFT_GOOGLEY_LOGO_DATA_URI__" />
   <style>
     :root {
-      --bg: #f8f9fa;
+      --bg: #f8fafc;
       --surface: #ffffff;
-      --border: #dadce0;
-      --text-primary: #202124;
-      --text-secondary: #5f6368;
-      --g-blue: #1a73e8;
-      --g-blue-bg: #e8f0fe;
-      --g-green: #1e8e3e;
-      --g-green-bg: #e6f4ea;
-      --g-yellow: #f9ab00;
-      --g-yellow-bg: #fef7e0;
-      --g-red: #d93025;
-      --g-red-bg: #fce8e6;
-      --font-sans: 'Google Sans', 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif;
+      --border: #e2e8f0;
+      --text-primary: #0f172a;
+      --text-secondary: #475569;
+      --g-blue: #334155;
+      --g-blue-bg: #f1f5f9;
+      --g-green: #166534;
+      --g-green-bg: #f0fdf4;
+      --g-yellow: #854d0e;
+      --g-yellow-bg: #fefce8;
+      --g-red: #991b1b;
+      --g-red-bg: #fef2f2;
+      --font-sans: 'Inter', 'Google Sans', 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif;
       --font-mono: 'Roboto Mono', monospace;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -47,7 +47,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       position: sticky;
       top: 0;
       z-index: 20;
-      box-shadow: 0 1px 3px rgba(60,64,67,0.06);
+      box-shadow: 0 1px 2px rgba(15,23,42,0.04);
     }
     .brand-row {
       display: flex;
@@ -57,16 +57,15 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       min-width: 0;
     }
     .brand-logo-img {
-      width: 42px;
-      height: 42px;
-      border-radius: 10px;
+      width: 38px;
+      height: 38px;
+      border-radius: 8px;
       object-fit: cover;
       border: 1px solid var(--border);
-      box-shadow: 0 2px 6px rgba(60,64,67,0.14);
       flex-shrink: 0;
     }
     .brand-title {
-      font-size: 17px;
+      font-size: 16px;
       font-weight: 700;
       color: var(--text-primary);
       letter-spacing: -0.2px;
@@ -97,67 +96,113 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       gap: 6px;
       white-space: nowrap;
     }
-    .btn:hover { background: #f1f3f4; }
+    .btn:hover { background: #f1f5f9; }
     .btn-primary {
-      background: var(--g-blue);
+      background: #0f172a;
       color: #ffffff;
-      border-color: var(--g-blue);
+      border-color: #0f172a;
     }
-    .btn-primary:hover { background: #1557b0; }
+    .btn-primary:hover { background: #1e293b; }
     .btn-green {
-      background: var(--g-green);
+      background: #1e293b;
       color: #ffffff;
-      border-color: var(--g-green);
+      border-color: #1e293b;
     }
-    .btn-green:hover { background: #137333; }
+    .btn-green:hover { background: #0f172a; }
     .btn-danger {
-      background: var(--g-red-bg);
-      color: var(--g-red);
-      border-color: #f6aea9;
+      background: var(--surface);
+      color: var(--text-secondary);
+      border-color: #cbd5e1;
     }
-    .btn-danger:hover { background: #fad2cf; }
+    .btn-danger:hover { background: #f1f5f9; color: var(--text-primary); }
     .btn-fullscreen-toggle {
-      background: #174ea6;
+      background: #0f172a;
       color: #ffffff;
-      border-color: #174ea6;
-      box-shadow: 0 1px 3px rgba(23,78,166,0.25);
+      border-color: #0f172a;
     }
     .btn-fullscreen-toggle:hover {
-      background: #0d3b8c;
-      border-color: #0d3b8c;
+      background: #1e293b;
+      border-color: #1e293b;
     }
     .tabs-bar {
       background: var(--surface);
       border-bottom: 1px solid var(--border);
       padding: 0 18px;
       display: flex;
-      gap: 18px;
+      gap: 16px;
       flex-wrap: wrap;
     }
     .tab-btn {
       background: none;
       border: none;
       padding: 12px 4px;
-      font-size: 13.5px;
+      font-size: 13px;
       font-weight: 600;
       color: var(--text-secondary);
       cursor: pointer;
-      border-bottom: 3px solid transparent;
+      border-bottom: 2px solid transparent;
       display: flex;
       align-items: center;
       gap: 7px;
     }
+    .tab-btn:hover { color: var(--text-primary); }
     .tab-btn.active {
-      color: var(--g-blue);
-      border-bottom-color: var(--g-blue);
+      color: var(--text-primary);
+      border-bottom-color: var(--text-primary);
     }
     .tab-step-pill {
       font-size: 10.5px;
       padding: 2px 7px;
       border-radius: 99px;
-      background: var(--g-blue-bg);
-      color: var(--g-blue);
+      background: #f1f5f9;
+      color: #334155;
       font-weight: 700;
+    }
+    .tab-btn.active .tab-step-pill {
+      background: #0f172a;
+      color: #ffffff;
+    }
+    .subview-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-bottom: 16px;
+    }
+    .subview-btn {
+      font-family: var(--font-sans);
+      font-size: 12px;
+      font-weight: 600;
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text-secondary);
+      cursor: pointer;
+    }
+    .subview-btn.active {
+      background: #0f172a;
+      color: #ffffff;
+      border-color: #0f172a;
+    }
+    .tab-footer-nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-top: 8px;
+      font-size: 12.5px;
+      color: var(--text-secondary);
     }
     .container {
       max-width: 1400px;
@@ -167,33 +212,32 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .selector-banner {
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 16px 20px;
-      margin-bottom: 20px;
+      border-radius: 8px;
+      padding: 14px 18px;
+      margin-bottom: 16px;
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
-      gap: 20px;
+      gap: 18px;
       align-items: center;
-      box-shadow: 0 1px 2px rgba(60,64,67,0.05);
     }
     .selector-label {
       font-size: 11px;
       font-weight: 700;
       text-transform: uppercase;
-      color: var(--g-blue);
-      letter-spacing: 0.6px;
-      margin-bottom: 6px;
+      color: var(--text-secondary);
+      letter-spacing: 0.5px;
+      margin-bottom: 5px;
     }
     .agent-select {
       width: 100%;
-      padding: 10px 12px;
-      font-size: 14px;
+      padding: 9px 12px;
+      font-size: 13.5px;
       font-weight: 600;
       font-family: var(--font-sans);
       color: var(--text-primary);
-      background: var(--bg);
-      border: 2px solid var(--g-blue);
-      border-radius: 8px;
+      background: var(--surface);
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
       cursor: pointer;
     }
     .agent-meta-box {
@@ -201,7 +245,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       flex-direction: column;
       gap: 8px;
       border-left: 1px solid var(--border);
-      padding-left: 20px;
+      padding-left: 18px;
     }
     .agent-meta-top {
       display: flex;
@@ -213,8 +257,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .kpi-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
-      gap: 14px;
-      margin-bottom: 20px;
+      gap: 12px;
+      margin-bottom: 16px;
     }
     .kpi-card {
       background: var(--surface);
@@ -224,19 +268,17 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       position: relative;
       overflow: hidden;
     }
-    .kpi-card::top-bar {
-      height: 4px;
-    }
     .kpi-label {
       font-size: 11px;
-      font-weight: 700;
+      font-weight: 600;
       text-transform: uppercase;
       color: var(--text-secondary);
-      letter-spacing: 0.5px;
+      letter-spacing: 0.4px;
     }
     .kpi-value {
-      font-size: 24px;
+      font-size: 22px;
       font-weight: 700;
+      color: var(--text-primary);
       margin: 6px 0 4px 0;
     }
     .kpi-sub {
@@ -246,9 +288,9 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .panel {
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 18px 20px;
-      margin-bottom: 20px;
+      border-radius: 8px;
+      padding: 16px 18px;
+      margin-bottom: 16px;
     }
     .panel-header {
       display: flex;
@@ -261,8 +303,9 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       gap: 12px;
     }
     .panel-title {
-      font-size: 15px;
+      font-size: 14.5px;
       font-weight: 700;
+      color: var(--text-primary);
       display: flex;
       align-items: center;
       flex-wrap: wrap;
@@ -271,38 +314,39 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .badge {
       display: inline-flex;
       align-items: center;
-      padding: 3px 10px;
+      padding: 2px 9px;
       border-radius: 99px;
       font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0.2px;
+      font-weight: 600;
+      letter-spacing: 0.1px;
+      border: 1px solid transparent;
     }
-    .badge-blue { background: var(--g-blue-bg); color: var(--g-blue); }
-    .badge-green { background: var(--g-green-bg); color: var(--g-green); }
-    .badge-yellow { background: var(--g-yellow-bg); color: #b06000; }
-    .badge-red { background: var(--g-red-bg); color: var(--g-red); }
+    .badge-blue { background: #f1f5f9; color: #334155; border-color: #e2e8f0; }
+    .badge-green { background: #f0fdf4; color: #166534; border-color: #dcfce7; }
+    .badge-yellow { background: #fefce8; color: #854d0e; border-color: #fef08a; }
+    .badge-red { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
     table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 13px;
+      font-size: 12.5px;
     }
     th, td {
       text-align: left;
-      padding: 10px 10px;
+      padding: 9px 10px;
       border-bottom: 1px solid var(--border);
     }
     th {
       color: var(--text-secondary);
-      font-weight: 700;
+      font-weight: 600;
       font-size: 11px;
       text-transform: uppercase;
-      background: #f8f9fa;
+      background: #f8fafc;
     }
     .mono { font-family: var(--font-mono); font-size: 12px; }
     .weight-bar-bg {
-      width: 90px;
-      height: 8px;
-      background: #e8eaed;
+      width: 84px;
+      height: 7px;
+      background: #e2e8f0;
       border-radius: 99px;
       overflow: hidden;
       display: inline-block;
@@ -311,15 +355,15 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .weight-bar-fill {
       height: 100%;
-      background: var(--g-blue);
+      background: #334155;
       border-radius: 99px;
     }
     .add-param-form {
-      background: #f8f9fa;
-      border: 1px dashed var(--border);
+      background: #f8fafc;
+      border: 1px solid var(--border);
       border-radius: 8px;
       padding: 14px 16px;
-      margin-top: 16px;
+      margin-top: 14px;
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
       gap: 10px;
@@ -336,37 +380,38 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       width: 100%;
       padding: 7px 10px;
       font-size: 13px;
-      border: 1px solid var(--border);
+      border: 1px solid #cbd5e1;
       border-radius: 6px;
       background: #ffffff;
+      color: var(--text-primary);
     }
     .charts-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
-      gap: 16px;
-      margin-bottom: 20px;
+      gap: 14px;
+      margin-bottom: 16px;
     }
     .chart-card {
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 10px;
+      border-radius: 8px;
       padding: 14px 16px;
     }
     .action-card {
       border: 1px solid var(--border);
-      border-left: 5px solid var(--g-green);
+      border-left: 3px solid #334155;
       border-radius: 8px;
       padding: 14px 16px;
-      margin-bottom: 14px;
+      margin-bottom: 12px;
       background: #ffffff;
     }
     .action-card.rejected {
-      border-left-color: var(--g-red);
-      background: #fffafa;
+      border-left-color: #991b1b;
+      background: #ffffff;
     }
     .action-card.baseline {
-      border-left-color: var(--text-secondary);
-      background: #fafafa;
+      border-left-color: #94a3b8;
+      background: #f8fafc;
     }
     .action-grid {
       display: grid;
@@ -375,8 +420,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       margin-top: 10px;
     }
     .action-box {
-      background: #f8f9fa;
-      border: 1px solid #eceff1;
+      background: #f8fafc;
+      border: 1px solid var(--border);
       border-radius: 6px;
       padding: 10px 12px;
       font-size: 12.5px;
@@ -389,8 +434,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       margin-bottom: 4px;
     }
     .diff-pre {
-      background: #1e1e1e;
-      color: #e8eaed;
+      background: #0f172a;
+      color: #e2e8f0;
       font-family: var(--font-mono);
       font-size: 11.5px;
       padding: 10px 12px;
@@ -398,34 +443,47 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       overflow-x: auto;
       white-space: pre-wrap;
     }
-    .live-pill { background: var(--g-green-bg); color: var(--g-green); }
+    .live-pill { background: #f0fdf4; color: #166534; }
     .live-dot {
-      display: inline-block; width: 8px; height: 8px; border-radius: 50%;
-      background: var(--g-green); margin-right: 4px; animation: livePulse 2s infinite;
+      display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+      background: #166534; margin-right: 4px;
     }
-    @keyframes livePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
     .fleet-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); }
     .fleet-controls select { padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; font-family: var(--font-sans); font-size: 12px; }
     .fleet-meta { font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; }
     .fleet-sources { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
     .chip { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 99px; border: 1px solid var(--border); }
-    .chip-ok { background: var(--g-green-bg); color: var(--g-green); border-color: transparent; }
-    .chip-error { background: var(--g-red-bg); color: var(--g-red); border-color: transparent; }
-    .chip-na { background: #f1f3f4; color: var(--text-secondary); }
+    .chip-ok { background: #f0fdf4; color: #166534; border-color: #dcfce7; }
+    .chip-error { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
+    .chip-na { background: #f1f5f9; color: var(--text-secondary); }
     .fleet-kpis { grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); }
-    .fleet-kpis .kpi-value { font-size: 22px; }
+    .fleet-kpis .kpi-value { font-size: 20px; }
     .table-scroll { overflow-x: auto; width: 100%; }
     .fleet-agent-name { font-weight: 700; }
     .fleet-agent-desc { font-size: 11px; color: var(--text-secondary); margin-top: 2px; max-width: 360px; }
     .fleet-agent-tags { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
     .fleet-row-muted td { color: var(--text-secondary); }
     .fleet-empty { color: var(--text-secondary); text-align: center; }
-    .fleet-notice { font-size: 12px; padding: 8px 12px; border-radius: 6px; background: var(--g-blue-bg); color: var(--g-blue); margin-bottom: 12px; }
-    .fleet-notice-error { background: var(--g-yellow-bg); color: #b06000; }
+    .fleet-notice { font-size: 12px; padding: 8px 12px; border-radius: 6px; background: #f1f5f9; color: #334155; margin-bottom: 12px; }
+    .fleet-notice-error { background: #fefce8; color: #854d0e; }
     .fleet-errors { margin-top: 12px; font-size: 12px; }
-    .fleet-error { background: var(--g-red-bg); color: var(--g-red); padding: 6px 10px; border-radius: 6px; margin-bottom: 6px; word-break: break-word; }
+    .fleet-error { background: #fef2f2; color: #991b1b; padding: 6px 10px; border-radius: 6px; margin-bottom: 6px; word-break: break-word; }
     .fleet-notes { font-size: 11px; color: var(--text-secondary); margin: 12px 0 0 16px; padding: 0; }
     .hidden { display: none !important; }
+    details.role-disclosure {
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 12px;
+      margin-bottom: 12px;
+    }
+    details.role-disclosure summary {
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      user-select: none;
+    }
     @media (max-width: 820px) {
       .agent-meta-box { border-left: none; border-top: 1px solid var(--border); padding-left: 0; padding-top: 12px; }
       .container { padding: 0 12px 28px 12px; }
@@ -445,11 +503,11 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <div>
         <div class="brand-title">VibeLift | Analytics Platform for Agent Optimization</div>
         <div class="brand-subtitle">
-          Real-Time <span class="mono">@vibelift_telemetry</span> Decorator &bull; Multi-Platform Optimization (AlphaEvolve &bull; Opus &bull; Vizier)
+          Agent Health, Speed, Cost &amp; Quality &bull; <span class="mono">@vibelift_telemetry</span>
         </div>
       </div>
-      <div style="display:inline-flex;align-items:center;gap:8px;padding:4px 10px;background:#e8f0fe;border-radius:16px;border:1px solid #c2e7ff;font-size:11.5px;font-weight:600;color:#174ea6;">
-        <span>&#x2601;&#xFE0F; GCP: <strong id="gcpProjectText" class="mono">&#x2026;</strong> (<span id="gcpRegionText" class="mono">&#x2026;</span>)</span>
+      <div style="display:inline-flex;align-items:center;gap:8px;padding:4px 10px;background:#f1f5f9;border-radius:6px;border:1px solid #e2e8f0;font-size:11.5px;font-weight:600;color:#334155;">
+        <span>GCP: <strong id="gcpProjectText" class="mono">&#x2026;</strong> (<span id="gcpRegionText" class="mono">&#x2026;</span>)</span>
         <span class="badge badge-green" style="font-size:10px;">Cloud Run ACTIVE</span>
       </div>
     </div>
@@ -457,15 +515,15 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <button id="btnModeFullscreen" class="btn btn-fullscreen-toggle" onclick="toggleDisplayMode()" title="Toggle between Right Side Panel and Fullscreen">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg> Fullscreen
       </button>
-      <span id="activeGenBadge" class="badge badge-green">ACTIVE GENOME: GEN 14</span>
-      <button class="btn btn-blue" id="syncGcpBtn" onclick="syncGcpTelemetry()" title="Fetch live telemetry from Cloud Logging & Gemini Enterprise">
-        &#x2601;&#xFE0F; Sync GCP Telemetry
+      <span id="activeGenBadge" class="badge badge-blue">ACTIVE CONFIG: REV 14</span>
+      <button class="btn" id="syncGcpBtn" onclick="syncGcpTelemetry()" title="Fetch live telemetry from Cloud Logging & Gemini Enterprise">
+        Sync GCP Telemetry
       </button>
       <button class="btn btn-danger" onclick="triggerApi('/api/inject_anomaly')">
-        &#x1F525; Inject Log Anomaly
+        Test Alert
       </button>
-      <button class="btn btn-green" onclick="triggerApi('/api/evolve_generation')">
-        &#x1F9EC; Run Optimization Cycle
+      <button class="btn btn-primary" onclick="triggerApi('/api/evolve_generation')">
+        Run Optimizer
       </button>
       <button class="btn" onclick="triggerApi('/api/reset')">
         Reset
@@ -473,31 +531,137 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </header>
 
-  <nav class="tabs-bar">
+  <nav class="tabs-bar" aria-label="Dashboard Navigation">
     <button id="tabBtn0" class="tab-btn active" onclick="switchTab(0)">
-      <span class="tab-step-pill live-pill"><span class="live-dot"></span>LIVE</span>
+      <span class="tab-step-pill live-pill"><span class="live-dot"></span>1</span>
       Gemini Enterprise Agent Fleet
     </button>
     <button id="tabBtn1" class="tab-btn" onclick="switchTab(1)">
-      <span class="tab-step-pill">STEP 1</span>
-      Select Agent &amp; Optimization Parameters
+      <span class="tab-step-pill">2</span>
+      Goals &amp; Metrics
     </button>
     <button id="tabBtn2" class="tab-btn" onclick="switchTab(2)">
-      <span class="tab-step-pill">STEP 2</span>
-      Performance Over Time &amp; Actions Taken
+      <span class="tab-step-pill">3</span>
+      Testing &amp; History
     </button>
     <button id="tabBtn3" class="tab-btn" onclick="switchTab(3)">
-      <span class="tab-step-pill">FINOPS &amp; SDK</span>
-      User-Centric Spend, Skills/MCP &amp; <span class="mono">@vibelift_telemetry</span>
+      <span class="tab-step-pill">4</span>
+      Cost &amp; Billing
+    </button>
+    <button id="tabBtn4" class="tab-btn" onclick="switchTab(4)">
+      <span class="tab-step-pill">5</span>
+      Users &amp; Feedback
+    </button>
+    <button id="tabBtn5" class="tab-btn" onclick="switchTab(5)">
+      <span class="tab-step-pill">6</span>
+      Tools &amp; SDK (<span class="mono">@vibelift_telemetry</span>)
     </button>
   </nav>
 
   <main class="container">
-    <!-- Persistent Agent & Optimization Platform Selector Banner -->
+    <!-- COMPACT SUMMARY BAR: KEY NUMBERS, COLLAPSIBLE ROLE GUIDE & OPTIONAL DATA SEARCH -->
+    <section class="panel" id="smeExecutivePulseBar" style="margin-bottom:16px;padding:14px 18px;">
+      <div class="panel-header" style="margin-bottom:10px;padding-bottom:8px;">
+        <div class="panel-title">
+          <span>Summary: Cost per Helpful Answer, Resolution Rate &amp; Monthly Cloud Bill</span>
+          <span class="badge badge-green" id="northStarDeltaBadge">-95.2% Cost / CSAT-Positive Resolved Session</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <button class="btn" onclick="toggleTelemetryValidatorDrawer()" id="toggleTelemetryValidatorBtn" title="Verify every tab and metric against real BigQuery &amp; Cloud Monitoring telemetry">
+            Telemetry Grounding: <span id="telemetryValidatorSummaryBadge" class="mono">10/10 Verified</span>
+          </button>
+          <button class="btn" onclick="toggleNl2SqlDrawer()" id="toggleNl2SqlBtn">
+            Search Data in Plain English
+          </button>
+        </div>
+      </div>
+
+      <div class="kpi-grid" id="northStarUnitEconKpis" style="margin-bottom:10px;"></div>
+
+      <details class="role-disclosure" id="roleGuideDisclosure">
+        <summary>Role Guide &amp; 7-Step Workflow (Click to choose your role: FinOps, SRE, AI Engineer, Product, Security, or Support)</summary>
+        <div style="margin-top:10px;">
+          <div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;margin-bottom:6px;">
+            Choose Your Role (Shows key metrics and daily actions for your team):
+          </div>
+          <div id="smePersonaLensBar" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;"></div>
+          <div id="smePersonaPlaybookCard" class="action-box" style="margin-bottom:10px;"></div>
+          <div id="workflowStepsRibbon" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;"></div>
+        </div>
+      </details>
+
+      <div id="telemetryValidatorDrawer" class="hidden" style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+          <div>
+            <div style="font-size:12.5px;font-weight:700;color:var(--text-primary);">
+              Telemetry Grounding &amp; LLM-as-a-Judge Validator (Zero Hallucination / Zero Fake Data Guardrail)
+            </div>
+            <div style="font-size:11.5px;color:var(--text-secondary);">
+              Cross-checks all 6 tabs against BigQuery (<span class="mono">ds_ge_audit_raw</span>, <span class="mono">sre_triage_agent_telemetry</span>, <span class="mono">vibelift_analytics</span>), Cloud Monitoring v3, and Discovery Engine APIs.
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button class="btn btn-primary" id="runLlmJudgeAuditBtn" onclick="runTelemetryValidationAudit(true)" style="padding:5px 10px;font-size:11.5px;">
+              Run Live LLM-as-a-Judge Audit
+            </button>
+          </div>
+        </div>
+        <div id="telemetryValidatorJudgeBox" class="action-box" style="margin-bottom:10px;"></div>
+        <div class="table-scroll" style="max-height:240px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Check ID</th>
+                <th>Tab</th>
+                <th>Metric / Invariant Audited</th>
+                <th>Expected Ground Truth</th>
+                <th>Observed UI State</th>
+                <th>Telemetry Source</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="telemetryValidatorChecksBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="nl2sqlCopilotDrawer" class="hidden" style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+          <div style="font-size:12px;font-weight:700;color:var(--text-primary);">
+            Ask a Question in Plain English (Generates BigQuery SQL on <span class="mono">aive_logs</span> &amp; Agent Logs)
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button class="btn" style="padding:4px 9px;font-size:11.5px;" onclick="runNl2SqlPreset('Compare cost per 1k turns and prompt cache savings across agents')">Cost &amp; Cache by Agent</button>
+            <button class="btn" style="padding:4px 9px;font-size:11.5px;" onclick="runNl2SqlPreset('Show token category breakdown for thinking vs context bloat vs background overhead')">Token Usage by Type</button>
+            <button class="btn" style="padding:4px 9px;font-size:11.5px;" onclick="runNl2SqlPreset('List top power users by user_ldap token spend and CSAT')">Top Users by Spend</button>
+            <button class="btn" style="padding:4px 9px;font-size:11.5px;" onclick="runNl2SqlPreset('Detect runaway agent loops and thinking token anomalies')">Stuck Loop Alerts</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+          <input id="nl2sqlQuestionInput" type="text" style="flex:1;min-width:260px;padding:7px 11px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;" value="Compare cost per 1k turns and prompt cache savings across agents" />
+          <button class="btn btn-primary" onclick="runNl2SqlQuery()">Run Search</button>
+        </div>
+        <div id="nl2sqlSummaryText" style="font-size:12.5px;font-weight:600;color:var(--g-green);margin-bottom:8px;"></div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;">
+          <div>
+            <div style="font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px;">Generated BigQuery SQL</div>
+            <pre class="diff-pre" id="nl2sqlSqlPre" style="max-height:145px;"></pre>
+          </div>
+          <div class="table-scroll" style="max-height:165px;">
+            <table>
+              <thead id="nl2sqlResultHead"></thead>
+              <tbody id="nl2sqlResultBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Persistent Agent & Optimizer Selector Banner -->
     <section id="demoSelectorBanner" class="selector-banner hidden">
       <div style="display:flex;flex-direction:column;gap:10px;">
         <div>
-          <div class="selector-label">1. Select Production Agent to Optimize</div>
+          <div class="selector-label">1. Choose Agent to Inspect</div>
           <select id="agentDropdown" class="agent-select" onchange="onSelectAgent(this.value)">
             <option value="it_service_desk">IT Service Desk (gemini-2.5-flash &bull; Vertex AI Agent Engine)</option>
             <option value="vibelift_analytics">VibeLift Analytics &amp; FinOps (gemini-2.5-flash &bull; Cloud Run A2A + MCP)</option>
@@ -505,28 +669,28 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           </select>
         </div>
         <div>
-          <div class="selector-label">2. Select Optimization Platform Backend</div>
+          <div class="selector-label">2. Choose Optimization Method</div>
           <select id="optimizerDropdown" class="agent-select" onchange="onSelectOptimizer(this.value)">
-            <option value="alpha_evolve">AlphaEvolve (Multi-Objective Pareto Loop &bull; Default)</option>
-            <option value="opus_critic">Opus Frontier Critic (Structural Prompt &amp; Schema Refactoring)</option>
-            <option value="vertex_vizier">Google Vizier (Distributed Black-Box Bayesian Tuner)</option>
-            <option value="hybrid_ensemble">Hybrid Ensemble (AlphaEvolve + Vizier + Opus Critic)</option>
+            <option value="alpha_evolve">AlphaEvolve (Balanced Cost, Speed &amp; Accuracy &bull; Default)</option>
+            <option value="opus_critic">Opus Critic (Prompt &amp; Tool Cleanup)</option>
+            <option value="vertex_vizier">Google Vizier (Parameter Search Tuner)</option>
+            <option value="hybrid_ensemble">Combined Mode (AlphaEvolve + Vizier + Opus Critic)</option>
           </select>
         </div>
       </div>
       <div class="agent-meta-box">
         <div class="agent-meta-top">
           <div>
-            <strong id="agentTitleText" style="font-size:16px;">IT Service Desk</strong>
+            <strong id="agentTitleText" style="font-size:15.5px;">IT Service Desk</strong>
             <span id="agentDomainBadge" class="badge badge-blue" style="margin-left:8px;">Enterprise IT Support &amp; Escalation (Vertex AI Agent Engine)</span>
           </div>
           <span id="agentHealthBadge" class="badge badge-green">OPTIMIZED (GEN 14)</span>
         </div>
-        <div id="agentDescText" style="font-size:13px;color:var(--text-secondary);"></div>
+        <div id="agentDescText" style="font-size:12.5px;color:var(--text-secondary);"></div>
         <div style="font-size:12px;color:var(--text-secondary);display:flex;gap:16px;flex-wrap:wrap;">
-          <span><strong>Foundation Model:</strong> <span id="agentModelText" class="mono"></span></span>
-          <span><strong>Active Optimizer:</strong> <span id="activeOptimizerText" class="mono" style="color:var(--g-blue);font-weight:700;">AlphaEvolve (Multi-Objective Pareto Loop)</span></span>
-          <span><strong>Telemetry Hook:</strong> <span style="color:var(--g-green);font-weight:600;">@vibelift_telemetry Decorator (&lt;10ms)</span></span>
+          <span><strong>Model:</strong> <span id="agentModelText" class="mono"></span></span>
+          <span><strong>Active Method:</strong> <span id="activeOptimizerText" class="mono" style="color:var(--text-primary);font-weight:700;">AlphaEvolve (Balanced Cost, Speed &amp; Accuracy)</span></span>
+          <span><strong>Tracking:</strong> <span style="color:var(--g-green);font-weight:600;">@vibelift_telemetry (&lt;10ms)</span></span>
         </div>
       </div>
     </section>
@@ -548,7 +712,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
               <option value="168">Last 7 days</option>
             </select>
             <label><input type="checkbox" id="fleetAuto" checked onchange="scheduleFleetRefresh()" /> Auto-refresh (60 s)</label>
-            <button class="btn btn-blue" id="fleetRefreshBtn" onclick="refreshFleet(true)">Refresh now</button>
+            <button class="btn" id="fleetRefreshBtn" onclick="refreshFleet(true)">Refresh now</button>
           </div>
         </div>
         <div id="fleetNotice" class="fleet-notice hidden"></div>
@@ -604,20 +768,81 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
         <ul id="fleetNotes" class="fleet-notes"></ul>
       </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Safety Alerts &amp; Automatic Protections</span>
+            <span class="badge badge-green">3 Live Production Rules Active</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Watches for stuck reasoning loops, oversized chat history, and repeated tool retries across Cloud Run and Vertex AI.
+          </div>
+        </div>
+        <div id="watchOutAlarmsContainer" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Cloud Run Services &amp; Support Ticket Stream</span>
+            <span class="badge badge-blue">Live Cloud Run Services &bull; BigQuery <span class="mono">vw_l1_l2_unified_triage_logs</span></span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Shows running Cloud Run agent versions (<span class="mono">gcp_services</span>) next to recent L1/L2 support tickets (<span class="mono">gemini_enterprise_support_events</span>).
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:14px;">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Cloud Run Service</th>
+                  <th>Scaling</th>
+                  <th>CPU / Memory</th>
+                  <th>Latency</th>
+                  <th>Monthly Cost</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="cloudRunServicesBody"></tbody>
+            </table>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Ticket &amp; Tier</th>
+                  <th>Agent</th>
+                  <th>Trace ID</th>
+                  <th>Issue Summary</th>
+                  <th>Resolution Status</th>
+                </tr>
+              </thead>
+              <tbody id="geSupportEventsBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="tab-footer-nav">
+        <span>Step 1 of 6: Checked live agent fleet health and active alerts.</span>
+        <button class="btn btn-primary" onclick="switchTab(1)">Next Step: Goals &amp; Metrics (Tab 2) &rarr;</button>
+      </div>
     </section>
 
-    <!-- TAB 1: AGENT SELECTION & OPTIMIZATION PARAMETERS -->
+    <!-- TAB 1: GOALS & METRICS -->
     <section id="tabPanel1" class="hidden">
       <div class="kpi-grid" id="tab1KpiCards"></div>
 
       <div class="panel">
         <div class="panel-header">
           <div class="panel-title">
-            <span>2. Plug-and-Play Agent Optimization Parameters &amp; Current Live Status</span>
-            <span class="badge badge-blue">Multi-Objective Pareto Frontier</span>
+            <span>Agent Target Goals &amp; Current Live Status</span>
+            <span class="badge badge-blue">Balanced Cost, Speed &amp; Accuracy</span>
           </div>
           <div style="font-size:12px;color:var(--text-secondary);">
-            Includes latency, token cost ($29.40 &rarr; $3.45), accuracy, prompt cache hit ratio, context bloating, and agent idle ratio.
+            Tracks response speed, cost per 1,000 turns ($29.40 &rarr; $3.45), answer accuracy, prompt cache reuse, extra context size, and wait time.
           </div>
         </div>
 
@@ -625,13 +850,13 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           <table>
             <thead>
               <tr>
-                <th>Optimization Parameter</th>
-                <th>Direction</th>
-                <th>Baseline (Gen 0)</th>
+                <th>Metric</th>
+                <th>Goal Direction</th>
+                <th>Starting Value (Gen 0)</th>
                 <th>Current Live Value</th>
-                <th>Improvement vs. Baseline</th>
-                <th>Target Goal (SLO)</th>
-                <th>Priority Weight</th>
+                <th>Change vs. Start</th>
+                <th>Target Goal</th>
+                <th>Importance Weight</th>
                 <th>Current Status</th>
               </tr>
             </thead>
@@ -640,32 +865,32 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
 
         <div style="margin-top:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-          <span style="font-size:11.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;">Quick-Add Plug-and-Play Presets:</span>
-          <button class="btn" onclick="applyParameterPreset('Context Bloating Ratio', '%', 'lower_is_better', 64.0, 20.0, 15)">+ Context Bloating Ratio</button>
-          <button class="btn" onclick="applyParameterPreset('Agent Idle &amp; Wait Ratio', '%', 'lower_is_better', 42.0, 12.0, 10)">+ Agent Idle Ratio</button>
-          <button class="btn" onclick="applyParameterPreset('Skill Token Consumption / Turn', 'k tok', 'lower_is_better', 18.5, 6.0, 15)">+ Skill Token Consumption</button>
-          <button class="btn" onclick="applyParameterPreset('User Cost per Session', '$', 'lower_is_better', 0.42, 0.08, 20)">+ User Cost per Session</button>
-          <button class="btn" onclick="applyParameterPreset('Tool Selection Precision', '%', 'higher_is_better', 84.0, 97.5, 15)">+ Tool Selection Precision</button>
+          <span style="font-size:11.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;">Quick-Add Common Metrics:</span>
+          <button class="btn" onclick="applyParameterPreset('Context Bloating Ratio', '%', 'lower_is_better', 64.0, 20.0, 15)">+ Extra Context Size</button>
+          <button class="btn" onclick="applyParameterPreset('Agent Idle &amp; Wait Ratio', '%', 'lower_is_better', 42.0, 12.0, 10)">+ Agent Wait Time</button>
+          <button class="btn" onclick="applyParameterPreset('Skill Token Consumption / Turn', 'k tok', 'lower_is_better', 18.5, 6.0, 15)">+ Tool Tokens / Turn</button>
+          <button class="btn" onclick="applyParameterPreset('User Cost per Session', '$', 'lower_is_better', 0.42, 0.08, 20)">+ Cost per Session</button>
+          <button class="btn" onclick="applyParameterPreset('Tool Selection Precision', '%', 'higher_is_better', 84.0, 97.5, 15)">+ Tool Choice Accuracy</button>
         </div>
 
         <div class="add-param-form">
           <div class="field-group">
-            <label>Add User-Defined Parameter</label>
-            <input id="newParamLabel" type="text" placeholder="e.g., Hallucination Guardrail Score" value="Tool Selection Precision" />
+            <label>Add Custom Metric</label>
+            <input id="newParamLabel" type="text" placeholder="e.g., Answer Quality Score" value="Tool Selection Precision" />
           </div>
           <div class="field-group">
             <label>Unit</label>
             <input id="newParamUnit" type="text" placeholder="%, ms, $" value="%" />
           </div>
           <div class="field-group">
-            <label>Optimization Goal</label>
+            <label>Goal Direction</label>
             <select id="newParamDirection">
-              <option value="higher_is_better">Maximize (&uarr; Higher is Better)</option>
-              <option value="lower_is_better">Minimize (&darr; Lower is Better)</option>
+              <option value="higher_is_better">Higher is Better (&uarr;)</option>
+              <option value="lower_is_better">Lower is Better (&darr;)</option>
             </select>
           </div>
           <div class="field-group">
-            <label>Baseline Value</label>
+            <label>Starting Value</label>
             <input id="newParamBaseline" type="number" step="0.1" value="84.0" />
           </div>
           <div class="field-group">
@@ -678,20 +903,60 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
           <div>
             <button class="btn btn-primary" onclick="onAddCustomParameter()">
-              + Add Parameter
+              + Add Metric
             </button>
           </div>
         </div>
       </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Full 5-Layer Metric Catalog (26 Production Metrics)</span>
+            <span class="badge badge-blue">L1 Infra &bull; L2 LLM &bull; L3 ADK &bull; L4 A2A &bull; L5 A2UI</span>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button class="btn" onclick="setOtelLayerFilter('ALL')">All 5 Layers (26)</button>
+            <button class="btn" onclick="setOtelLayerFilter('L1_INFRA')">L1: Infra</button>
+            <button class="btn" onclick="setOtelLayerFilter('L2_LLM')">L2: LLM</button>
+            <button class="btn" onclick="setOtelLayerFilter('L3_ADK')">L3: ADK</button>
+            <button class="btn" onclick="setOtelLayerFilter('L4_A2A')">L4: A2A</button>
+            <button class="btn" onclick="setOtelLayerFilter('L5_A2UI')">L5: A2UI</button>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Layer</th>
+                <th>Metric Key</th>
+                <th>Metric Name</th>
+                <th>Start</th>
+                <th>Current Value</th>
+                <th>Target Goal</th>
+                <th>Why It Matters</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="otelCatalogTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="tab-footer-nav">
+        <button class="btn" onclick="switchTab(0)">&larr; Back: Fleet &amp; Health</button>
+        <span>Step 2 of 6: Reviewed target goals and 5-layer metrics.</span>
+        <button class="btn btn-primary" onclick="switchTab(2)">Next Step: Testing &amp; History (Tab 3) &rarr;</button>
+      </div>
     </section>
 
-    <!-- TAB 2: PARAMETER PERFORMANCE OVER TIME & ALPHAEVOLVE ACTIONS -->
+    <!-- TAB 2: TESTING, ROLLOUT SIMULATOR & CHANGE HISTORY -->
     <section id="tabPanel2" class="hidden">
       <div class="charts-grid">
         <div class="chart-card">
           <div class="panel-header" style="margin-bottom:8px;padding-bottom:6px;">
             <div class="panel-title" style="font-size:14px;">
-              P95 Latency Performance Over Time (ms &darr;)
+              Response Time (P95 Latency ms &darr;)
             </div>
             <span id="latencyDeltaBadge" class="badge badge-green"></span>
           </div>
@@ -701,7 +966,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="chart-card">
           <div class="panel-header" style="margin-bottom:8px;padding-bottom:6px;">
             <div class="panel-title" style="font-size:14px;">
-              Net Cost per 1k Turns Over Time ($ USD &darr;)
+              Cost per 1,000 Turns ($ USD &darr;)
             </div>
             <span id="costDeltaBadge" class="badge badge-green"></span>
           </div>
@@ -711,7 +976,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="chart-card">
           <div class="panel-header" style="margin-bottom:8px;padding-bottom:6px;">
             <div class="panel-title" style="font-size:14px;">
-              Task Accuracy Score Over Time (% &uarr; with Safety Guardrail)
+              Answer Accuracy (% &uarr; with 95% Minimum Floor)
             </div>
             <span id="accuracyDeltaBadge" class="badge badge-blue"></span>
           </div>
@@ -721,7 +986,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="chart-card">
           <div class="panel-header" style="margin-bottom:8px;padding-bottom:6px;">
             <div class="panel-title" style="font-size:14px;">
-              Prompt Cache Hit Ratio Over Time (% &uarr;)
+              Prompt Cache Reuse Rate (% &uarr;)
             </div>
             <span id="cacheDeltaBadge" class="badge badge-green"></span>
           </div>
@@ -729,48 +994,576 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
 
+      <div class="panel" id="whatIfSimulatorPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>What-If Cost, Model &amp; Safe Rollout Simulator</span>
+            <span class="badge badge-green" id="whatIfGuardrailBadge">SAFE TO PROMOTE CANARY</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Test model choices, thinking token limits, and chat history length before rolling out a safe Cloud Run traffic split.
+          </div>
+        </div>
+        <div class="add-param-form" style="margin-top:0;margin-bottom:14px;">
+          <div class="field-group">
+            <label>Model Choice</label>
+            <select id="whatIfModelTier" onchange="runWhatIfSimulation()">
+              <option value="gemini-3.1-flash-tier-routed">Gemini 3.1 Flash Routed (70% Flash / 30% Pro)</option>
+              <option value="gemini-2.5-flash">Gemini 2.5 Flash (100% Fast Tier)</option>
+              <option value="gemini-2.5-pro">Gemini 2.5 Pro (100% Deep Reasoning)</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label>Thinking Token Limit / Turn</label>
+            <select id="whatIfThinkingBudget" onchange="runWhatIfSimulation()">
+              <option value="512">512 tok (Strict Cap)</option>
+              <option value="1024" selected>1,024 tok (Recommended Goal)</option>
+              <option value="2048">2,048 tok (Extended Thinking)</option>
+              <option value="4096">4,096 tok (No Limit - High Cost Risk)</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label>Chat History Turns Kept (N)</label>
+            <select id="whatIfHistoryTurns" onchange="runWhatIfSimulation()">
+              <option value="4">4 Turns (Short History)</option>
+              <option value="6" selected>6 Turns (Recommended Balance)</option>
+              <option value="12">12 Turns (Medium History)</option>
+              <option value="20">20 Turns (Full Untrimmed History)</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label>Cloud Run Test Traffic %</label>
+            <select id="whatIfCanaryPct" onchange="runWhatIfSimulation()">
+              <option value="10">10% Test Traffic Split</option>
+              <option value="15" selected>15% Test Traffic Split</option>
+              <option value="25">25% Test Traffic Split</option>
+              <option value="50">50% Test Traffic Split</option>
+            </select>
+          </div>
+          <div>
+            <button class="btn btn-primary" onclick="runWhatIfSimulation()">
+              Simulate Rollout Plan
+            </button>
+          </div>
+        </div>
+        <div class="kpi-grid" id="whatIfKpiGrid" style="margin-bottom:12px;"></div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;">
+          <div class="action-box">
+            <div class="action-box-title">Cloud Run Traffic Split Command (<span class="mono">gcloud run services update-traffic</span>)</div>
+            <pre class="diff-pre" id="whatIfCanaryCmd" style="margin-top:6px;"></pre>
+          </div>
+          <div class="action-box">
+            <div class="action-box-title">Configuration Change Preview</div>
+            <pre class="diff-pre" id="whatIfGitopsDiff" style="margin-top:6px;"></pre>
+          </div>
+        </div>
+      </div>
+
       <div class="panel">
         <div class="panel-header">
           <div class="panel-title">
-            <span>What Actions the Optimizer Took to Improve These Parameters</span>
-            <span class="badge badge-green">Closed-Loop Log Diagnosis &rarr; Genome Action &rarr; Verified Impact</span>
+            <span>Turn-by-Turn Prompt Cache Check (<span class="mono">detect_prefix_breakpoint</span>)</span>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <span class="badge badge-blue">Line-by-Line Prompt Cache Check</span>
+              <button class="btn btn-primary" id="stepTurnBtn" onclick="triggerApi('/api/step_turn')" style="padding:4px 10px;font-size:11.5px;">
+                + Step Live Agent Turn
+              </button>
+            </div>
           </div>
           <div style="font-size:12px;color:var(--text-secondary);">
-            Includes automatic Reviewer Gatekeeper rollback when a candidate mutation violates accuracy guardrails (e.g. Gen 9).
+            Shows the exact line where a prompt changed and broke caching, plus cached vs. uncached tokens and turn cost.
+          </div>
+        </div>
+        <div class="kpi-grid" id="turnTrajectorySummaryKpis" style="margin-bottom:12px;"></div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Turn #</th>
+                <th>Gen</th>
+                <th>Tool Used</th>
+                <th>Prefix Hash</th>
+                <th>Changed Line</th>
+                <th>Why Cache Changed</th>
+                <th>Cached / Write / Uncached / Thoughts</th>
+                <th>Cache Hit %</th>
+                <th>Uncached vs. Cached Cost</th>
+              </tr>
+            </thead>
+            <tbody id="cacheForensicsBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>History of Changes Made by the Optimizer</span>
+            <span class="badge badge-green">Issue Found in Logs &rarr; Config Change &rarr; Verified Result</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Automatically blocks and rolls back any change that drops accuracy below the 95% minimum goal (for example, Gen 9).
           </div>
         </div>
         <div id="actionsTimelineContainer"></div>
       </div>
 
+      <div class="tab-footer-nav">
+        <button class="btn" onclick="switchTab(1)">&larr; Back: Goals &amp; Metrics</button>
+        <span>Step 3 of 6: Tested rollout settings and inspected change history.</span>
+        <button class="btn btn-primary" onclick="switchTab(3)">Next Step: Cost &amp; Billing (Tab 4) &rarr;</button>
+      </div>
     </section>
 
-    <!-- TAB 3: USER-CENTRIC FINOPS, SKILLS/MCP TOKEN CONSUMPTION & @VIBELIFT_TELEMETRY DECORATOR -->
+    <!-- TAB 3: COST & BILLING (WITH FOCUSED SUB-VIEW SELECTOR SO IT IS NEVER BUSY) -->
     <section id="tabPanel3" class="hidden">
+      <div class="subview-bar">
+        <div style="font-size:12px;font-weight:700;color:var(--text-primary);">
+          Cost &amp; Billing View (Choose a focused section):
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button id="costSubBtn_summary" class="subview-btn active" onclick="switchCostSubView('summary')">1. Cost per Answer &amp; Cloud Bill</button>
+          <button id="costSubBtn_calculator" class="subview-btn" onclick="switchCostSubView('calculator')">2. Pricing &amp; Cache Calculator</button>
+          <button id="costSubBtn_code_audit" class="subview-btn" onclick="switchCostSubView('code_audit')">3. Code Fixes &amp; Budget Summary</button>
+          <button id="costSubBtn_limits" class="subview-btn" onclick="switchCostSubView('limits')">4. Spend Limits &amp; Token Breakdown</button>
+          <button id="costSubBtn_all" class="subview-btn" onclick="switchCostSubView('all')">Show All</button>
+        </div>
+      </div>
+
+      <!-- SUB-VIEW 1: COST PER HELPFUL ANSWER (CpO), BILL DIFFERENCES & CLOUD BILLING SKU TABLE -->
+      <div class="panel" id="tokenomicsCpoDriftPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>1. Cost per Helpful Answer (CpO), Why Bills Differ from Token Counts &amp; Log Matching</span>
+            <span class="badge badge-green" id="cpoFormulaBadge">CpO = [&Sigma;(C_LLM + C_Tools + C_Infra)_i + p_esc &times; C_HITL] / (P_res &times; P_csat)</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);" id="cpoParetoOutlierNote">
+            Breaks down total cost per resolved conversation across model tokens, tool calls, Cloud Run hosting, human support handoffs, and user satisfaction ratings.
+          </div>
+        </div>
+        <div class="kpi-grid" id="cpoDriftKpis" style="margin-bottom:14px;"></div>
+        <div class="table-scroll" style="margin-bottom:14px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Agent &amp; Routing Lane</th>
+                <th>Sessions / Mo</th>
+                <th>Starting CpO (Turns)</th>
+                <th>Model / Tools / Hosting</th>
+                <th>Human Support Cost (Before &rarr; Now)</th>
+                <th>Current CpO</th>
+                <th>Formula</th>
+                <th>Monthly Saved</th>
+              </tr>
+            </thead>
+            <tbody id="cpoByAgentBody"></tbody>
+          </table>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:14px;">
+          <div>
+            <div style="font-size:12px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">
+              Why Your Cloud Bill Differs from Raw Token Counts (5 Cost Drivers &bull; Within 1.7% of Invoice)
+            </div>
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Cost Driver &amp; Rule</th>
+                    <th>Share of Extra Spend</th>
+                    <th>Before Fix ($)</th>
+                    <th>After Fix ($)</th>
+                    <th>Fix Applied</th>
+                  </tr>
+                </thead>
+                <tbody id="driftDriversBody"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="action-box">
+            <div class="action-box-title">How We Match User Chats, System Logs &amp; Cloud Billing</div>
+            <div class="table-scroll" style="margin:6px 0;">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Layer</th>
+                    <th>Source Table / Stream</th>
+                    <th>Join Keys</th>
+                    <th>Correlation Key</th>
+                    <th>Extracted Fields</th>
+                    <th>Variance</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody id="attributionJoinBody"></tbody>
+              </table>
+            </div>
+            <pre class="diff-pre" id="attributionJoinSqlPre" style="max-height:155px;"></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" id="billingReconciliationPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Cloud Billing SKU Comparison, Reserved Capacity (GSU) Advisor &amp; Platform Hosting Cost</span>
+            <span class="badge badge-green" id="billingReconDeltaBadge">Tracked Tokens vs. Cloud Bill: -1.67% Difference (Matched)</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Compares <span class="mono">@vibelift_telemetry</span> token estimates with official GCP Cloud Billing SKUs, reserved capacity (GSU) savings, and VibeLift's own ~$48/mo hosting cost.
+          </div>
+        </div>
+        <div class="table-scroll" style="margin-bottom:12px;">
+          <table>
+            <thead>
+              <tr>
+                <th>GCP Billing SKU ID</th>
+                <th>Service</th>
+                <th>SKU Description</th>
+                <th>Usage Volume</th>
+                <th>Tracked Est. ($)</th>
+                <th>Billed Gross ($)</th>
+                <th>Discounts &amp; Cache Credits ($)</th>
+                <th>Net Invoice ($)</th>
+                <th>Difference</th>
+              </tr>
+            </thead>
+            <tbody id="billingSkuBody"></tbody>
+          </table>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;">
+          <div class="action-box" id="gsuAdvisorBox"></div>
+          <div class="action-box" id="platformTcoBox"></div>
+        </div>
+      </div>
+
+      <!-- SUB-VIEW 2: PRICING OPTIONS, CONSUMPTION PORTFOLIO & CACHE BREAK-EVEN CALCULATOR -->
+      <div class="panel hidden" id="consumptionAndCachingPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>2. Pricing Options, Model Tiers &amp; Prompt Cache Break-Even Calculator (N*)</span>
+            <span class="badge badge-blue" id="cacheBreakEvenBadge">N* = 1 + S / (d_cache &times; P_in) = 4.70 calls/hr (Flash)</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Adjust hourly calls, off-peak traffic share, monthly tasks, and human review time to see updated monthly costs and prompt cache break-even.
+          </div>
+        </div>
+
+        <div class="add-param-form" style="margin-top:0;margin-bottom:14px;">
+          <div class="field-group">
+            <label>Repeat Calls / Hour (N)</label>
+            <input id="finopsCacheCallsHrInput" type="number" step="1" value="18" onchange="recomputeFinopsLedger()" />
+          </div>
+          <div class="field-group">
+            <label>Off-Peak Batch Share %</label>
+            <input id="finopsDeferredShareInput" type="number" step="5" value="35" onchange="recomputeFinopsLedger()" />
+          </div>
+          <div class="field-group">
+            <label>Monthly Agent Tasks</label>
+            <input id="finopsMonthlyTasksInput" type="number" step="5000" value="129500" onchange="recomputeFinopsLedger()" />
+          </div>
+          <div class="field-group">
+            <label>Human Review Mins / Ticket</label>
+            <input id="finopsHitlMinutesInput" type="number" step="1" value="8.8" onchange="recomputeFinopsLedger()" />
+          </div>
+          <div class="field-group">
+            <label>Support Staff Rate ($/hr)</label>
+            <input id="finopsHitlRateInput" type="number" step="5" value="85" onchange="recomputeFinopsLedger()" />
+          </div>
+          <div>
+            <button class="btn btn-primary" id="finopsRecomputeBtn" onclick="recomputeFinopsLedger()">
+              Update Cost Calculation
+            </button>
+          </div>
+        </div>
+
+        <div class="action-box" id="cacheBreakEvenSummaryBox" style="margin-bottom:14px;"></div>
+
+        <div class="table-scroll" style="margin-bottom:14px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Pricing Type</th>
+                <th>Billing Unit</th>
+                <th>GCP Service / Scope</th>
+                <th>Rate &amp; Discount Structure</th>
+                <th>Monthly Spend</th>
+                <th>Cost-Saving Action</th>
+              </tr>
+            </thead>
+            <tbody id="meteringCategoriesBody"></tbody>
+          </table>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:14px;margin-bottom:14px;">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Traffic Routing Lane</th>
+                  <th>Speed &amp; Capacity Rule</th>
+                  <th>Price Rate</th>
+                  <th>Traffic Share</th>
+                  <th>Best Used For</th>
+                </tr>
+              </thead>
+              <tbody id="routingLanesBody"></tbody>
+            </table>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Model Tier</th>
+                  <th>Models</th>
+                  <th>In / Out ($/1M)</th>
+                  <th>Quality per Dollar</th>
+                  <th>Role ("Pro Plans, Flash Runs")</th>
+                </tr>
+              </thead>
+              <tbody id="modelPortfolioBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Prompt Caching Mode</th>
+                <th>Write / Read Rate</th>
+                <th>Storage Fee (S)</th>
+                <th>Break-Even Calls/Hr (N*)</th>
+                <th>Min Tokens</th>
+                <th>Cache Duration</th>
+                <th>Recommendation</th>
+              </tr>
+            </thead>
+            <tbody id="cacheModelBreakEvenBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- SUB-VIEW 3: CODE FIXES (FIN-01..05), STEP-BY-STEP SAVINGS, @COST_GUARD & FINANCE SUMMARY -->
+      <div class="panel hidden" id="cockpitFinopsAndTcoPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>3. Code Cost Fixes (<span class="mono">FIN-01..FIN-05</span>), Step-by-Step Savings, <span class="mono">@cost_guard</span> &amp; Finance Summary</span>
+            <span class="badge badge-green" id="cockpitWaterfallBadge">$142,000/mo &rarr; $10,050/mo (-92.9% Combined Savings)</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Shows code-level cost fixes (<span class="mono">agent-ops-cockpit</span>), step-by-step monthly savings, <span class="mono">@cost_guard(budget_limit_usd)</span> per-turn budget checks, and finance accounting breakdown.
+          </div>
+        </div>
+
+        <div class="kpi-grid" id="cockpitWaterfallKpis" style="margin-bottom:14px;"></div>
+
+        <div class="table-scroll" style="margin-bottom:14px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Fix ID &amp; Issue</th>
+                <th>File &amp; Line</th>
+                <th>Code Pattern Found</th>
+                <th>How Savings Are Calculated</th>
+                <th>Monthly Saved</th>
+                <th>Status &amp; Verification</th>
+              </tr>
+            </thead>
+            <tbody id="cockpitFindingsBody"></tbody>
+          </table>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:14px;margin-bottom:14px;">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Savings Step</th>
+                  <th>Traffic Covered</th>
+                  <th>Cost Before ($)</th>
+                  <th>Step Reduction</th>
+                  <th>Step Saved ($)</th>
+                  <th>Cost After ($ &amp; Total %)</th>
+                </tr>
+              </thead>
+              <tbody id="cockpitWaterfallBody"></tbody>
+            </table>
+          </div>
+          <div>
+            <div class="action-box" id="costGuardBox" style="margin-bottom:10px;"></div>
+            <div class="action-box" id="cfoTcoKpiBox"></div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:14px;margin-bottom:14px;">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Engineering Setting</th>
+                  <th>Area</th>
+                  <th>Cost Impact</th>
+                  <th>Speed Change</th>
+                  <th>Monthly Impact</th>
+                  <th>Recommendation</th>
+                </tr>
+              </thead>
+              <tbody id="opexTradeoffBody"></tbody>
+            </table>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Finance Cost Category</th>
+                  <th>Workloads Included</th>
+                  <th>Share</th>
+                  <th>Monthly Net Spend</th>
+                  <th>Accounting Notes</th>
+                </tr>
+              </thead>
+              <tbody id="pnlAllocationBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Rollout Stage</th>
+                <th>Main Focus</th>
+                <th>Target Goal</th>
+                <th>Active Protection</th>
+                <th>Stage Status</th>
+              </tr>
+            </thead>
+            <tbody id="maturityProgressionBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- SUB-VIEW 4: API SPEND LIMITS (SLIDE #30), EXTENSION OVERHEAD & TOKEN BREAKDOWN -->
+      <div class="panel hidden" id="apigeeAndExtensionsPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>4. Apigee API Spend Limits (Slide #30) &amp; Tool Context Savings</span>
+            <span class="badge badge-green">Spend Caps &bull; Automatic Traffic Pause &bull; Knowledge Catalog (7x Smaller Prompts)</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Sets per-user token limits at the API gateway (Deck 1 Slide #30 <span class="mono">g3ee7e8b2bb8_1_3597</span>) and replaces 50k+ database schema dumps with 2k Knowledge Catalog summaries.
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:14px;">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Policy ID &amp; Name</th>
+                  <th>Slide Reference</th>
+                  <th>Limit Setting</th>
+                  <th>Tokens Saved</th>
+                  <th>Monthly Saved</th>
+                </tr>
+              </thead>
+              <tbody id="apigeePoliciesBody"></tbody>
+            </table>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Tool / Extension Setup</th>
+                  <th>Tokens / Turn</th>
+                  <th>How Context Is Loaded</th>
+                  <th>Cost / 100k Turns</th>
+                  <th>Recommendation &amp; Status</th>
+                </tr>
+              </thead>
+              <tbody id="extensionOverheadBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel hidden" id="tokenCategoryAlertsPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Token Usage by Type &amp; Stuck Loop Alerts</span>
+            <span class="badge badge-blue">Helpful Answers vs. Thinking Tokens vs. Extra Chat History vs. Background Tasks</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Separates tokens that directly answer the user from internal thinking tokens, old chat history, and stuck tool retry loops.
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:14px;">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Token Type</th>
+                  <th>Daily Volume</th>
+                  <th>Share (Before &rarr; Now)</th>
+                  <th>Monthly Cost</th>
+                  <th>Monthly Saved</th>
+                </tr>
+              </thead>
+              <tbody id="tokenCategoryBody"></tbody>
+            </table>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Alert ID &amp; User LDAP</th>
+                  <th>Agent &amp; Issue</th>
+                  <th>Wasted Tokens</th>
+                  <th>Fix Applied</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="runawayAlertsBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="tab-footer-nav">
+        <button class="btn" onclick="switchTab(2)">&larr; Back: Testing &amp; History</button>
+        <span>Step 4 of 6: Reviewed unit costs, cloud billing, and spend limits.</span>
+        <button class="btn btn-primary" onclick="switchTab(4)">Next Step: Users &amp; Feedback (Tab 5) &rarr;</button>
+      </div>
+    </section>
+
+    <!-- TAB 4: USERS, TOP SPENDERS & CUSTOMER FEEDBACK -->
+    <section id="tabPanel4" class="hidden">
       <div class="kpi-grid" id="userCentricKpis"></div>
 
       <div class="panel">
         <div class="panel-header">
           <div class="panel-title">
-            <span>User-Centric Token Spending &amp; Cost Savings by Cohort (4,000 &ndash; 10,000 DAU Scale)</span>
+            <span>User Groups &amp; Monthly Savings (4,000 &ndash; 10,000 Daily Users)</span>
             <span class="badge badge-green" id="oauthGovernanceBadge">OAuth 2.0 Cross-Project Consent &amp; PDD Verified</span>
           </div>
           <div style="font-size:12px;color:var(--text-secondary);">
-            Customer-requested user-centric view tracking token spending, context bloating reduction, idle ratio, and net dollar savings across enterprise cohorts.
+            Shows token usage, extra chat context reduction, wait time, and monthly dollar savings for each user group.
           </div>
         </div>
         <div class="table-scroll">
           <table>
             <thead>
               <tr>
-                <th>Enterprise User Cohort</th>
+                <th>User Group</th>
                 <th>Primary Agent</th>
-                <th>Active DAU</th>
+                <th>Daily Users (DAU)</th>
                 <th>24h Sessions</th>
                 <th>Tokens / User</th>
-                <th>Context Bloating (Before &rarr; After)</th>
-                <th>Idle Ratio</th>
-                <th>Cost / 1k Turns (Baseline &rarr; Now)</th>
-                <th>Net Monthly Savings</th>
+                <th>Extra Context (Before &rarr; Now)</th>
+                <th>Wait Ratio</th>
+                <th>Cost / 1k Turns (Before &rarr; Now)</th>
+                <th>Monthly Saved</th>
               </tr>
             </thead>
             <tbody id="userCohortsTableBody"></tbody>
@@ -781,25 +1574,136 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="panel">
         <div class="panel-header">
           <div class="panel-title">
-            <span>Real-Time Skill &amp; MCP Server Token Consumption + Active Optimization Layer</span>
-            <span class="badge badge-blue">Beyond Raw Admin Consoles: Automated Optimization Applied</span>
+            <span>Top Users by Token Spend &amp; Satisfaction (<span class="mono">user_ldap</span>)</span>
+            <span class="badge badge-blue">Per-User Spend &amp; Loop Check</span>
           </div>
           <div style="font-size:12px;color:var(--text-secondary);">
-            Tracks real-time token consumption per Skill and MCP Server and pairs each with automated prefix caching, chunk deduplication, and history pruning.
+            Breaks down prompt, thinking, and background tokens across top users along with satisfaction ratings and monthly department cost.
           </div>
         </div>
         <div class="table-scroll">
           <table>
             <thead>
               <tr>
-                <th>Skill / MCP Server Resource</th>
+                <th>User LDAP</th>
+                <th>Department</th>
+                <th>Primary Agent</th>
+                <th>7d Sessions</th>
+                <th>Total Tokens</th>
+                <th>Thinking Tok</th>
+                <th>Background Tok</th>
+                <th>Cache Hit %</th>
+                <th>Avg CSAT</th>
+                <th>Monthly Spend</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="powerUsersBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>User Ratings (CSAT) &amp; Feedback Log (<span class="mono">aive_logs</span>)</span>
+            <span class="badge badge-green">BigQuery <span class="mono">aive_logs.ratings_log</span> &amp; <span class="mono">agent_usage_log</span></span>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <button class="btn" onclick="emitLiveAiveUsageEvent()">+ Log Sample Usage Event</button>
+          </div>
+        </div>
+        <div class="add-param-form" style="margin-top:0;margin-bottom:12px;">
+          <div class="field-group">
+            <label>User Email / LDAP</label>
+            <input id="csatEmailInput" type="text" value="enriq@google.com" />
+          </div>
+          <div class="field-group">
+            <label>Session ID</label>
+            <input id="csatSessionInput" type="text" value="6446120131357637190" />
+          </div>
+          <div class="field-group">
+            <label>User Rating (1&ndash;5&#x2605;)</label>
+            <select id="csatRatingSelect">
+              <option value="5" selected>5 &#x2605;&#x2605;&#x2605;&#x2605;&#x2605; (Resolved &amp; Fast)</option>
+              <option value="4">4 &#x2605;&#x2605;&#x2605;&#x2605; (Good)</option>
+              <option value="3">3 &#x2605;&#x2605;&#x2605; (Okay)</option>
+              <option value="2">2 &#x2605;&#x2605; (Slow / Too Long)</option>
+              <option value="1">1 &#x2605; (Wrong Answer / Needed Human)</option>
+            </select>
+          </div>
+          <div class="field-group" style="grid-column:span 2;">
+            <label>User Feedback Comment</label>
+            <input id="csatFeedbackInput" type="text" value="Prefix cache hit kept turn latency under 600ms with accurate ticket resolution." />
+          </div>
+          <div>
+            <button class="btn btn-primary" onclick="submitLiveCsatRating()">+ Save Rating</button>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:14px;">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Rating ID</th>
+                  <th>User LDAP</th>
+                  <th>Session ID</th>
+                  <th>CSAT Rating</th>
+                  <th>User Feedback Comment</th>
+                </tr>
+              </thead>
+              <tbody id="vocRatingsBody"></tbody>
+            </table>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Event ID &amp; Task</th>
+                  <th>User LDAP &amp; Dept</th>
+                  <th>Model &amp; Response Time</th>
+                  <th>Total / Think / BG Tok</th>
+                  <th>Saved Output File (GCS)</th>
+                  <th>CSAT</th>
+                </tr>
+              </thead>
+              <tbody id="aiveUsageBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="tab-footer-nav">
+        <button class="btn" onclick="switchTab(3)">&larr; Back: Cost &amp; Billing</button>
+        <span>Step 5 of 6: Reviewed user groups, top spenders, and user feedback.</span>
+        <button class="btn btn-primary" onclick="switchTab(5)">Next Step: Tools &amp; SDK (Tab 6) &rarr;</button>
+      </div>
+    </section>
+
+    <!-- TAB 5: TOOLS, SKILLS/MCP & @VIBELIFT_TELEMETRY PYTHON SDK -->
+    <section id="tabPanel5" class="hidden">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Skill &amp; MCP Tool Token Usage + Active Savings</span>
+            <span class="badge badge-blue">Automatic Prompt Caching &amp; Trimming Enabled</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Shows token usage for each Skill and MCP tool server and how much money is saved by caching static instructions and trimming old history.
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Skill / MCP Tool</th>
                 <th>Type</th>
-                <th>Attached Agent</th>
+                <th>Connected Agent</th>
                 <th>24h Calls</th>
                 <th>Prompt Tokens</th>
                 <th>Cache Hit %</th>
-                <th>Context Bloat %</th>
-                <th>Optimization Action Applied</th>
+                <th>Extra Context %</th>
+                <th>Fix Applied</th>
                 <th>Monthly Saved</th>
               </tr>
             </thead>
@@ -811,18 +1715,18 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="panel">
         <div class="panel-header">
           <div class="panel-title">
-            <span>Real-Time <span class="mono">@vibelift_telemetry</span> Decorator Stream (Message-Passing Protocol Hook)</span>
-            <span class="badge badge-green">Zero BigQuery Router Delay (&lt;10ms Capture)</span>
+            <span>Live <span class="mono">@vibelift_telemetry</span> Event Stream (&lt;10ms Capture)</span>
+            <span class="badge badge-green">Direct Capture (No BigQuery Log Delay)</span>
           </div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
             <button class="btn btn-primary" onclick="emitLiveDecoratorEvent()">
-              &#x26A1; Emit Live @vibelift_telemetry Event
+              Send Test @vibelift_telemetry Event
             </button>
           </div>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-bottom:14px;">
           <div class="action-box">
-            <div class="action-box-title">Plug-and-Play Python Decorator (ADK / MCP / A2A Message Passing)</div>
+            <div class="action-box-title">One-Line Python Decorator Setup (ADK / MCP / A2A)</div>
             <pre class="diff-pre" style="margin-top:6px;">from telemetry import vibelift_telemetry
 
 @vibelift_telemetry(
@@ -836,12 +1740,12 @@ async def handle_agent_turn(message_envelope):
     return await runner.process(message_envelope)</pre>
           </div>
           <div class="action-box">
-            <div class="action-box-title">Architecture &amp; Security Governance Consensus</div>
+            <div class="action-box-title">Hosting, Security &amp; Privacy Summary</div>
             <div id="governanceDetailsBox" style="font-size:12.5px;line-height:1.65;color:var(--text-primary);margin-top:6px;">
-              <div>&bull; <strong>Collection Mode:</strong> Real-time decorator on message-passing protocols (avoids BigQuery Log Router delay).</div>
-              <div>&bull; <strong>Hosting Architecture:</strong> Migrated from Borg to Google Cloud Run with MCP Side-Panel + Fullscreen UI (complex A2UI descoped).</div>
-              <div>&bull; <strong>Security &amp; Privacy:</strong> Cross-project OAuth 2.0 user consent &amp; PDD review compliant for 4,000&ndash;10,000 DAU.</div>
-              <div>&bull; <strong>Optimization Backends:</strong> Pluggable support for AlphaEvolve, Opus Frontier Critic, and Google Vizier.</div>
+              <div>&bull; <strong>How Data Is Collected:</strong> Lightweight Python decorator on agent messages (&lt;10ms overhead, no BigQuery router wait).</div>
+              <div>&bull; <strong>Where It Runs:</strong> Hosted on Google Cloud Run with a right-side panel and fullscreen view.</div>
+              <div>&bull; <strong>Security &amp; Privacy:</strong> Uses OAuth 2.0 user consent and privacy-reviewed logging for 4,000&ndash;10,000 daily users.</div>
+              <div>&bull; <strong>Optimization Methods:</strong> Works with AlphaEvolve, Opus Critic, and Google Vizier.</div>
             </div>
           </div>
         </div>
@@ -854,11 +1758,11 @@ async def handle_agent_turn(message_envelope):
                 <th>Handler</th>
                 <th>Protocol</th>
                 <th>Skill / MCP</th>
-                <th>User Cohort</th>
-                <th>Latency</th>
+                <th>User Group</th>
+                <th>Response Time</th>
                 <th>Cache Hit</th>
-                <th>Context Bloat</th>
-                <th>Idle Ratio</th>
+                <th>Extra Context</th>
+                <th>Wait Ratio</th>
                 <th>Status</th>
               </tr>
             </thead>
@@ -866,13 +1770,20 @@ async def handle_agent_turn(message_envelope):
           </table>
         </div>
       </div>
+
+      <div class="tab-footer-nav">
+        <button class="btn" onclick="switchTab(4)">&larr; Back: Users &amp; Feedback</button>
+        <span>Step 6 of 6: Inspected tool token usage and @vibelift_telemetry SDK stream.</span>
+        <button class="btn btn-primary" onclick="switchTab(0)">Back to Start: Gemini Enterprise Agent Fleet (Tab 1) &rarr;</button>
+      </div>
     </section>
   </main>
 
   <script>
     function switchTab(tabIndex) {
-      const tab = [0, 1, 2, 3].indexOf(Number(tabIndex)) >= 0 ? Number(tabIndex) : 0;
-      [0, 1, 2, 3].forEach(function(i) {
+      const validTabs = [0, 1, 2, 3, 4, 5];
+      const tab = validTabs.indexOf(Number(tabIndex)) >= 0 ? Number(tabIndex) : 0;
+      validTabs.forEach(function(i) {
         const btn = document.getElementById('tabBtn' + i);
         const panel = document.getElementById('tabPanel' + i);
         if (btn) btn.classList.toggle('active', tab === i);
@@ -880,6 +1791,30 @@ async def handle_agent_turn(message_envelope):
       });
       const banner = document.getElementById('demoSelectorBanner');
       if (banner) banner.classList.toggle('hidden', tab === 0);
+      notifyHostSizeChanged();
+    }
+
+    let currentCostSubView = 'summary';
+    function switchCostSubView(viewKey) {
+      currentCostSubView = viewKey || 'summary';
+      const views = ['summary', 'calculator', 'code_audit', 'limits', 'all'];
+      views.forEach(function(k) {
+        const b = document.getElementById('costSubBtn_' + k);
+        if (b) b.classList.toggle('active', k === currentCostSubView);
+      });
+      const showAll = currentCostSubView === 'all';
+      const panelMap = {
+        tokenomicsCpoDriftPanel: showAll || currentCostSubView === 'summary',
+        billingReconciliationPanel: showAll || currentCostSubView === 'summary',
+        consumptionAndCachingPanel: showAll || currentCostSubView === 'calculator',
+        cockpitFinopsAndTcoPanel: showAll || currentCostSubView === 'code_audit',
+        apigeeAndExtensionsPanel: showAll || currentCostSubView === 'limits',
+        tokenCategoryAlertsPanel: showAll || currentCostSubView === 'limits',
+      };
+      Object.keys(panelMap).forEach(function(pid) {
+        const elNode = document.getElementById(pid);
+        if (elNode) elNode.classList.toggle('hidden', !panelMap[pid]);
+      });
       notifyHostSizeChanged();
     }
 
@@ -912,13 +1847,13 @@ async def handle_agent_turn(message_envelope):
           String(p.timestamp_label || '').includes('Rej') ||
           String(p.event_marker || '').includes('Rejected') ||
           String(p.event_marker || '').includes('Blocked');
-        const dotColor = isRejected ? '#d93025' : color;
+        const dotColor = isRejected ? '#991b1b' : color;
         circlesHtml += `
-          <circle cx="${cx}" cy="${cy}" r="${isRejected ? 5.5 : 4.5}" fill="${dotColor}" stroke="#fff" stroke-width="1.5"/>
-          <text x="${cx}" y="${(Number(cy) - 8).toFixed(1)}" text-anchor="middle" font-size="10.5" font-weight="700" fill="${dotColor}">
+          <circle cx="${cx}" cy="${cy}" r="${isRejected ? 5.5 : 4}" fill="${dotColor}" stroke="#fff" stroke-width="1.5"/>
+          <text x="${cx}" y="${(Number(cy) - 8).toFixed(1)}" text-anchor="middle" font-size="10.5" font-weight="600" fill="${dotColor}">
             ${unit === '$' ? '$' + Number(p[key]).toFixed(1) : Number(p[key]) + unit}
           </text>
-          <text x="${cx}" y="${h - 8}" text-anchor="middle" font-size="10" fill="#5f6368">
+          <text x="${cx}" y="${h - 8}" text-anchor="middle" font-size="10" fill="#475569">
             ${p.timestamp_label}
           </text>
         `;
@@ -926,11 +1861,11 @@ async def handle_agent_turn(message_envelope):
 
       return `
         <svg viewBox="0 0 ${w} ${h}" width="100%" height="155">
-          <line x1="${padL}" y1="${targetY}" x2="${w - padR}" y2="${targetY}" stroke="#1e8e3e" stroke-dasharray="4,4" stroke-width="1.2"/>
-          <text x="${w - padR}" y="${(Number(targetY) - 4).toFixed(1)}" text-anchor="end" font-size="9.5" fill="#1e8e3e" font-weight="600">
+          <line x1="${padL}" y1="${targetY}" x2="${w - padR}" y2="${targetY}" stroke="#64748b" stroke-dasharray="4,4" stroke-width="1.2"/>
+          <text x="${w - padR}" y="${(Number(targetY) - 4).toFixed(1)}" text-anchor="end" font-size="9.5" fill="#475569" font-weight="600">
             Target Goal: ${unit === '$' ? '$' + targetVal : targetVal + unit}
           </text>
-          <polyline fill="none" stroke="${color}" stroke-width="2.6" points="${polyPoints}"/>
+          <polyline fill="none" stroke="${color}" stroke-width="2.2" points="${polyPoints}"/>
           ${circlesHtml}
         </svg>
       `;
@@ -990,7 +1925,7 @@ async def handle_agent_turn(message_envelope):
       );
 
       document.getElementById('activeGenBadge').textContent =
-        'ACTIVE GENOME: GEN ' + activeGen;
+        'ACTIVE CONFIG: REV ' + activeGen;
 
       if (state.gcp_project) {
         const projEl = document.getElementById('gcpProjectText');
@@ -1075,13 +2010,13 @@ async def handle_agent_turn(message_envelope):
         return found ? Number(found.target_value) : fallback;
       };
       document.getElementById('chartLatencySvg').innerHTML =
-        renderMiniChart(ts, 'latency_ms', 'ms', '#1a73e8', findParam('latency_ms', 800), true);
+        renderMiniChart(ts, 'latency_ms', 'ms', '#0f172a', findParam('latency_ms', 800), true);
       document.getElementById('chartCostSvg').innerHTML =
-        renderMiniChart(ts, 'cost_usd', '$', '#1e8e3e', findParam('cost_usd', 4.0), true);
+        renderMiniChart(ts, 'cost_usd', '$', '#334155', findParam('cost_usd', 4.0), true);
       document.getElementById('chartAccuracySvg').innerHTML =
-        renderMiniChart(ts, 'accuracy_pct', '%', '#9334e6', findParam('accuracy_pct', 95.0), false);
+        renderMiniChart(ts, 'accuracy_pct', '%', '#475569', findParam('accuracy_pct', 95.0), false);
       document.getElementById('chartCacheSvg').innerHTML =
-        renderMiniChart(ts, 'cache_hit_pct', '%', '#e37400', findParam('cache_hit_pct', 90.0), false);
+        renderMiniChart(ts, 'cache_hit_pct', '%', '#1e293b', findParam('cache_hit_pct', 90.0), false);
 
       if (ts.length >= 2) {
         const first = ts[0];
@@ -1127,7 +2062,7 @@ async def handle_agent_turn(message_envelope):
                 </div>
               </div>
               <div>
-                <div class="action-box-title" style="margin-bottom:4px;">3. Genome Prompt / Config Diff</div>
+                <div class="action-box-title" style="margin-bottom:4px;">3. Prompt &amp; Runtime Config Diff</div>
                 <pre class="diff-pre">${esc(a.diff_snippet)}</pre>
               </div>
             </div>
@@ -1148,7 +2083,1184 @@ async def handle_agent_turn(message_envelope):
       }
 
       renderUserCentricAndDecorator(state.user_centric, state.decorator_events);
+      renderSmeControlPlane(state);
       notifyHostSizeChanged();
+    }
+
+    let currentOtelLayerFilter = 'ALL';
+    let latestNl2SqlResult = null;
+
+    function toggleNl2SqlDrawer() {
+      const drawer = document.getElementById('nl2sqlCopilotDrawer');
+      if (drawer) {
+        drawer.classList.toggle('hidden');
+        notifyHostSizeChanged();
+      }
+    }
+
+    function renderNl2SqlResult(res) {
+      if (!res || typeof res !== 'object') return;
+      latestNl2SqlResult = res;
+      const sumEl = document.getElementById('nl2sqlSummaryText');
+      if (sumEl) sumEl.textContent = res.executive_summary || '';
+      const sqlEl = document.getElementById('nl2sqlSqlPre');
+      if (sqlEl) sqlEl.textContent = res.generated_sql || '';
+      const headEl = document.getElementById('nl2sqlResultHead');
+      const bodyEl = document.getElementById('nl2sqlResultBody');
+      const rows = Array.isArray(res.rows) ? res.rows : [];
+      if (headEl && bodyEl) {
+        headEl.replaceChildren();
+        bodyEl.replaceChildren();
+        if (rows.length > 0 && typeof rows[0] === 'object') {
+          const cols = Object.keys(rows[0]);
+          headEl.appendChild(el('tr', null, cols.map(function(c) { return el('th', null, [c]); })));
+          rows.forEach(function(r) {
+            bodyEl.appendChild(el('tr', null, cols.map(function(c) {
+              return el('td', 'mono', [String(r[c] === null || r[c] === undefined ? '—' : r[c])]);
+            })));
+          });
+        }
+      }
+    }
+
+    function runNl2SqlPreset(q) {
+      const inp = document.getElementById('nl2sqlQuestionInput');
+      if (inp) inp.value = q;
+      runNl2SqlQuery();
+    }
+
+    async function runNl2SqlQuery() {
+      const inp = document.getElementById('nl2sqlQuestionInput');
+      const question = (inp && inp.value ? inp.value.trim() : '') || 'Compare cost per 1k turns and prompt cache savings across agents';
+      if (!isEmbedded()) {
+        try {
+          const resp = await fetch('/api/nl2sql', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({question: question}),
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            renderNl2SqlResult(data);
+            return;
+          }
+        } catch (e) {}
+      }
+      // Embedded or offline fallback
+      if (currentState && currentState.nl2sql_default) {
+        renderNl2SqlResult(currentState.nl2sql_default);
+      }
+    }
+
+    function setOtelLayerFilter(layerId) {
+      currentOtelLayerFilter = layerId || 'ALL';
+      if (currentState && currentState.otel_catalog) {
+        renderOtelCatalog(currentState.otel_catalog);
+      }
+    }
+
+    function toggleTelemetryValidatorDrawer() {
+      const drawer = document.getElementById('telemetryValidatorDrawer');
+      if (drawer) {
+        drawer.classList.toggle('hidden');
+        notifyHostSizeChanged();
+      }
+    }
+
+    function renderTelemetryValidation(val) {
+      if (!val || typeof val !== 'object') return;
+      const sumBadge = document.getElementById('telemetryValidatorSummaryBadge');
+      if (sumBadge) {
+        const passed = val.passed_count ?? 0;
+        const total = val.total_checks ?? 0;
+        sumBadge.textContent = passed + '/' + total + ' Verified (' + (val.overall_status || 'VERIFIED') + ')';
+      }
+      const judgeBox = document.getElementById('telemetryValidatorJudgeBox');
+      if (judgeBox) {
+        const judge = val.llm_judge || {};
+        const verdict = judge.verdict || val.overall_status || 'VERIFIED_GROUNDED';
+        const vCls = String(verdict).includes('FAIL') ? 'badge-red' : 'badge-green';
+        judgeBox.replaceChildren(
+          el('div', 'action-box-title', [
+            'LLM-as-a-Judge Grounding Audit • Model: ' + (judge.judge_model || 'gemini-2.5-flash') +
+            ' • Mode: ' + (val.mode || 'LIVE_GCP_TELEMETRY') +
+            ' • Grounding Score: ' + (judge.grounding_score_100 ?? val.grounding_score_pct ?? 100) + '/100'
+          ]),
+          el('div', null, [
+            badge(verdict, vCls),
+            el('span', null, [' ' + (judge.executive_summary || 'All dashboard tabs verified against ground-truth telemetry.')])
+          ]),
+          el('div', 'kpi-sub', [
+            'Tab Findings: ' + (Array.isArray(judge.tab_findings) ? judge.tab_findings.join(' | ') : 'All 6 tabs verified.')
+          ])
+        );
+      }
+      const tbody = document.getElementById('telemetryValidatorChecksBody');
+      if (tbody && Array.isArray(val.checks)) {
+        tbody.replaceChildren();
+        val.checks.forEach(function(chk) {
+          const st = String(chk.status || 'PASS');
+          const stCls = st === 'PASS' ? 'badge-green' : 'badge-red';
+          tbody.appendChild(el('tr', null, [
+            el('td', 'mono', [el('strong', null, [chk.check_id || ''])]),
+            el('td', null, [badge(chk.tab || '', 'badge-blue')]),
+            el('td', null, [
+              el('strong', null, [chk.metric || '']),
+              el('div', 'kpi-sub', [chk.detail || ''])
+            ]),
+            el('td', 'mono', [chk.expected || '']),
+            el('td', 'mono', [chk.actual || '']),
+            el('td', 'mono', [chk.source || '']),
+            el('td', null, [badge(st, stCls)]),
+          ]));
+        });
+      }
+    }
+
+    async function runTelemetryValidationAudit(runLlmJudge) {
+      const btn = document.getElementById('runLlmJudgeAuditBtn');
+      const origText = btn ? btn.textContent : 'Run Live LLM-as-a-Judge Audit';
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Auditing via Vertex AI...';
+      }
+      try {
+        const resp = await fetch('/api/validate_telemetry', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({llm_judge: Boolean(runLlmJudge)}),
+        });
+        if (resp.ok) {
+          const val = await resp.json();
+          if (currentState) {
+            currentState.telemetry_validation = val;
+          }
+          renderTelemetryValidation(val);
+        }
+      } catch (e) {
+        if (currentState && currentState.telemetry_validation) {
+          renderTelemetryValidation(currentState.telemetry_validation);
+        }
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = origText;
+        }
+      }
+    }
+
+    function renderOtelCatalog(catalog) {
+      if (!catalog || typeof catalog !== 'object') return;
+      const alarmsBox = document.getElementById('watchOutAlarmsContainer');
+      if (alarmsBox && Array.isArray(catalog.watch_out_alarms)) {
+        alarmsBox.replaceChildren();
+        catalog.watch_out_alarms.forEach(function(al) {
+          const sev = String(al.severity || 'HIGH');
+          const sevCls = sev === 'CRITICAL' ? 'badge-red' : 'badge-yellow';
+          alarmsBox.appendChild(el('div', 'action-box', [
+            el('div', null, [
+              badge(sev, sevCls),
+              el('strong', null, [' ' + (al.title || al.alarm_id || '')]),
+            ]),
+            el('div', 'mono', ['Metric: ' + (al.metric_key || al.formula || '') + ' | Baseline: ' + (al.threshold || al.baseline || '')]),
+            el('div', null, ['Current: ' + (al.current_status || al.current || '')]),
+            el('div', null, [el('strong', null, ['Status / Mitigation: ']), String(al.automated_remediation || al.status || '')]),
+          ]));
+        });
+      }
+
+      const tbody = document.getElementById('otelCatalogTableBody');
+      if (tbody && Array.isArray(catalog.layers)) {
+        tbody.replaceChildren();
+        catalog.layers.forEach(function(layer) {
+          if (currentOtelLayerFilter !== 'ALL' && layer.layer_id !== currentOtelLayerFilter) return;
+          (layer.metrics || layer.parameters || []).forEach(function(m) {
+            const st = String(m.status || 'OPTIMIZED');
+            const stCls = st.includes('BREACH') ? 'badge-red' : 'badge-green';
+            tbody.appendChild(el('tr', null, [
+              el('td', null, [badge(layer.layer_id || 'OTEL', 'badge-blue')]),
+              el('td', 'mono', [m.otel_metric || m.otel_name || m.param_id || '']),
+              el('td', null, [el('strong', null, [m.label || ''])]),
+              el('td', 'mono', [m.baseline_value + ' ' + (m.unit || '')]),
+              el('td', 'mono', [el('strong', null, [m.current_value + ' ' + (m.unit || '')])]),
+              el('td', 'mono', [(m.target_slo ?? m.target_value ?? '') + ' ' + (m.unit || '')]),
+              el('td', null, [m.why_it_matters || '']),
+              el('td', null, [badge(st, stCls)]),
+            ]));
+          });
+        });
+      }
+    }
+
+    function renderWhatIfResult(sim) {
+      if (!sim || typeof sim !== 'object') return;
+      const guardBadge = document.getElementById('whatIfGuardrailBadge');
+      if (guardBadge) {
+        const statusStr = String(sim.guardrail_status || 'SAFE_TO_PROMOTE_CANARY');
+        guardBadge.textContent = statusStr + ' (Accuracy: ' + sim.projected_accuracy_pct + '% vs ' + sim.accuracy_guardrail_floor_pct + '% Floor)';
+        guardBadge.className = 'badge ' + (statusStr.includes('BLOCKED') ? 'badge-red' : 'badge-green');
+      }
+      const grid = document.getElementById('whatIfKpiGrid');
+      if (grid) {
+        grid.replaceChildren(
+          kpiCard(
+            'Projected Cost / 1k Turns',
+            '$' + Number(sim.current_cost_per_1k_usd || 3.45).toFixed(2) + ' → $' + Number(sim.projected_cost_per_1k_usd || 2.18).toFixed(2),
+            'Baseline Gen 0: $' + Number(sim.baseline_cost_per_1k_usd || 29.40).toFixed(2) + '/1k'
+          ),
+          kpiCard(
+            'Cost / CSAT-Positive Resolved Session',
+            '$' + Number(sim.projected_cost_per_resolved_session_usd || 0.0069).toFixed(4),
+            'North-Star Outcome Unit Economics'
+          ),
+          kpiCard(
+            'Projected P95 Latency',
+            Number(sim.current_p95_latency_ms || 690).toFixed(0) + 'ms → ' + Number(sim.projected_p95_latency_ms || 515).toFixed(0) + 'ms',
+            'Prompt Cache Hit: ' + Number(sim.projected_cache_hit_pct || 93.4).toFixed(1) + '%'
+          ),
+          kpiCard(
+            'Additional Monthly Fleet Savings',
+            '+$' + fmtInt(sim.additional_monthly_savings_usd || 11400) + '/mo',
+            'Canary Split: ' + (sim.traffic_canary_pct || 15) + '% Traffic'
+          )
+        );
+      }
+      const cmdEl = document.getElementById('whatIfCanaryCmd');
+      if (cmdEl) cmdEl.textContent = sim.canary_rollout_command || '';
+      const diffEl = document.getElementById('whatIfGitopsDiff');
+      if (diffEl) diffEl.textContent = sim.gitops_diff || '';
+    }
+
+    async function runWhatIfSimulation() {
+      const tierEl = document.getElementById('whatIfModelTier');
+      const thinkEl = document.getElementById('whatIfThinkingBudget');
+      const histEl = document.getElementById('whatIfHistoryTurns');
+      const canEl = document.getElementById('whatIfCanaryPct');
+      const body = {
+        model_tier: tierEl ? tierEl.value : 'gemini-3.1-flash-tier-routed',
+        thinking_budget_tok: thinkEl ? parseInt(thinkEl.value, 10) : 1024,
+        history_window_turns: histEl ? parseInt(histEl.value, 10) : 6,
+        traffic_canary_pct: canEl ? parseInt(canEl.value, 10) : 15,
+      };
+      if (!isEmbedded()) {
+        try {
+          const resp = await fetch('/api/what_if_simulate', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body),
+          });
+          if (resp.ok) {
+            const sim = await resp.json();
+            renderWhatIfResult(sim);
+            return;
+          }
+        } catch (e) {}
+      }
+      // Client-side instant fallback calculation for embedded mode
+      const curCost = 3.45;
+      const tierMult = body.model_tier.indexOf('flash') >= 0 ? (body.model_tier.indexOf('routed') >= 0 ? 0.68 : 0.54) : 1.15;
+      const thinkMult = Math.max(0.72, Math.min(1.35, body.thinking_budget_tok / 1600.0));
+      const histMult = Math.max(0.75, Math.min(1.40, body.history_window_turns / 8.0));
+      const projCost = Math.max(1.25, Math.round(curCost * tierMult * thinkMult * histMult * 100) / 100);
+      const projLat = Math.max(340, Math.round(690 * (0.65 + 0.25 * tierMult) * (0.8 + 0.2 * thinkMult)));
+      const projAcc = Math.min(99.1, Math.max(89.5, Math.round((96.4 - (body.history_window_turns < 4 ? 1.8 : 0) + (body.thinking_budget_tok >= 1024 ? 0.5 : -0.4)) * 10) / 10));
+      renderWhatIfResult({
+        model_tier: body.model_tier,
+        thinking_budget_tok: body.thinking_budget_tok,
+        history_window_turns: body.history_window_turns,
+        traffic_canary_pct: body.traffic_canary_pct,
+        baseline_cost_per_1k_usd: 29.40,
+        current_cost_per_1k_usd: curCost,
+        projected_cost_per_1k_usd: projCost,
+        projected_cost_per_resolved_session_usd: Math.round(projCost * 0.00318 * 10000) / 10000,
+        current_p95_latency_ms: 690,
+        projected_p95_latency_ms: projLat,
+        projected_accuracy_pct: projAcc,
+        accuracy_guardrail_floor_pct: 95.0,
+        guardrail_status: projAcc >= 95.0 ? 'SAFE_TO_PROMOTE_CANARY' : 'BLOCKED_BY_ACCURACY_GUARDRAIL',
+        projected_cache_hit_pct: 93.6,
+        additional_monthly_savings_usd: Math.max(1200, Math.round((curCost - projCost) * 9000)),
+        canary_rollout_command: 'gcloud run services update-traffic vibelift-analytics-agent --region=us-central1 --to-revisions=vibelift-canary=' + body.traffic_canary_pct + ',LATEST=' + (100 - body.traffic_canary_pct),
+        gitops_diff: '- model_routing: "static"\\n- thinking_budget_tokens: 4096\\n- history_window_turns: 20\\n+ model_routing: "' + body.model_tier + '"\\n+ thinking_budget_tokens: ' + body.thinking_budget_tok + '\\n+ history_window_turns: ' + body.history_window_turns,
+      });
+    }
+
+    function renderCacheForensics(turns) {
+      const tbody = document.getElementById('cacheForensicsBody');
+      if (!tbody || !Array.isArray(turns)) return;
+      tbody.replaceChildren();
+      turns.forEach(function(t) {
+        const um = t.usage_metadata || {};
+        const ba = t.billing_attribution || {};
+        const bpLine = t.cache_breakpoint_line;
+        const bpBadge = bpLine
+          ? badge('Line ' + bpLine + ' Mutated', 'badge-red')
+          : badge('100% Static Match', 'badge-green');
+        const hitPct = Number(t.cache_hit_ratio || 0).toFixed(1) + '%';
+        const hitBadge = Number(t.cache_hit_ratio || 0) >= 75
+          ? badge(hitPct, 'badge-green')
+          : badge(hitPct, 'badge-yellow');
+        tbody.appendChild(el('tr', null, [
+          el('td', 'mono', ['#' + t.turn_index]),
+          el('td', 'mono', ['Gen ' + t.evolution_generation]),
+          el('td', 'mono', [t.tool_called || '—']),
+          el('td', 'mono', [t.prompt_prefix_hash || '—']),
+          el('td', null, [bpBadge]),
+          el('td', null, [t.cache_breakpoint_reason || '—']),
+          el('td', 'mono', [
+            fmtInt(um.cached_content_token_count || 0) + ' / ' +
+            fmtInt(um.cache_creation_input_tokens || 0) + ' / ' +
+            fmtInt(um.uncached_input_tokens || 0) + ' / ' +
+            fmtInt(um.thoughts_token_count || 0)
+          ]),
+          el('td', null, [hitBadge]),
+          el('td', 'mono', [
+            '$' + Number(ba.naive_count_tokens_usd || 0).toFixed(4) + ' → $' + Number(ba.actual_log_cached_usd || 0).toFixed(4)
+          ]),
+        ]));
+      });
+    }
+
+    async function submitLiveCsatRating() {
+      const emailEl = document.getElementById('csatEmailInput');
+      const sessEl = document.getElementById('csatSessionInput');
+      const ratEl = document.getElementById('csatRatingSelect');
+      const fbEl = document.getElementById('csatFeedbackInput');
+      const payload = {
+        user_email: emailEl ? emailEl.value : 'enriq@google.com',
+        session_id: sessEl ? sessEl.value : '6446120131357637190',
+        rating: ratEl ? parseInt(ratEl.value, 10) : 5,
+        feedback_text: fbEl ? fbEl.value : 'Verified SME closed-loop optimization guardrail.',
+      };
+      if (!isEmbedded()) {
+        try {
+          const res = await fetch('/api/csat_rating', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload),
+          });
+          if (res.ok) {
+            const nextState = await res.json();
+            renderState(nextState);
+            return;
+          }
+        } catch (e) {}
+      }
+      if (currentState && currentState.aive_logs && Array.isArray(currentState.aive_logs.ratings_logs)) {
+        const ldap = String(payload.user_email || 'enriq').split('@')[0];
+        currentState.aive_logs.ratings_logs.unshift({
+          rating_id: 'rat-live',
+          timestamp: 'Just now',
+          session_id: payload.session_id,
+          user_email: payload.user_email,
+          user_ldap: ldap,
+          rating: payload.rating,
+          feedback_text: payload.feedback_text,
+        });
+        renderSmeControlPlane(currentState);
+      }
+    }
+
+    function emitLiveAiveUsageEvent() {
+      triggerApi('/api/aive_log', {
+        user_email: 'enriq@google.com',
+        task_type: 'SME_CONTROL_PLANE_AUDIT',
+        prompt: 'Verify closed-loop CSAT + tokenomics guardrail',
+        total_tokens: 18900,
+        latency_ms: 540.0,
+        status: 'SUCCESS',
+      });
+    }
+
+    let activeSmePersonaId = 'finops_lead';
+
+    function selectSmePersona(personaId) {
+      activeSmePersonaId = personaId;
+      if (currentState) {
+        renderSmePersonaSelector(currentState.persona_playbooks);
+      }
+    }
+
+    function renderSmePersonaSelector(pb) {
+      if (!pb || !Array.isArray(pb.personas)) return;
+      const bar = document.getElementById('smePersonaLensBar');
+      const card = document.getElementById('smePersonaPlaybookCard');
+      if (bar) {
+        bar.replaceChildren();
+        pb.personas.forEach(function(p) {
+          const isActive = p.persona_id === activeSmePersonaId;
+          const bScore = p.score_before_100 ?? p.before_score ?? 48;
+          const aScore = p.score_after_100 ?? p.after_score ?? 96;
+          const btn = el('button', isActive ? 'btn btn-primary' : 'btn', [
+            p.role_title + ' (' + bScore + ' → ' + aScore + '/100)'
+          ]);
+          btn.style.padding = '4px 10px';
+          btn.style.fontSize = '11.5px';
+          btn.onclick = function() {
+            selectSmePersona(p.persona_id);
+          };
+          bar.appendChild(btn);
+        });
+      }
+      if (card) {
+        const selected = pb.personas.find(function(p) { return p.persona_id === activeSmePersonaId; }) || pb.personas[0];
+        if (selected) {
+          const bScore = selected.score_before_100 ?? selected.before_score ?? 48;
+          const aScore = selected.score_after_100 ?? selected.after_score ?? 96;
+          const primKpi = selected.primary_kpi || (Array.isArray(selected.primary_kpis) ? selected.primary_kpis[0] : 'Cost & Quality');
+          const dailyAction = selected.daily_workflow_action || (Array.isArray(selected.actionable_controls) ? selected.actionable_controls.join(' • ') : '');
+          const compScore = pb.composite_after_score_100 ?? pb.fleet_average_after_score ?? 96.3;
+          card.replaceChildren(
+            el('div', 'action-box-title', [
+              selected.role_title + ' Operational Playbook • Primary KPI: ' + primKpi +
+              ' • Usability Score: ' + bScore + '/100 (POC) → ' + aScore + '/100 (Control Plane) • Composite: ' +
+              compScore + '/100'
+            ]),
+            el('div', null, [
+              el('strong', null, ['Daily Workflow Action: ']),
+              dailyAction
+            ]),
+            el('div', 'kpi-sub', [
+              'Key Questions Answered: ' + (selected.key_questions_answered || selected.primary_kpis || []).join(' | ')
+            ])
+          );
+        }
+      }
+    }
+
+    function renderSmeControlPlane(state) {
+      if (!state) return;
+
+      // 00. Telemetry Grounding & LLM-as-a-Judge Validator
+      if (state.telemetry_validation) {
+        renderTelemetryValidation(state.telemetry_validation);
+      }
+
+      // 0. SME Persona Lens Selector & Operational Playbook
+      if (state.persona_playbooks) {
+        renderSmePersonaSelector(state.persona_playbooks);
+      }
+
+      // 0b. 7-Step Closed-Loop Optimization Pipeline Ribbon
+      const wfRibbon = document.getElementById('workflowStepsRibbon');
+      const wfSteps = Array.isArray(state.workflow_steps) ? state.workflow_steps : (Array.isArray(state.steps) ? state.steps : []);
+      if (wfRibbon && wfSteps.length > 0) {
+        wfRibbon.replaceChildren();
+        wfSteps.forEach(function(ws, idx) {
+          const isStr = typeof ws === 'string';
+          const titleStr = isStr ? ws : ('Step ' + (ws.step || (idx + 1)) + ': ' + (ws.title || ''));
+          const detailStr = isStr ? 'Verified in closed-loop telemetry pipeline' : (ws.detail || '');
+          const pill = el('div', 'action-box', [
+            el('div', 'action-box-title', [titleStr]),
+            el('div', 'kpi-sub', [detailStr])
+          ]);
+          pill.style.padding = '6px 10px';
+          pill.style.maxWidth = '230px';
+          wfRibbon.appendChild(pill);
+        });
+      }
+
+      // 0c. Turn Trajectory Summary KPIs (#turnTrajectorySummaryKpis)
+      const tsKpis = document.getElementById('turnTrajectorySummaryKpis');
+      if (tsKpis && state.turn_summary) {
+        const ts = state.turn_summary;
+        tsKpis.replaceChildren(
+          kpiCard(
+            'Total Evaluated Agent Turns',
+            fmtInt(ts.total_turns || 0) + ' turns',
+            'Cache Hits: ' + fmtInt(ts.cache_hits || 0) + ' | Cache Busts: ' + fmtInt(ts.cache_busts || 0)
+          ),
+          kpiCard(
+            'Observed Trajectory Cache Hit Rate',
+            Number(ts.cache_hit_rate_pct || 0).toFixed(1) + '%',
+            'Prefix SHA-256 verification across turns'
+          ),
+          kpiCard(
+            'Cumulative Trajectory Spend (Actual vs Naive)',
+            '$' + Number(ts.total_actual_cost_usd || 0).toFixed(4) + ' vs $' + Number(ts.total_naive_cost_usd || 0).toFixed(4),
+            'Net Trajectory Saved: $' + Number(ts.net_cost_saved_usd || 0).toFixed(4)
+          ),
+          kpiCard(
+            'Total Cached vs Uncached Input Tokens',
+            fmtInt(ts.total_cached_read_tokens || 0) + ' cached',
+            fmtInt(ts.total_uncached_input_tokens || 0) + ' uncached • ' + fmtInt(ts.total_thoughts_tokens || 0) + ' thoughts'
+          )
+        );
+      }
+
+      // 0d. Cloud Run Revision Topology & Gemini Enterprise Support Triage
+      const crBody = document.getElementById('cloudRunServicesBody');
+      if (crBody && Array.isArray(state.cloud_run_services)) {
+        crBody.replaceChildren();
+        state.cloud_run_services.forEach(function(svc) {
+          crBody.appendChild(el('tr', null, [
+            el('td', 'mono', [
+              el('strong', null, [svc.service_name || '']),
+              el('div', 'kpi-sub', [(svc.region || 'us-central1') + ' • rev: ' + (svc.active_revision || '')])
+            ]),
+            el('td', 'mono', ['min=' + (svc.min_instances ?? 1) + ' / max=' + (svc.max_instances ?? 10) + ' / conc=' + (svc.concurrency ?? 80)]),
+            el('td', 'mono', [(svc.cpu_utilization_pct || 0) + '% CPU / ' + (svc.memory_utilization_pct || 0) + '% Mem']),
+            el('td', 'mono', [(svc.p95_latency_ms || 0) + 'ms (cold: ' + (svc.cold_starts_1h ?? 0) + ')']),
+            el('td', 'mono', ['$' + fmtInt(svc.monthly_cost_usd || 0) + '/mo']),
+            el('td', null, [badge(svc.status || 'HEALTHY', 'badge-green')]),
+          ]));
+        });
+      }
+
+      const geSupBody = document.getElementById('geSupportEventsBody');
+      if (geSupBody && Array.isArray(state.gemini_enterprise_support_events)) {
+        geSupBody.replaceChildren();
+        state.gemini_enterprise_support_events.forEach(function(ev) {
+          geSupBody.appendChild(el('tr', null, [
+            el('td', 'mono', [
+              el('strong', null, [ev.ticket_id || ev.event_id || ev.session_id || '']),
+              el('div', 'kpi-sub', [ev.tier || ev.triage_tier || 'L1/L2'])
+            ]),
+            el('td', 'mono', [ev.agent_id || '']),
+            el('td', 'mono', [ev.trace_id || ev.event_timestamp || '']),
+            el('td', null, [ev.issue_summary || ev.intent_category || ev.failure_mode || '']),
+            el('td', null, [
+              badge(ev.status || ev.resolution_status || 'RESOLVED', 'badge-green'),
+              el('div', 'kpi-sub', [ev.resolution_action || ('Latency: ' + (ev.latency_ms || 0) + 'ms • Tokens: ' + (ev.tokens_used || 0))])
+            ]),
+          ]));
+        });
+      }
+
+      // 1. North-Star Unit Economics & Dual-Ledger Cloud Billing Reconciliation
+      const br = state.billing_reconciliation || {};
+      const ue = br.unit_economics || {};
+      const nsKpis = document.getElementById('northStarUnitEconKpis');
+      if (nsKpis) {
+        nsKpis.replaceChildren(
+          kpiCard(
+            'North-Star: Cost / CSAT-Positive Resolved Session',
+            '$' + Number(ue.baseline_cost_per_resolved_session_usd || 0.2293).toFixed(4) + ' → $' + Number(ue.optimized_cost_per_resolved_session_usd || 0.0110).toFixed(4),
+            '-' + Number(ue.unit_cost_reduction_pct || 95.2).toFixed(1) + '% outcome-adjusted unit cost reduction'
+          ),
+          kpiCard(
+            'First-Contact Resolution Rate',
+            Number(ue.baseline_resolution_rate_pct || 76.2).toFixed(1) + '% → ' + Number(ue.optimized_resolution_rate_pct || 96.4).toFixed(1) + '%',
+            'Avg Turns / Session: ' + (ue.avg_turns_per_session_baseline || 4.8) + ' → ' + (ue.avg_turns_per_session_optimized || 3.1)
+          ),
+          kpiCard(
+            'Voice-of-Customer CSAT Positive (≥4★)',
+            Number(ue.baseline_csat_positive_pct || 68.4).toFixed(1) + '% → ' + Number(ue.optimized_csat_positive_pct || 93.8).toFixed(1) + '%',
+            'Joined from BigQuery aive_logs.ratings_log'
+          ),
+          kpiCard(
+            'Reconciled Net Cloud Invoice (30d)',
+            '$' + fmtInt(br.total_net_invoice_usd || 32220) + '/mo',
+            'Credits Applied: -$' + fmtInt(br.total_credits_usd || 17560) + ' (Variance: ' + (br.reconciliation_delta_pct || -1.67) + '%)'
+          )
+        );
+      }
+
+      // 2. NL2SQL Co-Pilot Initial Result
+      if (!latestNl2SqlResult && state.nl2sql_default) {
+        renderNl2SqlResult(state.nl2sql_default);
+      }
+
+      // 3. 5-Layer OTel Catalog & Watch-Out Alarms
+      if (state.otel_catalog) {
+        renderOtelCatalog(state.otel_catalog);
+      }
+
+      // 4. What-If FinOps & Canary Simulator + Per-Turn Cache Forensics
+      if (state.what_if_default) {
+        renderWhatIfResult(state.what_if_default);
+      }
+      if (state.turns) {
+        renderCacheForensics(state.turns);
+      }
+
+      // 5. Token Category Breakdown & Runaway Agent Alerts
+      const uc = state.user_centric || {};
+      const tcBody = document.getElementById('tokenCategoryBody');
+      if (tcBody && uc.token_category_breakdown) {
+        tcBody.replaceChildren();
+        const rawTc = uc.token_category_breakdown;
+        const tcRows = Array.isArray(rawTc)
+          ? rawTc
+          : Object.keys(rawTc).map(function(k) {
+              const item = rawTc[k] || {};
+              return {
+                category: k.replace(/_/g, ' ').toUpperCase(),
+                optimization_action: item.remediation || item.description || '',
+                daily_tokens_m: ((Number(item.after_tokens_per_turn || 0) * 1000) / 1000000).toFixed(2),
+                share_before_pct: item.before_share_pct ?? 0,
+                share_after_pct: item.after_share_pct ?? 0,
+                monthly_cost_usd: Math.round(Number(item.after_tokens_per_turn || 0) * 0.45),
+                monthly_saved_usd: Math.max(0, Math.round((Number(item.before_tokens_per_turn || 0) - Number(item.after_tokens_per_turn || 0)) * 0.45)),
+              };
+            });
+        tcRows.forEach(function(cat) {
+          tcBody.appendChild(el('tr', null, [
+            el('td', null, [
+              el('strong', null, [cat.category || '']),
+              el('div', 'kpi-sub', [cat.optimization_action || '']),
+            ]),
+            el('td', 'mono', [cat.daily_tokens_m + 'M tok/d']),
+            el('td', 'mono', [cat.share_before_pct + '% → ' + cat.share_after_pct + '%']),
+            el('td', 'mono', ['$' + fmtInt(cat.monthly_cost_usd) + '/mo']),
+            el('td', 'mono', [badge('$' + fmtInt(cat.monthly_saved_usd) + '/mo saved', 'badge-green')]),
+          ]));
+        });
+      }
+
+      const raBody = document.getElementById('runawayAlertsBody');
+      if (raBody && Array.isArray(uc.runaway_agent_alerts)) {
+        raBody.replaceChildren();
+        uc.runaway_agent_alerts.forEach(function(al, idx) {
+          raBody.appendChild(el('tr', null, [
+            el('td', 'mono', [
+              el('strong', null, [al.alert_id || ('ALRT-' + (idx + 1))]),
+              el('div', null, ['Severity: ' + (al.user_ldap || al.severity || 'HIGH')]),
+            ]),
+            el('td', null, [
+              badge(al.agent_id || al.agent_name || '', 'badge-blue'),
+              el('div', null, [al.issue_type || al.runaway_pattern || '']),
+            ]),
+            el('td', 'mono', [
+              al.wasted_tokens !== undefined
+                ? (fmtInt(al.wasted_tokens) + ' tok ($' + Number(al.cost_impact_usd || 0).toFixed(2) + ')')
+                : ('$' + Number(al.baseline_burn_per_1k_turns || 0).toFixed(2) + ' → $' + Number(al.optimized_burn_per_1k_turns || 0).toFixed(2) + '/1k')
+            ]),
+            el('td', null, [al.remediation_applied || al.mitigation_applied || '']),
+            el('td', null, [badge(al.status || 'MITIGATED', 'badge-green')]),
+          ]));
+        });
+      }
+
+      // 6. Dual-Ledger Billing SKU Table, GSU Advisor & Platform TCO
+      const skuBody = document.getElementById('billingSkuBody');
+      if (skuBody && Array.isArray(br.sku_ledger)) {
+        skuBody.replaceChildren();
+        br.sku_ledger.forEach(function(row) {
+          skuBody.appendChild(el('tr', null, [
+            el('td', 'mono', [row.sku_id || '']),
+            el('td', null, [badge(row.service || '', 'badge-blue')]),
+            el('td', null, [el('strong', null, [row.sku_description || ''])]),
+            el('td', 'mono', [row.usage_volume || '']),
+            el('td', 'mono', ['$' + fmtInt(row.telemetry_estimated_usd)]),
+            el('td', 'mono', ['$' + fmtInt(row.billing_export_gross_usd)]),
+            el('td', 'mono', ['-$' + fmtInt(Math.abs(Number(row.cud_and_cache_credits_usd || 0)))]),
+            el('td', 'mono', [el('strong', null, ['$' + fmtInt(row.net_invoice_usd)])]),
+            el('td', 'mono', [badge(row.variance_pct + '%', 'badge-green')]),
+          ]));
+        });
+      }
+
+      const gsuBox = document.getElementById('gsuAdvisorBox');
+      if (gsuBox && br.gsu_advisor) {
+        const ga = br.gsu_advisor;
+        gsuBox.replaceChildren(
+          el('div', 'action-box-title', ['Provisioned Throughput (GSU) & 1-Year CUD Capacity Advisor']),
+          el('div', null, ['Current Peak Traffic: ' + ga.current_peak_tps + ' TPS | Recommended Floor: ' + ga.recommended_provisioned_gsus + ' GSUs (' + ga.spillover_mode + ')']),
+          el('div', null, ['Pay-As-You-Go Monthly: $' + fmtInt(ga.payg_monthly_usd) + '/mo → GSU + 1-Yr CUD Monthly: $' + fmtInt(ga.gsu_cud_monthly_usd) + '/mo']),
+          el('div', null, [badge('Projected GSU + CUD Savings: $' + fmtInt(ga.projected_gsu_savings_usd) + '/mo (' + ga.utilization_at_peak_pct + '% Peak Util)', 'badge-green')]),
+          el('div', 'kpi-sub', [ga.recommendation_note || ''])
+        );
+      }
+
+      const tcoBox = document.getElementById('platformTcoBox');
+      if (tcoBox && state.otel_catalog && state.otel_catalog.architecture_tco) {
+        const tco = state.otel_catalog.architecture_tco;
+        const totalHosting = tco.estimated_monthly_total_usd ?? tco.total_monthly_platform_tco_usd ?? 39.0;
+        const comps = tco.components || tco.line_items || [];
+        tcoBox.replaceChildren(
+          el('div', 'action-box-title', ['VibeLift Observability Platform Own 30-Day GCP Infrastructure TCO']),
+          el('div', null, ['Total Platform Hosting Cost: $' + Number(totalHosting).toFixed(2) + '/mo (' + (tco.target_scale || tco.scale_profile || '4,000 - 10,000 DAU') + ')']),
+          el('div', 'kpi-sub', [
+            comps.map(function(c) {
+              return (c.service || c.component) + ': $' + Number(c.monthly_cost_usd || 0).toFixed(2) + '/mo';
+            }).join(' • ')
+          ])
+        );
+      }
+
+      // 7. Power Users Leaderboard (user_ldap)
+      const puBody = document.getElementById('powerUsersBody');
+      if (puBody && Array.isArray(uc.power_users_ldap)) {
+        puBody.replaceChildren();
+        uc.power_users_ldap.forEach(function(u) {
+          const st = String(u.anomaly_status || 'NORMAL');
+          const stCls = st.includes('OPTIMIZED') || st.includes('LIVE') ? 'badge-green' : 'badge-blue';
+          puBody.appendChild(el('tr', null, [
+            el('td', 'mono', [el('strong', null, [u.user_ldap || ''])]),
+            el('td', null, [u.department || '']),
+            el('td', 'mono', [u.primary_agent || '']),
+            el('td', 'mono', [fmtInt(u.sessions_7d)]),
+            el('td', 'mono', [u.total_tokens_m + 'M']),
+            el('td', 'mono', [u.thinking_tokens_k + 'k']),
+            el('td', 'mono', [u.background_tokens_k + 'k']),
+            el('td', 'mono', [u.cache_hit_pct + '%']),
+            el('td', 'mono', [(u.avg_csat ?? 4.9) + ' ★']),
+            el('td', 'mono', ['$' + Number(u.monthly_cost_usd || 0).toFixed(2)]),
+            el('td', null, [badge(st, stCls)]),
+          ]));
+        });
+      }
+
+      // 8. Voice-of-Customer CSAT Stream & aive_logs Usage Stream
+      const aive = state.aive_logs || {};
+      const vocBody = document.getElementById('vocRatingsBody');
+      if (vocBody && Array.isArray(aive.ratings_logs)) {
+        vocBody.replaceChildren();
+        aive.ratings_logs.forEach(function(r) {
+          const stars = '★'.repeat(Math.max(1, Math.min(5, Number(r.rating || 5))));
+          const rCls = Number(r.rating || 5) >= 4 ? 'badge-green' : 'badge-yellow';
+          vocBody.appendChild(el('tr', null, [
+            el('td', 'mono', [r.rating_id || '']),
+            el('td', 'mono', [el('strong', null, [r.user_ldap || r.user_email || ''])]),
+            el('td', 'mono', [r.session_id || '']),
+            el('td', null, [badge(r.rating + ' ' + stars, rCls)]),
+            el('td', null, [r.feedback_text || '']),
+          ]));
+        });
+      }
+
+      const usageBody = document.getElementById('aiveUsageBody');
+      if (usageBody && Array.isArray(aive.usage_logs)) {
+        usageBody.replaceChildren();
+        aive.usage_logs.forEach(function(u) {
+          const outs = Array.isArray(u.outputs) ? u.outputs : [];
+          const firstUri = outs.length > 0 ? (outs[0].gcs_uri || '') : '—';
+          usageBody.appendChild(el('tr', null, [
+            el('td', 'mono', [
+              el('strong', null, [u.event_id || '']),
+              el('div', null, [badge(u.task_type || '', 'badge-blue')]),
+            ]),
+            el('td', null, [
+              el('strong', 'mono', [u.user_ldap || '']),
+              el('div', 'kpi-sub', [u.department || '']),
+            ]),
+            el('td', 'mono', [(u.model_name || '') + ' (' + u.latency_ms + 'ms)']),
+            el('td', 'mono', [
+              fmtInt(u.total_tokens || 0) + ' / ' +
+              fmtInt(u.thinking_tokens || 0) + ' / ' +
+              fmtInt(u.background_tokens || 0)
+            ]),
+            el('td', 'mono', [firstUri]),
+            el('td', null, [badge((u.csat_rating || 5) + ' ★', 'badge-green')]),
+          ]));
+        });
+      }
+
+      // 9. Tokenomics 2026 & AgentOps Cockpit FinOps Ledger
+      if (state.tokenomics_cockpit) {
+        renderTokenomicsCockpit(state.tokenomics_cockpit);
+      }
+    }
+
+    async function recomputeFinopsLedger() {
+      const btn = document.getElementById('finopsRecomputeBtn');
+      const origText = btn ? btn.textContent : 'Recompute All Ledgers';
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Recomputing...';
+      }
+      const callsPerHr = Number((document.getElementById('finopsCacheCallsHrInput') || {}).value || 18.0);
+      const deferredShare = Number((document.getElementById('finopsDeferredShareInput') || {}).value || 35.0);
+      const monthlyTasks = Number((document.getElementById('finopsMonthlyTasksInput') || {}).value || 50000);
+      const hitlMinutes = Number((document.getElementById('finopsHitlMinutesInput') || {}).value || 3.0);
+      const hitlRate = Number((document.getElementById('finopsHitlRateInput') || {}).value || 85.0);
+      const payload = {
+        calls_per_hr: callsPerHr,
+        deferred_share_pct: deferredShare,
+        monthly_tasks: monthlyTasks,
+        hitl_review_minutes: hitlMinutes,
+        hitl_hourly_rate_usd: hitlRate,
+      };
+      try {
+        const res = await fetch('/api/recompute_finops', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        const tc = data.result || data.tokenomics_cockpit || (data.state && data.state.tokenomics_cockpit);
+        if (tc) {
+          if (currentState) currentState.tokenomics_cockpit = tc;
+          renderTokenomicsCockpit(tc);
+        }
+      } catch (err) {
+        console.error('Failed to recompute FinOps ledger:', err);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = origText;
+        }
+      }
+    }
+
+    function renderTokenomicsCockpit(tc) {
+      if (!tc || typeof tc !== 'object') return;
+      const cpo = tc.cpo || {};
+      const drift = tc.drift || {};
+      const attr = tc.attribution_join || {};
+      const mc = tc.metering_and_consumption || {};
+      const caching = tc.caching || {};
+      const ge = tc.gateway_and_extensions || {};
+      const tcoPnl = tc.tco_and_pnl || {};
+      const cf = tc.cockpit_finops || {};
+
+      // 1. CpO & Drift KPI Cards
+      const cpoKpis = document.getElementById('cpoDriftKpis');
+      if (cpoKpis) {
+        const unoptMult = (Number(drift.unoptimized_billed_spend_usd || 2540) / Math.max(1, Number(drift.expected_naive_token_spend_usd || 420))).toFixed(2);
+        const remMult = (Number(drift.actual_reconciled_invoice_usd || 1355.75) / Math.max(1, Number(drift.expected_naive_token_spend_usd || 420))).toFixed(2);
+        cpoKpis.replaceChildren(
+          kpiCard(
+            'True Cost per Outcome (Baseline → Optimized)',
+            '$' + Number(cpo.fleet_baseline_cpo_usd || 2.339).toFixed(3) + ' → $' + Number(cpo.fleet_optimized_cpo_usd || 0.431).toFixed(3),
+            '-' + Number(cpo.fleet_cpo_reduction_pct || 81.6).toFixed(1) + '% incl. LLM + Tools + Infra + HITL'
+          ),
+          kpiCard(
+            'Fleet Total Monthly CpO Spend',
+            '$' + fmtInt(cpo.fleet_monthly_baseline_usd || 302900) + ' → $' + fmtInt(cpo.fleet_monthly_optimized_usd || 55800) + '/mo',
+            'Net Monthly CpO Savings: $' + fmtInt(cpo.fleet_monthly_saved_usd || 247100) + '/mo'
+          ),
+          kpiCard(
+            'Token-to-Spend Drift Multiplier (Before → After)',
+            unoptMult + 'x → ' + remMult + 'x',
+            'Naive Token Est: $' + Number(drift.expected_naive_token_spend_usd || 420).toFixed(2) + ' vs Reconciled: $' + Number(drift.actual_reconciled_invoice_usd || 1355.75).toFixed(2)
+          ),
+          kpiCard(
+            'Unattributed Invoice Drift (D1..D5 Reconciled)',
+            '$' + Number(drift.unattributed_usd || 0).toFixed(2) + ' (0.00%)',
+            cpo.pareto_outlier_rule || 'Top 10% outlier sessions drive 78.4% of unoptimized spend'
+          )
+        );
+      }
+
+      // 2. CpO By Agent Table
+      const cpoBody = document.getElementById('cpoByAgentBody');
+      const cpoAgents = cpo.agents || cpo.by_agent || [];
+      if (cpoBody && Array.isArray(cpoAgents)) {
+        cpoBody.replaceChildren();
+        cpoAgents.forEach(function(a) {
+          cpoBody.appendChild(el('tr', null, [
+            el('td', null, [
+              el('strong', null, [a.display_name || a.agent_id]),
+              el('div', 'kpi-sub mono', [(a.model || '') + ' • ' + (a.lane || '')]),
+            ]),
+            el('td', 'mono', [fmtInt(a.sessions_per_mo)]),
+            el('td', 'mono', ['$' + Number(a.baseline_cpo_usd || 0).toFixed(4) + ' (' + a.n_turns_baseline + ' turns)']),
+            el('td', 'mono', [
+              '$' + Number(a.c_llm_turn_usd || 0).toFixed(4) + ' / $' +
+              Number(a.c_tools_turn_usd || 0).toFixed(4) + ' / $' +
+              Number(a.c_infra_turn_usd || 0).toFixed(4)
+            ]),
+            el('td', 'mono', ['$' + Number(a.c_hitl_baseline_usd || 0).toFixed(3) + ' → $' + Number(a.c_hitl_optimized_usd || 0).toFixed(3)]),
+            el('td', 'mono', [
+              el('strong', null, ['$' + Number(a.optimized_cpo_usd || 0).toFixed(4)]),
+              el('div', null, [badge('-' + a.cpo_reduction_pct + '%', 'badge-green')]),
+            ]),
+            el('td', 'mono', [a.formula || '']),
+            el('td', 'mono', [badge('$' + fmtInt(a.monthly_saved_usd) + '/mo', 'badge-green')]),
+          ]));
+        });
+      }
+
+      // 3. Drift Drivers D1..D5 Table
+      const driftBody = document.getElementById('driftDriversBody');
+      const driftRows = drift.drift_drivers || drift.drivers || [];
+      if (driftBody && Array.isArray(driftRows)) {
+        driftBody.replaceChildren();
+        driftRows.forEach(function(d) {
+          driftBody.appendChild(el('tr', null, [
+            el('td', 'mono', [badge(d.driver_id, 'badge-blue')]),
+            el('td', null, [
+              el('strong', null, [d.name || '']),
+              el('div', 'kpi-sub mono', [d.detection_rule || '']),
+            ]),
+            el('td', 'mono', [d.share_of_drift_pct + '% of drift']),
+            el('td', 'mono', ['$' + Number(d.unoptimized_drift_usd || 0).toFixed(2)]),
+            el('td', 'mono', [el('strong', null, ['$' + Number(d.remediated_drift_usd || 0).toFixed(2)])]),
+            el('td', null, [d.control_applied || '']),
+          ]));
+        });
+      }
+
+      // 4. 3-Way Attribution Join Table & SQL
+      const attrBody = document.getElementById('attributionJoinBody');
+      const attrSources = attr.sources || [];
+      if (attrBody && Array.isArray(attrSources)) {
+        attrBody.replaceChildren();
+        attrSources.forEach(function(r) {
+          attrBody.appendChild(el('tr', null, [
+            el('td', null, [el('strong', null, [r.layer || ''])]),
+            el('td', 'mono', [r.table_or_stream || '']),
+            el('td', 'mono', [r.join_keys || '']),
+            el('td', 'mono', ['labels.agent_id + trace_id']),
+            el('td', 'mono', [r.extracted_fields || '']),
+            el('td', 'mono', ['Reconciled (<1.7% var)']),
+            el('td', null, [badge('JOIN ACTIVE', 'badge-green')]),
+          ]));
+        });
+      }
+      const attrSql = document.getElementById('attributionJoinSqlPre');
+      if (attrSql && attr.join_sql) {
+        attrSql.textContent = attr.join_sql;
+      }
+
+      // 5. Metering Categories, Routing Lanes & 4-Tier Model Portfolio
+      const mcBody = document.getElementById('meteringCategoriesBody');
+      const mcCats = mc.categories || [];
+      if (mcBody && Array.isArray(mcCats)) {
+        mcBody.replaceChildren();
+        mcCats.forEach(function(m) {
+          mcBody.appendChild(el('tr', null, [
+            el('td', null, [el('strong', null, [m.category || ''])]),
+            el('td', 'mono', [m.billing_unit || '']),
+            el('td', null, [m.sku_examples || '']),
+            el('td', null, [m.rate_summary || '']),
+            el('td', 'mono', ['$' + fmtInt(m.monthly_spend_usd) + '/mo']),
+            el('td', null, [m.optimization_lever || '']),
+          ]));
+        });
+      }
+
+      const rlBody = document.getElementById('routingLanesBody');
+      if (rlBody && Array.isArray(mc.routing_lanes)) {
+        rlBody.replaceChildren();
+        mc.routing_lanes.forEach(function(l) {
+          rlBody.appendChild(el('tr', null, [
+            el('td', null, [
+              el('strong', null, [l.lane_name || '']),
+              el('div', 'kpi-sub mono', [l.lane_id || '']),
+            ]),
+            el('td', null, [l.slo_guarantee || '']),
+            el('td', 'mono', [badge(l.price_multiplier || '1.0x', 'badge-green')]),
+            el('td', 'mono', [l.traffic_share_pct + '% of turns']),
+            el('td', null, [l.best_for || '']),
+          ]));
+        });
+      }
+
+      const mpBody = document.getElementById('modelPortfolioBody');
+      if (mpBody && Array.isArray(mc.model_portfolio_tiers)) {
+        mpBody.replaceChildren();
+        mc.model_portfolio_tiers.forEach(function(t) {
+          mpBody.appendChild(el('tr', null, [
+            el('td', null, [badge(t.tier || '', 'badge-blue')]),
+            el('td', 'mono', [t.models || '']),
+            el('td', 'mono', [(t.input_rate_1m || '') + ' / ' + (t.output_rate_1m || '')]),
+            el('td', 'mono', [badge(t.intelligence_per_dollar_index || '', 'badge-green')]),
+            el('td', null, [t.role_in_hybrid_pattern || '']),
+          ]));
+        });
+      }
+
+      // 6. Explicit vs Implicit Context Cache Break-Even
+      const cbBox = document.getElementById('cacheBreakEvenSummaryBox');
+      if (cbBox) {
+        const hc = caching.hourly_cost_comparison || {};
+        cbBox.replaceChildren(
+          el('div', 'action-box-title', ['Break-Even Reuse Threshold Formula: ' + (caching.formula || 'N* = 1 + S / (0.9 * P_in)')]),
+          el('div', null, [
+            'Flash Break-Even: ' + caching.flash_break_even_calls_per_hr + ' calls/hr • Pro Break-Even: ' + caching.pro_break_even_calls_per_hr + ' calls/hr • Winning Mode: ',
+            badge(hc.winning_mode || 'EXPLICIT_CACHE_LOCKED', 'badge-green'),
+            ' (Monthly Prefix Savings: $' + fmtInt(hc.monthly_prefix_savings_usd || 0) + '/mo)',
+          ]),
+          el('div', 'kpi-sub mono', [
+            'Uncached PayGo: $' + Number(hc.uncached_paygo_hr_usd || 0).toFixed(4) + '/hr vs Explicit Cache: $' +
+            Number(hc.explicit_cache_hr_usd || 0).toFixed(4) + '/hr vs Implicit Cache: $' + Number(hc.implicit_cache_hr_usd || 0).toFixed(4) + '/hr'
+          ])
+        );
+      }
+
+      const cmBody = document.getElementById('cacheModelBreakEvenBody');
+      const modesTable = caching.modes_table || [];
+      if (cmBody && Array.isArray(modesTable)) {
+        cmBody.replaceChildren();
+        modesTable.forEach(function(m) {
+          cmBody.appendChild(el('tr', null, [
+            el('td', 'mono', [el('strong', null, [m.mode || ''])]),
+            el('td', 'mono', [(m.write_multiplier || '') + ' / ' + (m.read_multiplier || '')]),
+            el('td', 'mono', [m.storage_rate || '']),
+            el('td', 'mono', [badge(m.break_even_calls_per_hr || '', 'badge-blue')]),
+            el('td', 'mono', [m.min_tokens || '']),
+            el('td', 'mono', [m.ttl || '']),
+            el('td', null, [badge(m.verdict || '', 'badge-green')]),
+          ]));
+        });
+      }
+
+      // 7. Apigee AI Gateway & Modular Extension Overhead
+      const apBody = document.getElementById('apigeePoliciesBody');
+      if (apBody && Array.isArray(ge.apigee_policies)) {
+        apBody.replaceChildren();
+        ge.apigee_policies.forEach(function(p) {
+          apBody.appendChild(el('tr', null, [
+            el('td', null, [
+              badge(p.policy_id || '', 'badge-blue'),
+              el('div', null, [el('strong', null, [p.policy_name || ''])]),
+            ]),
+            el('td', 'mono', [p.source_ref || '']),
+            el('td', 'mono', [p.configured_threshold || '']),
+            el('td', 'mono', [p.tokens_prevented_monthly || '']),
+            el('td', 'mono', [badge('$' + fmtInt(p.monthly_savings_usd) + '/mo', 'badge-green')]),
+          ]));
+        });
+      }
+
+      const extBody = document.getElementById('extensionOverheadBody');
+      const extRows = ge.extension_overhead || [];
+      if (extBody && Array.isArray(extRows)) {
+        extBody.replaceChildren();
+        extRows.forEach(function(x) {
+          const isWarn = String(x.extension_type || '').includes('Anti-Pattern');
+          extBody.appendChild(el('tr', null, [
+            el('td', null, [el('strong', null, [x.extension_type || ''])]),
+            el('td', 'mono', [x.tokens_per_turn || '']),
+            el('td', null, [x.loading_mechanism || '']),
+            el('td', 'mono', ['$' + fmtInt(x.monthly_cost_100k_turns_usd) + '/mo']),
+            el('td', null, [badge(x.status || '', isWarn ? 'badge-red' : 'badge-green')]),
+          ]));
+        });
+      }
+
+      // 8. AgentOps Cockpit FinOps Findings, Waterfall, Cost Guard & CFO TCO/P&L
+      const wf = cf.waterfall || {};
+      const wfKpis = document.getElementById('cockpitWaterfallKpis');
+      if (wfKpis) {
+        wfKpis.replaceChildren(
+          kpiCard(
+            'Unoptimized Baseline Monthly Spend',
+            '$' + fmtInt(wf.baseline_monthly_usd || 142000) + '/mo',
+            'Before FIN-01..FIN-05 structural remediations'
+          ),
+          kpiCard(
+            'Final Remediated Monthly Spend',
+            '$' + fmtInt(wf.optimized_monthly_usd || 10050) + '/mo',
+            'Combined step-by-step savings'
+          ),
+          kpiCard(
+            'Total Monthly & Annualized Net Savings',
+            '$' + fmtInt(wf.total_monthly_saved_usd || 131950) + '/mo',
+            '$' + fmtInt((wf.total_monthly_saved_usd || 131950) * 12) + '/yr annualized'
+          ),
+          kpiCard(
+            'Compounded Spend Reduction',
+            '-' + Number(wf.total_reduction_pct || 92.9).toFixed(1) + '%',
+            'Verified across sequential FinOps levers'
+          )
+        );
+      }
+
+      const finBody = document.getElementById('cockpitFindingsBody');
+      const finRows = cf.auditor_findings || [];
+      if (finBody && Array.isArray(finRows)) {
+        finBody.replaceChildren();
+        finRows.forEach(function(f) {
+          finBody.appendChild(el('tr', null, [
+            el('td', 'mono', [
+              badge(f.rule_id || '', 'badge-red'),
+              el('div', null, [el('strong', null, [f.title || ''])]),
+            ]),
+            el('td', 'mono', [f.file_line || '']),
+            el('td', 'mono', [f.ast_detection || '']),
+            el('td', null, [f.savings_formula || '']),
+            el('td', 'mono', [badge('$' + fmtInt(f.monthly_savings_usd) + '/mo saved', 'badge-green')]),
+            el('td', null, [
+              badge(f.status || 'REMEDIATED', 'badge-green'),
+              el('div', 'kpi-sub', [f.evidence || '']),
+            ]),
+          ]));
+        });
+      }
+
+      const wfBody = document.getElementById('cockpitWaterfallBody');
+      if (wfBody && Array.isArray(wf.steps)) {
+        wfBody.replaceChildren();
+        wf.steps.forEach(function(s) {
+          wfBody.appendChild(el('tr', null, [
+            el('td', null, [el('strong', null, [s.step_name || ''])]),
+            el('td', 'mono', [s.eligible_share_pct + '% eligible']),
+            el('td', 'mono', ['$' + fmtInt(s.before_usd) + '/mo']),
+            el('td', 'mono', ['-' + s.step_reduction_pct + '%']),
+            el('td', 'mono', [badge('-$' + fmtInt(s.delta_saved_usd) + '/mo', 'badge-green')]),
+            el('td', 'mono', [el('strong', null, ['$' + fmtInt(s.after_usd) + '/mo (-' + s.cumulative_reduction_pct + '%)'])]),
+          ]));
+        });
+      }
+
+      const cgBox = document.getElementById('costGuardBox');
+      if (cgBox && cf.cost_guard) {
+        const cg = cf.cost_guard;
+        const sims = cg.preflight_simulations || [];
+        cgBox.replaceChildren(
+          el('div', 'action-box-title', ['Pre-Flight Turn Budget Enforcer: @cost_guard(budget_limit_usd=' + cg.budget_limit_usd + ')']),
+          el('div', 'kpi-sub', [
+            sims.map(function(s) {
+              return s.call_id + ' (' + s.agent_and_handler + '): est $' + Number(s.estimated_worst_case_usd || 0).toFixed(4) + ' → ' + s.verdict;
+            }).join(' • ')
+          ])
+        );
+      }
+
+      const cfoBox = document.getElementById('cfoTcoKpiBox');
+      if (cfoBox && tcoPnl.tco_breakdown_rows) {
+        cfoBox.replaceChildren(
+          el('div', 'action-box-title', [
+            'CFO Enterprise AI TCO Breakdown (' + tcoPnl.visible_tech_share_pct + '% Visible Tech vs ' +
+            tcoPnl.hidden_enterprise_share_pct + '% Hidden Operational Spend) • Stage: ' + (tcoPnl.current_maturity_stage || '')
+          ]),
+          el('div', 'kpi-sub', [
+            (tcoPnl.tco_breakdown_rows || []).map(function(c) {
+              return c.bucket + ': $' + fmtInt(c.unoptimized_annual_usd) + '/yr → $' + fmtInt(c.optimized_annual_usd) + '/yr (' + c.lever + ')';
+            }).join(' • ')
+          ])
+        );
+      }
+
+      const matBody = document.getElementById('maturityProgressionBody');
+      if (matBody && Array.isArray(tcoPnl.maturity_progression)) {
+        matBody.replaceChildren();
+        tcoPnl.maturity_progression.forEach(function(m) {
+          const isCur = String(m.status || '').includes('ACTIVE');
+          matBody.appendChild(el('tr', null, [
+            el('td', null, [badge(m.stage || '', isCur ? 'badge-green' : 'badge-blue')]),
+            el('td', null, [m.focus || '']),
+            el('td', 'mono', ['CpO + Drift < 1.7%']),
+            el('td', 'mono', ['Canary + Apigee Enforced']),
+            el('td', null, [badge(m.status || '', isCur ? 'badge-green' : 'badge-blue')]),
+          ]));
+        });
+      }
+
+      const pnlBody = document.getElementById('pnlAllocationBody');
+      if (pnlBody && Array.isArray(tcoPnl.pnl_accounting)) {
+        pnlBody.replaceChildren();
+        tcoPnl.pnl_accounting.forEach(function(p) {
+          pnlBody.appendChild(el('tr', null, [
+            el('td', null, [el('strong', null, [p.pnl_class || ''])]),
+            el('td', null, [p.workloads || '']),
+            el('td', 'mono', [p.share_pct + '%']),
+            el('td', 'mono', ['$' + Number(p.monthly_net_spend_usd || 0).toFixed(2) + '/mo']),
+            el('td', null, [p.accounting_treatment || '']),
+          ]));
+        });
+      }
+
+      const opexBody = document.getElementById('opexTradeoffBody');
+      const opexRows = (cf.cost_guard && cf.cost_guard.opex_tradeoff_matrix) || [];
+      if (opexBody && Array.isArray(opexRows)) {
+        opexBody.replaceChildren();
+        opexRows.forEach(function(o) {
+          opexBody.appendChild(el('tr', null, [
+            el('td', null, [el('strong', null, [o.setting || ''])]),
+            el('td', null, [badge(o.pillar || '', 'badge-blue')]),
+            el('td', 'mono', [o.opex_multiplier || '']),
+            el('td', 'mono', ['<15ms']),
+            el('td', 'mono', [o.net_monthly_impact_usd || '']),
+            el('td', null, [badge(o.tradeoff_verdict || '', 'badge-green')]),
+          ]));
+        });
+      }
     }
 
     function renderUserCentricAndDecorator(uc, decoratorEvents) {
@@ -1570,9 +3682,9 @@ async def handle_agent_turn(message_envelope):
     }
 
     const PLATFORM_META_LOCAL = {
-      alpha_evolve: { id: 'alpha_evolve', name: 'AlphaEvolve (Multi-Objective Pareto Loop)' },
-      opus_critic: { id: 'opus_critic', name: 'Opus Frontier Critic (Structural Prompt Refactoring)' },
-      vertex_vizier: { id: 'vertex_vizier', name: 'Google Vizier (Distributed Black-Box Bayesian Tuner)' },
+      alpha_evolve: { id: 'alpha_evolve', name: 'AlphaEvolve (Cost, Speed & Quality Balance)' },
+      opus_critic: { id: 'opus_critic', name: 'Opus Frontier Critic (Prompt Cleanup & Restructuring)' },
+      vertex_vizier: { id: 'vertex_vizier', name: 'Google Vizier (Automated Parameter Tuning)' },
       hybrid_ensemble: { id: 'hybrid_ensemble', name: 'Hybrid Ensemble (AlphaEvolve + Vizier + Opus Critic)' },
     };
 
@@ -1662,7 +3774,7 @@ async def handle_agent_turn(message_envelope):
           root_cause_from_logs: 'Upstream schema drift injected volatile correlation_id into system prefix, invalidating KV prefix cache and triggering 3x retry loops.',
           action_title: 'LIVE ALERT: Production Log Anomaly Detected — Awaiting Optimizer Remediation',
           action_taken: '@vibelift_telemetry decorator flagged P95 latency > 2,300ms and Cache Hit drop to 14.5%. Ready to trigger optimization cycle.',
-          impact_summary: 'Click "Run Optimization Cycle" to evolve and promote a remediation genome.',
+          impact_summary: 'Click "Run Optimization Cycle" to evaluate and promote a remediation config.',
           status: 'ANOMALY ACTIVE — RUN OPTIMIZER',
           diff_snippet: '! ALERT: Uncached dynamic prefix token detected at offset 14\\n! Action Required: Execute Optimization Cycle',
         });
@@ -1689,7 +3801,7 @@ async def handle_agent_turn(message_envelope):
           else if (k === 'cost_usd' || k === 'cost_per_1k_turns_usd') { p.current_value = newCost; p.status = 'OPTIMIZED BY GEN ' + nextGen; }
           else if (k === 'accuracy_pct' || k === 'task_accuracy_pct') { p.current_value = newAcc; p.status = 'EXCEEDING TARGET (' + newAcc + '%)'; }
           else if (k === 'cache_hit_pct' || k === 'prompt_cache_hit_pct') { p.current_value = newCache; p.status = 'LOCKED (' + newCache + '% Hit)'; }
-          else if (k === 'error_rate_pct') { p.current_value = 0.0; p.status = 'SELF-HEALED (0.0%)'; }
+          else if (k === 'error_rate_pct') { p.current_value = 0.0; p.status = 'REMEDIATED (0.0%)'; }
           else if (k === 'context_bloat_pct') {
             const nextBloat = Math.max(6.0, Math.round(Number(p.current_value || 18.0) * 0.82 * 10) / 10);
             p.current_value = nextBloat;
@@ -1707,7 +3819,7 @@ async def handle_agent_turn(message_envelope):
             p.status = 'OPTIMIZED';
           }
         });
-        agent.health_status = 'OPTIMIZED & HEALED (' + activePlat + ' • Gen ' + nextGen + ' Active)';
+        agent.health_status = 'OPTIMIZED & REMEDIATED (' + activePlat + ' • Gen ' + nextGen + ' Active)';
         agent.monthly_savings_usd = Number(agent.monthly_savings_usd || 0) + 1850;
         ts.push({
           timestamp_label: 'Gen ' + nextGen + ' (Live)',
@@ -1717,13 +3829,13 @@ async def handle_agent_turn(message_envelope):
           accuracy_pct: newAcc,
           cache_hit_pct: newCache,
           error_rate_pct: 0.0,
-          event_marker: '🧬 ' + activePlat + ' Gen ' + nextGen + ' Auto-Healed',
+          event_marker: activePlat + ' Gen ' + nextGen + ' Remediated',
         });
         agent.actions = agent.actions || [];
         agent.actions.unshift({
           generation: nextGen,
           timestamp: 'Just now (Live Run • ' + activePlat + ')',
-          parameter_targeted: 'Multi-Objective Pareto Frontier (Latency, Cost, Context Bloat & Cache Hit)',
+          parameter_targeted: 'Cost, Speed & Quality Balance (Latency, Cost, Context Bloat & Cache Hit)',
           root_cause_from_logs: '@vibelift_telemetry decorator detected volatile header breaking prefix cache and redundant tool history bloating.',
           action_title: 'Gen ' + nextGen + ' [' + activePlat + ']: Sanitized Dynamic Header & Pruned Context Bloat',
           action_taken: 'Stripped volatile correlation_id from system prompt prefix, restored KV cache hit rate, and compacted N-2 tool history.',

@@ -51,7 +51,7 @@ _AIPLATFORM = 'https://{location}-aiplatform.googleapis.com/v1'
 _HTTP_TIMEOUT_S = 25.0
 _MAX_PAGES = 10
 
-DEFAULT_ENGINE_IDS = ('agent-platform-demo',)
+DEFAULT_ENGINE_IDS = ('agent-platform-demo', 'us/gemini-enterprise-17649552_1764955289529')
 ALLOWED_WINDOWS_HOURS = (1, 6, 24, 168)
 
 AGENT_TYPE_LABELS = {
@@ -141,6 +141,23 @@ def cloud_run_service_from_url(url: str) -> dict[str, str] | None:
   return None
 
 
+def _parse_engine_spec(spec: str, default_location: str = 'global') -> tuple[str, str]:
+  """Parses '<location>/<engine_id>' or '<engine_id>' into (location, engine_id)."""
+  cleaned = str(spec or '').strip()
+  if '/' in cleaned:
+    loc, eid = cleaned.split('/', 1)
+    return (loc.strip() or default_location, eid.strip())
+  return (default_location, cleaned)
+
+
+def _de_base(location: str = 'global') -> str:
+  """Returns the regional or global Discovery Engine v1alpha base URL."""
+  loc = (location or 'global').strip().lower()
+  if loc == 'global':
+    return 'https://discoveryengine.googleapis.com/v1alpha'
+  return f'https://{loc}-discoveryengine.googleapis.com/v1alpha'
+
+
 def classify_agent(engine_id: str, assistant_id: str, raw: dict[str, Any]) -> dict[str, Any]:
   """Normalizes a Discovery Engine Agent resource into the fleet schema (no telemetry yet)."""
   kind, backend = 'UNKNOWN', {'kind': 'unknown'}
@@ -214,12 +231,14 @@ def classify_agent(engine_id: str, assistant_id: str, raw: dict[str, Any]) -> di
 
 
 class _GoogleApi:
-  """Minimal authenticated JSON client for Google REST APIs using ADC."""
+  """Minimal authenticated JSON client for Google REST APIs using ADC or gcloud CLI fallback."""
 
   def __init__(self, quota_project: str):
     self._quota_project = quota_project
     self._credentials = None
     self._is_user_credentials = False
+    self._cli_token: str | None = None
+    self._cli_token_ts: float = 0.0
     self._lock = threading.Lock()
 
   def _token(self) -> str:
@@ -232,7 +251,30 @@ class _GoogleApi:
           self._is_user_credentials = type(self._credentials).__module__.startswith('google.oauth2.credentials')
         if not self._credentials.valid:
           self._credentials.refresh(GoogleAuthRequest())
+        if self._credentials.token:
+          return self._credentials.token
       except Exception as exc:  # DefaultCredentialsError, RefreshError, transport errors.
+        if self._quota_project and self._quota_project not in ('test-project', gcp_telemetry.UNCONFIGURED_PROJECT_ID):
+          now_mono = time.monotonic()
+          if self._cli_token and (now_mono - self._cli_token_ts) < 300.0:
+            self._is_user_credentials = True
+            return self._cli_token
+          try:
+            import subprocess
+            res = subprocess.run(
+                ['gcloud', 'auth', 'print-access-token'],
+                capture_output=True,
+                text=True,
+                timeout=3.0,
+                check=False,
+            )
+            if res.returncode == 0 and res.stdout.strip():
+              self._cli_token = res.stdout.strip()
+              self._cli_token_ts = now_mono
+              self._is_user_credentials = True
+              return self._cli_token
+          except Exception:
+            pass
         raise FleetSourceError(0, f'Could not obtain Google Cloud credentials: {type(exc).__name__}') from exc
       return self._credentials.token
 
@@ -770,9 +812,12 @@ class GeminiEnterpriseFleetService:
         'by_type': dict(collections.Counter(a['type'] for a in agents)),
         'with_runtime_telemetry': len(telemetry_agents),
     }
-    for key in ('requests', 'errors_4xx', 'errors_5xx', 'llm_calls', 'input_tokens', 'output_tokens', 'conversations'):
-      values = [a['metrics'][key] for a in agents if a['metrics'][key] is not None]
+    for key in ('requests', 'errors_4xx', 'errors_5xx', 'llm_calls', 'input_tokens', 'output_tokens', 'cached_tokens', 'conversations'):
+      values = [a['metrics'][key] for a in agents if a['metrics'].get(key) is not None]
       totals[key] = sum(values) if values else None
+    for fkey in ('vcpu_hours', 'memory_gib_hours', 'billable_instance_hours'):
+      fvals = [float(a['metrics'][fkey]) for a in agents if a['metrics'].get(fkey) is not None]
+      totals[fkey] = round(sum(fvals), 4) if fvals else None
     totals['error_rate_pct'] = (
         round((totals['errors_5xx'] or 0) / totals['requests'] * 100, 2) if totals.get('requests') else None)
     stamps = [a['metrics']['last_activity'] for a in agents if a['metrics']['last_activity']]
