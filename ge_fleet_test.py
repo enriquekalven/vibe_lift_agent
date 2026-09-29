@@ -187,7 +187,10 @@ class GeFleetCollectionTest(unittest.TestCase):
     self.assertEqual(sorted(agents), ['Deep Research', 'IT Service Desk', 'VibeLift Analytics & FinOps'])
     self.assertEqual(api.count('pageToken=page-2'), 1)
     self.assertEqual(payload['engines'], [{
-        'engine_id': ENGINE, 'display_name': 'GB Agent Platform Demo', 'app_type': 'APP_TYPE_INTRANET', 'agents_count': 3}])
+        'engine_id': ENGINE, 'engine_key': f'global/{ENGINE}', 'location': 'global',
+        'display_name': 'GB Agent Platform Demo', 'app_type': 'APP_TYPE_INTRANET', 'agents_count': 3}])
+    self.assertEqual({a['engine_key'] for a in payload['agents']}, {f'global/{ENGINE}'})
+    self.assertEqual({a['location'] for a in payload['agents']}, {'global'})
     self.assertEqual(agents['IT Service Desk']['type'], 'ADK')
     self.assertEqual(agents['VibeLift Analytics & FinOps']['type'], 'A2A')
     self.assertEqual(agents['Deep Research']['type'], 'MANAGED')
@@ -332,6 +335,43 @@ class GeFleetCollectionTest(unittest.TestCase):
     self.assertEqual(service.collect(window_hours=100000)['window_hours'], 720)
     self.assertEqual(set(api.alignment_periods), {'2592000s'})
     self.assertEqual(service.collect(window_hours=0)['window_hours'], 1)
+
+
+class GeFleetDiscoveryTest(unittest.TestCase):
+
+  def test_auto_discovers_ge_apps_and_tolerates_a_failing_region(self):
+    api = FakeGoogleApi()
+    listing_path = ENGINE_PATH.rsplit('/', 1)[0]
+    original = api._discovery
+
+    def discovery(path, query):
+      if path == listing_path:
+        return {'engines': [
+            {'name': ENGINE_PATH[len('/v1alpha/'):], 'appType': 'APP_TYPE_INTRANET'},
+            {'name': listing_path[len('/v1alpha/'):] + '/plain-search-app', 'solutionType': 'SOLUTION_TYPE_SEARCH'},
+        ]}
+      return original(path, query)
+
+    api._discovery = discovery
+    service = ge_fleet.GeminiEnterpriseFleetService(
+        project_id=PROJECT, engine_ids=['auto'], location='global', collection='default_collection', api=api)
+    service.discovery_locations = ['global', 'us']  # 'us' is not served by the fake -> error, not fatal.
+    payload = service.collect(window_hours=24)
+    self.assertEqual([e['engine_key'] for e in payload['engines']], [f'global/{ENGINE}'])
+    self.assertEqual(len(payload['agents']), 3)
+    self.assertTrue(any('app discovery (us)' in e['source'] for e in payload['errors']))
+
+
+class GeFleetRuntimeDedupeTest(unittest.TestCase):
+
+  def test_hashed_and_numbered_run_urls_share_a_runtime_key(self):
+    hashed = ge_fleet.classify_agent('e1', 'default_assistant', A2A_AGENT)
+    numbered_raw = dict(A2A_AGENT, name=A2A_AGENT['name'] + '0', a2aAgentDefinition={
+        'jsonAgentCard': json.dumps({'url': 'https://vibe-lift-agent-123456789.us-central1.run.app/a2a/app'})})
+    numbered = ge_fleet.classify_agent('e2', 'default_assistant', numbered_raw)
+    self.assertEqual(ge_fleet.runtime_backend_key(hashed), ge_fleet.runtime_backend_key(numbered))
+    managed = ge_fleet.classify_agent('e1', 'default_assistant', MANAGED_AGENT)
+    self.assertNotEqual(ge_fleet.runtime_backend_key(hashed), ge_fleet.runtime_backend_key(managed))
 
 
 class GeFleetHelpersTest(unittest.TestCase):

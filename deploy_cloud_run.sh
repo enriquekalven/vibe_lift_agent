@@ -110,7 +110,8 @@ for ROLE in "${ROLES[@]}"; do
 done
 
 # Deploy container directly from source to Cloud Run. Sizing matches the verified production service.
-GE_ENGINES="${VIBELIFT_GE_ENGINES:-us/gemini-enterprise-17649552_1764955289529,global/agent-platform-demo}"
+# "auto" discovers every Gemini Enterprise app in global/us/eu; set an explicit list to pin apps.
+GE_ENGINES="${VIBELIFT_GE_ENGINES:-auto}"
 echo "Building and deploying container to Cloud Run..."
 gcloud run deploy "${SERVICE_NAME}" \
     --source . \

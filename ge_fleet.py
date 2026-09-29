@@ -52,6 +52,8 @@ _HTTP_TIMEOUT_S = 25.0
 _MAX_PAGES = 10
 
 DEFAULT_ENGINE_IDS = ('agent-platform-demo', 'us/gemini-enterprise-17649552_1764955289529')
+# 'auto' discovers every Gemini Enterprise app in these locations.
+DEFAULT_DISCOVERY_LOCATIONS = ('global', 'us', 'eu')
 ALLOWED_WINDOWS_HOURS = (1, 6, 24, 168)
 
 AGENT_TYPE_LABELS = {
@@ -327,7 +329,8 @@ class GeminiEnterpriseFleetService:
       api: Any | None = None,
   ):
     self.project_id = project_id or gcp_telemetry.get_current_gcp_project()
-    self.engine_ids = engine_ids or _env_list('VIBELIFT_GE_ENGINES', DEFAULT_ENGINE_IDS)
+    self.engine_ids = engine_ids or _env_list('VIBELIFT_GE_ENGINES', ('auto',))
+    self.discovery_locations = _env_list('VIBELIFT_GE_LOCATIONS', DEFAULT_DISCOVERY_LOCATIONS)
     self.location = location or os.environ.get('VIBELIFT_GE_LOCATION', 'global')
     self.collection = collection or os.environ.get('VIBELIFT_GE_COLLECTION', 'default_collection')
     self.ttl_seconds = float(os.environ.get('VIBELIFT_FLEET_TTL_SECONDS', '60'))
@@ -474,6 +477,29 @@ class GeminiEnterpriseFleetService:
         break
     return items
 
+  def _discover_engine_specs(self, errors: list[dict[str, str]]) -> list[str]:
+    """Lists every Gemini Enterprise app (APP_TYPE_INTRANET engine) across the discovery locations."""
+    specs: list[str] = []
+    for loc in self.discovery_locations:
+      try:
+        engines = self._paged(f'{self._de_base(loc)}?pageSize=100', 'engines')
+      except FleetSourceError as exc:
+        errors.append({'source': f'Discovery Engine app discovery ({loc})', 'detail': str(exc)})
+        continue
+      for eng in engines:
+        if eng.get('appType') == 'APP_TYPE_INTRANET':
+          specs.append(f"{loc}/{str(eng.get('name', '')).rsplit('/', 1)[-1]}")
+    return specs
+
+  def _resolve_engine_specs(self, errors: list[dict[str, str]]) -> list[str]:
+    """Expands 'auto' into the discovered GE apps; explicit specs are kept as configured."""
+    explicit = [e for e in self.engine_ids if e.strip().lower() != 'auto']
+    if len(explicit) == len(self.engine_ids):
+      return list(self.engine_ids)
+    discovered = self._discover_engine_specs(errors)
+    specs = list(dict.fromkeys(explicit + discovered))
+    return specs or list(DEFAULT_ENGINE_IDS)
+
   def _list_engine_agents(self, engine_spec: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if '/' in engine_spec:
       loc, engine_id = engine_spec.split('/', 1)
@@ -486,12 +512,19 @@ class GeminiEnterpriseFleetService:
     except FleetSourceError:
       assistants = []
     agents = []
+    display = engine.get('displayName') or engine_id
     for assistant_id in assistants or ['default_assistant']:
       for raw in self._paged(f'{base}/assistants/{assistant_id}/agents?pageSize=100', 'agents'):
-        agents.append(classify_agent(engine_id, assistant_id, raw))
+        agent = classify_agent(engine_id, assistant_id, raw)
+        agent['location'] = loc
+        agent['engine_key'] = f'{loc}/{engine_id}'
+        agent['engine_display_name'] = display
+        agents.append(agent)
     meta = {
         'engine_id': engine_id,
-        'display_name': engine.get('displayName') or engine_id,
+        'engine_key': f'{loc}/{engine_id}',
+        'location': loc,
+        'display_name': display,
         'app_type': engine.get('appType'),
         'agents_count': len(agents),
     }
@@ -747,14 +780,16 @@ class GeminiEnterpriseFleetService:
     status: dict[str, str] = {}
     engines, agents = [], []
 
-    for engine_id in self.engine_ids:
+    for engine_id in self._resolve_engine_specs(errors):
       try:
         meta, engine_agents = self._list_engine_agents(engine_id)
         engines.append(meta)
         agents.extend(engine_agents)
       except FleetSourceError as exc:
         errors.append({'source': f'Discovery Engine agents ({engine_id})', 'detail': str(exc)})
-        engines.append({'engine_id': engine_id, 'display_name': engine_id, 'agents_count': None})
+        loc, _, eid = engine_id.rpartition('/')
+        engines.append({'engine_id': eid, 'engine_key': f"{loc or self.location}/{eid}",
+                        'location': loc or self.location, 'display_name': eid, 'agents_count': None})
     status['inventory'] = 'error' if errors else 'ok'
 
     engines_by_project: dict[str, set[str]] = collections.defaultdict(set)

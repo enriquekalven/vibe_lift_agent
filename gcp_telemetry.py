@@ -765,13 +765,17 @@ class GoogleCloudTelemetryService:
           SELECT
             protopayload_auditlog.authenticationInfo.principalEmail AS principal,
             protopayload_auditlog.methodName AS method_name,
+            CONCAT(
+              IFNULL(REGEXP_EXTRACT(protopayload_auditlog.resourceName, r'locations/([^/]+)/'), ''), '/',
+              IFNULL(REGEXP_EXTRACT(protopayload_auditlog.resourceName, r'engines/([^/]+)'), '')
+            ) AS engine_key,
             COUNT(*) AS call_count,
             CAST(MAX(timestamp) AS STRING) AS last_seen
           FROM `{p}.ds_ge_audit_raw.cloudaudit_googleapis_com_data_access`
           WHERE protopayload_auditlog.authenticationInfo.principalEmail IS NOT NULL
-          GROUP BY 1, 2
+          GROUP BY 1, 2, 3
           ORDER BY call_count DESC
-          LIMIT 25
+          LIMIT 500
         """,
         'ge_assistant_activity': f"""
           SELECT
@@ -975,6 +979,8 @@ class GoogleCloudTelemetryService:
           'methods': set(),
           'source_tables': set(),
           'last_seen': '',
+          'engine_calls': {},
+          'engine_sessions': {},
       })
 
     for r in ge_audit:
@@ -988,8 +994,13 @@ class GoogleCloudTelemetryService:
       cnt = int(r.get('call_count') or 0)
       mname = str(r.get('method_name') or '').split('.')[-1]
       st['api_calls'] += cnt
+      ek = str(r.get('engine_key') or '')
+      if ek and ek != '/':
+        st['engine_calls'][ek] = st['engine_calls'].get(ek, 0) + cnt
       if mname in ('StreamAssist', 'ExecuteUiWidgetAction', 'Search'):
         st['interactive_sessions'] += cnt
+        if ek and ek != '/':
+          st['engine_sessions'][ek] = st['engine_sessions'].get(ek, 0) + cnt
       st['methods'].add(mname)
       st['source_tables'].add('ds_ge_audit_raw')
       ls = str(r.get('last_seen') or '')
@@ -1087,6 +1098,9 @@ class GoogleCloudTelemetryService:
           'saved_30d_usd': None,
           'source_tables': sorted(st['source_tables']),
           'last_seen': st['last_seen'],
+          # Per GE app ('location/engine_id'), same unit as sessions_7d. Principals seen only in
+          # non-GE sources (e.g. Agent Engine OTel) have no GE app attribution.
+          'by_engine': dict(st['engine_sessions'] if st['interactive_sessions'] > 0 else st['engine_calls']),
           'status': role_tag,
           'anomaly_status': role_tag,
       })

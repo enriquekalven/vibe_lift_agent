@@ -498,6 +498,9 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .adv-toggle { display:inline-flex; align-items:center; gap:6px; }
     .adv-toggle[aria-pressed="true"] { background:#1e293b; color:#fff; border-color:#1e293b; }
     .verify-chip { font-size:11.5px; padding:4px 10px; }
+    .scope-select { font-size:12px; padding:5px 8px; border:1px solid #cbd5e1; border-radius:6px; background:#fff; color:#0f172a; max-width:320px; }
+    .scope-note { font-size:12px; color:#854d0e; background:#fefce8; border:1px solid #fde68a; border-radius:6px; padding:6px 10px; margin-top:8px; }
+    .fleet-agent-app { font-size:11px; color: var(--text-secondary); margin-top:2px; }
     details.role-disclosure {
       background: #f8fafc;
       border: 1px solid var(--border);
@@ -537,6 +540,10 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <div style="display:inline-flex;align-items:center;gap:8px;padding:4px 10px;background:#f1f5f9;border-radius:6px;border:1px solid #e2e8f0;font-size:11.5px;font-weight:600;color:#334155;">
         <span>GCP: <strong id="gcpProjectText" class="mono">&#x2026;</strong> (<span id="gcpRegionText" class="mono">&#x2026;</span>)</span>
       </div>
+      <label for="geScopeSelect" style="font-size:11.5px;font-weight:600;color:#475569;">Gemini Enterprise app</label>
+      <select id="geScopeSelect" class="scope-select" onchange="onGeScopeChange(this.value)" title="Filter by region and Gemini Enterprise app">
+        <option value="all">All apps &middot; all regions</option>
+      </select>
     </div>
     <div class="action-bar">
       <button id="btnModeFullscreen" class="btn btn-fullscreen-toggle" onclick="toggleDisplayMode()" title="Toggle between Right Side Panel and Fullscreen">
@@ -2182,8 +2189,8 @@ async def handle_agent_turn(message_envelope):
         }
       }
 
-      renderUserCentricAndDecorator(state.user_centric, state.decorator_events);
-      try { renderExecOverview(state.ge_fleet || execLastFleet, state.user_centric); } catch (e) { console.warn('overview', e); }
+      renderUserCentricAndDecorator(scopeUserCentric(state.user_centric), state.decorator_events);
+      try { renderExecOverview(execLastFleet, state.user_centric); } catch (e) { console.warn('overview', e); }
       renderSmeControlPlane(state);
       notifyHostSizeChanged();
     }
@@ -3526,6 +3533,137 @@ async def handle_agent_turn(message_envelope):
       ge_traffic: 'GE assistant traffic',
     };
 
+    // ---- Region / Gemini Enterprise app scope ----
+    let geScope = 'all';
+    let geRawFleet = null;
+    (function initGeScope() {
+      let saved = null;
+      try { saved = localStorage.getItem('vibelift.geScope'); } catch (e) {}
+      const m = /[?&]scope=([^&]+)/.exec(location.search);
+      geScope = (m ? decodeURIComponent(m[1]) : saved) || 'all';
+    })();
+    function agentLocation(a) {
+      if (a.location) return a.location;
+      const mm = new RegExp('/locations/([^/]+)/').exec(a.resource_name || '');
+      return mm ? mm[1] : 'global';
+    }
+    function agentEngineKey(a) { return a.engine_key || (agentLocation(a) + '/' + a.engine_id); }
+    function geRegionLabel(loc) {
+      return {global: 'Global', us: 'US (multi-region)', eu: 'EU (multi-region)'}[loc] || String(loc || '').toUpperCase();
+    }
+    function engineMatchesScope(engineKey, scope) {
+      if (!scope || scope === 'all') return true;
+      if (scope.indexOf('loc:') === 0) return String(engineKey).split('/')[0] === scope.slice(4);
+      if (scope.indexOf('eng:') === 0) return engineKey === scope.slice(4);
+      return true;
+    }
+    function geScopeLabel(scope) {
+      if (!scope || scope === 'all') return 'all apps in all regions';
+      if (scope.indexOf('loc:') === 0) return 'all apps in ' + geRegionLabel(scope.slice(4));
+      const key = scope.slice(4);
+      const eng = ((geRawFleet && geRawFleet.engines) || []).find(function(e) {
+        return (e.engine_key || ((e.location || 'global') + '/' + e.engine_id)) === key;
+      });
+      return (eng ? (eng.display_name || eng.engine_id) : key) + ' (' + geRegionLabel(key.split('/')[0]) + ')';
+    }
+    function populateGeScopeSelect(fleet) {
+      const sel = document.getElementById('geScopeSelect');
+      if (!sel) return;
+      const engines = (fleet.engines || []).map(function(e) {
+        return {key: e.engine_key || ((e.location || 'global') + '/' + e.engine_id), loc: e.location || 'global',
+                name: e.display_name || e.engine_id, n: e.agents_count};
+      });
+      const locs = [];
+      engines.forEach(function(e) { if (locs.indexOf(e.loc) < 0) locs.push(e.loc); });
+      locs.sort(function(a, b) { return a === 'global' ? -1 : (b === 'global' ? 1 : a.localeCompare(b)); });
+      sel.replaceChildren();
+      const allOpt = el('option', null, ['All apps · all regions (' + engines.length + ' apps)']);
+      allOpt.value = 'all';
+      sel.appendChild(allOpt);
+      locs.forEach(function(loc) {
+        const inLoc = engines.filter(function(e) { return e.loc === loc; });
+        const grp = document.createElement('optgroup');
+        grp.label = geRegionLabel(loc);
+        const locOpt = el('option', null, ['All ' + geRegionLabel(loc) + ' apps (' + inLoc.length + ')']);
+        locOpt.value = 'loc:' + loc;
+        grp.appendChild(locOpt);
+        inLoc.sort(function(a, b) { return (b.n || 0) - (a.n || 0); }).forEach(function(e) {
+          const o = el('option', null, ['\u00a0\u00a0' + e.name + ' · ' + (e.n == null ? 'unavailable' : e.n + ' agents')]);
+          o.value = 'eng:' + e.key;
+          o.title = e.key;
+          grp.appendChild(o);
+        });
+        sel.appendChild(grp);
+      });
+      const valid = Array.from(sel.options).some(function(o) { return o.value === geScope; });
+      if (!valid) geScope = 'all';
+      sel.value = geScope;
+    }
+    function applyGeScope(fleet) {
+      if (!fleet || !Array.isArray(fleet.agents)) return fleet;
+      const out = Object.assign({}, fleet, {__scoped: true});
+      if (geScope === 'all') return out;
+      const agents = fleet.agents.filter(function(a) { return engineMatchesScope(agentEngineKey(a), geScope); });
+      out.agents = agents;
+      out.engines = (fleet.engines || []).filter(function(e) {
+        return engineMatchesScope(e.engine_key || ((e.location || 'global') + '/' + e.engine_id), geScope);
+      });
+      // Recompute totals, counting each runtime once (same rule as the backend).
+      const rtKey = function(a) {
+        const b = a.backend || {};
+        if (b.kind === 'cloud_run' && b.service) return 'cloud_run:' + b.service;
+        if (b.resource || b.url) return (b.kind || '') + ':' + (b.resource || b.url);
+        return 'agent:' + (a.resource_name || a.agent_id);
+      };
+      const allKeysOutside = {};
+      fleet.agents.forEach(function(a) { if (agents.indexOf(a) < 0) allKeysOutside[rtKey(a)] = true; });
+      const seen = {};
+      const uniq = [];
+      let shared = 0;
+      agents.forEach(function(a) {
+        const k = rtKey(a);
+        if (seen[k]) return;
+        seen[k] = true;
+        uniq.push(a);
+        if (allKeysOutside[k] && (a.metrics || {}).requests != null) shared += 1;
+      });
+      const t = {agents: agents.length, enabled: 0, by_type: {}, with_runtime_telemetry: 0, unique_runtimes: uniq.length};
+      agents.forEach(function(a) {
+        if (a.state === 'ENABLED') t.enabled += 1;
+        t.by_type[a.type] = (t.by_type[a.type] || 0) + 1;
+        if ((a.metrics || {}).requests != null) t.with_runtime_telemetry += 1;
+      });
+      ['requests', 'errors_4xx', 'errors_5xx', 'llm_calls', 'input_tokens', 'output_tokens', 'cached_tokens', 'conversations'].forEach(function(k) {
+        const vals = uniq.map(function(a) { return (a.metrics || {})[k]; }).filter(function(v) { return v != null; });
+        t[k] = vals.length ? vals.reduce(function(x, y) { return x + Number(y); }, 0) : null;
+      });
+      t.error_rate_pct = t.requests ? Math.round(10000 * (t.errors_5xx || 0) / t.requests) / 100 : null;
+      const stamps = agents.map(function(a) { return (a.metrics || {}).last_activity; }).filter(Boolean).sort();
+      t.last_activity = stamps.length ? stamps[stamps.length - 1] : null;
+      out.totals = t;
+      out.__shared_runtimes = shared;
+      return out;
+    }
+    function scopeUserCentric(uc) {
+      if (!uc || typeof uc !== 'object' || geScope === 'all') return uc;
+      const users = (uc.power_users_ldap || []).map(function(u) {
+        const be = u.by_engine || {};
+        const v = Object.keys(be).filter(function(k) { return engineMatchesScope(k, geScope); })
+          .reduce(function(acc, k) { return acc + Number(be[k] || 0); }, 0);
+        return v > 0 ? Object.assign({}, u, {sessions_7d: v}) : null;
+      }).filter(Boolean);
+      return Object.assign({}, uc, {power_users_ldap: users});
+    }
+    function onGeScopeChange(value) {
+      geScope = value || 'all';
+      try { localStorage.setItem('vibelift.geScope', geScope); } catch (e) {}
+      if (geRawFleet) renderFleet(geRawFleet);
+      if (currentState && currentState.user_centric) {
+        try { renderUserCentricAndDecorator(scopeUserCentric(currentState.user_centric), currentState.decorator_events); } catch (e) {}
+        try { renderExecOverview(execLastFleet, currentState.user_centric); } catch (e) {}
+      }
+    }
+
     const EXEC_PALETTE = ['#2563eb', '#0ea5e9', '#10b981', '#f59e0b', '#8b5cf6', '#14b8a6', '#64748b', '#ef4444'];
     let execLastFleet = null;
 
@@ -3635,7 +3773,8 @@ async def handle_agent_turn(message_envelope):
       const active = agents.filter(function(a) { return Number(m(a).requests || 0) > 0 || Number(m(a).llm_calls || 0) > 0; });
       const req = Number(totals.requests || 0), e4 = Number(totals.errors_4xx || 0), e5 = Number(totals.errors_5xx || 0);
       const spend = muTotals.est_cost_usd;
-      const users = ((uc && uc.power_users_ldap) || []);
+      const users = ((scopeUserCentric(uc) || {}).power_users_ldap || []);
+      const scoped = geScope !== 'all';
       const people = users.filter(function(u) { return String(u.status || '').indexOf('HUMAN') >= 0; });
       const sas = users.filter(function(u) { return String(u.status || '').indexOf('SERVICE') >= 0; });
 
@@ -3646,7 +3785,10 @@ async def handle_agent_turn(message_envelope):
         '. Estimated model spend: ' + (spend == null ? 'n/a' : fmtUsd(spend)) + '.',
         el('span', 'muted', ['Project ' + (fleet.project_id || '—') + ' · ' + win + ' · updated ' +
           (fleet.generated_at ? new Date(fleet.generated_at).toLocaleTimeString() : '—') +
-          ' · spend is tokens × Vertex AI list price, not your invoice'])
+          ' · spend is tokens × Vertex AI list price, not your invoice']),
+        scoped ? el('div', 'scope-note', ['Filtered to ' + geScopeLabel(geScope) +
+          '. Agents, requests and users are filtered. Model spend is project-wide: Vertex AI usage metrics are not tagged by Gemini Enterprise app.' +
+          (fleet.__shared_runtimes ? ' ' + fleet.__shared_runtimes + ' runtime(s) here are also registered in other apps; their traffic cannot be split by app.' : '')]) : null
       );
 
       const kpis = document.getElementById('execKpis');
@@ -3654,9 +3796,9 @@ async def handle_agent_turn(message_envelope):
         kpis.replaceChildren(
           kpiCard('Agents enabled', fmtInt(totals.enabled) + ' / ' + fmtInt(totals.agents), fmtInt(active.length) + ' with traffic · ' + win),
           kpiCard('Requests', fmtInt(req), (req ? (100 * e5 / req).toFixed(2) : '0.00') + '% server errors · ' + fmtInt(e4) + ' rejected (4xx)'),
-          kpiCard('Est. model spend', spend == null ? '—' : fmtUsd(spend), fmtInt(muTotals.invocations) + ' model calls · list price'),
+          kpiCard('Est. model spend', spend == null ? '—' : fmtUsd(spend), fmtInt(muTotals.invocations) + ' model calls · ' + (scoped ? 'project-wide' : 'list price')),
           kpiCard('Active people', users.length ? fmtInt(people.length) : '—',
-            users.length ? ('+ ' + fmtInt(sas.length) + ' service accounts · 7 days') : 'loading from BigQuery…')
+            users.length ? ('+ ' + fmtInt(sas.length) + ' service accounts · 7 days') : (scoped ? 'no audit-log activity for this scope' : 'loading from BigQuery…'))
         );
       }
 
@@ -3688,6 +3830,7 @@ async def handle_agent_turn(message_envelope):
       if (srcSpend) {
         const noCard = (muTotals.models_without_rate_card || []);
         srcSpend.textContent = 'Source: Vertex AI model usage metrics (Cloud Monitoring) × published list price · ' + win +
+          (scoped ? ' · project-wide, not filtered by app' : '') +
           (noCard.length ? ' · no price on file for: ' + noCard.join(', ') : '');
       }
 
@@ -3710,7 +3853,8 @@ async def handle_agent_turn(message_envelope):
         });
       const usersBox = document.getElementById('execChartUsers');
       if (usersBox) usersBox.replaceChildren(users.length ? hbarChart(userRows) :
-        el('div', 'chart-empty', ['Loading users from BigQuery… (demo users are never shown in live mode)']));
+        el('div', 'chart-empty', [scoped ? 'No Gemini Enterprise audit-log activity for this scope.' :
+          'Loading users from BigQuery… (demo users are never shown in live mode)']));
 
       // Needs attention: rules over the live payload only
       const items = [];
@@ -3766,6 +3910,11 @@ async def handle_agent_turn(message_envelope):
     }
 
     function renderFleet(fleet) {
+      if (fleet && Array.isArray(fleet.agents) && !fleet.__scoped) {
+        geRawFleet = fleet;
+        populateGeScopeSelect(fleet);
+        fleet = applyGeScope(fleet);
+      }
       try { renderExecOverview(fleet, currentState ? currentState.user_centric : null); } catch (e) { console.warn('overview', e); }
       if (!fleet || !Array.isArray(fleet.agents)) return;
       lastFleet = fleet;
@@ -3842,6 +3991,7 @@ async def handle_agent_turn(message_envelope):
         body.appendChild(el('tr', a.telemetry_scope === 'none' ? 'fleet-row-muted' : null, [
           el('td', null, [
             el('div', 'fleet-agent-name', [a.display_name || a.agent_id]),
+            el('div', 'fleet-agent-app', [geRegionLabel(agentLocation(a)) + ' · ' + (a.engine_display_name || a.engine_id || '—')]),
             a.description ? el('div', 'fleet-agent-desc', [a.description]) : null,
             el('div', 'fleet-agent-tags', [
               badge(a.state || 'UNKNOWN', a.state === 'ENABLED' ? 'badge-green' : 'badge-yellow'),
