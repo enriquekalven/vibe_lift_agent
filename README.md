@@ -1,5 +1,7 @@
 # VibeLift — Gemini Enterprise Agent Fleet Observability, FinOps & Optimization Studio
 
+[![tests](https://github.com/enriquekalven/vibe_lift_agent/actions/workflows/tests.yml/badge.svg)](https://github.com/enriquekalven/vibe_lift_agent/actions/workflows/tests.yml)
+
 **VibeLift** is an enterprise observability, prompt cache FinOps, and autonomous multi-objective optimization platform built on Google Cloud with the **Google Agent Development Kit (ADK)**, **FastAPI**, and the **Model Context Protocol (MCP)**.
 
 Designed for production deployment on **Google Cloud Run** and native embedding inside **Gemini Enterprise**, VibeLift enumerates registered agents across global and regional Gemini Enterprise instances, joins inventory with real-time Google Cloud Monitoring and OpenTelemetry `gen_ai` logs, measures prompt cache and skill/MCP token economics, and runs closed-loop prompt optimization across **AlphaEvolve**, **Opus Frontier Critic**, **Google Vizier**, and **Hybrid Ensemble**.
@@ -84,34 +86,39 @@ flowchart TB
 
 ```text
 vibe_lift_agent/
-├── app/                              # Google ADK Application Package
-│   ├── __init__.py
-│   ├── agent.py                      # ADK root_agent and tool definitions
-│   └── fast_api_app.py               # Production FastAPI ASGI entrypoint
-├── agents-cli-manifest.yaml          # Google Agents CLI deployment manifest
-├── ge_fleet.py                       # Multi-region Gemini Enterprise fleet inventory & telemetry joiner
-├── ge_fleet_test.py                  # Unit tests for Gemini Enterprise fleet inventory & telemetry
-├── gcp_telemetry.py                  # Google Cloud Logging, Cloud Run & BigQuery telemetry collector
-├── telemetry.py                      # Rate cards, cache economics & @vibelift_telemetry decorator
-├── alpha_evolve_optimizer.py         # Multi-platform optimization engine & User-Centric FinOps analytics
-├── long_running_agent.py             # Multi-turn agent trajectory simulator
-├── mcp_server.py                     # Streamable HTTP JSON-RPC 2.0 MCP server & BYO MCP App bridge
-├── server.py                         # Dual-mode controller (FastAPI ASGI routes + standalone HTTP server)
-├── ui_template.py                    # 4-Tab responsive glassmorphic Web UI & MCP AppBridge client
-├── logo_asset.py                     # Embedded SVG/JPEG brand assets
-├── vibelift_mcp_spec_clean.json      # Canonical MCP tool catalog specification
-├── SKILL.md                          # Agent skill reference & operational workflows
-├── spec.md                           # Architecture & protocol specification
-├── Dockerfile                        # Production Cloud Run container (Python 3.12-slim)
-├── cloud_run_service.yaml            # Declarative Knative Cloud Run service template
-├── cloudbuild.yaml                   # Google Cloud Build CI/CD pipeline
-├── deploy_cloud_run.sh               # Idempotent Cloud Run + least-privilege IAM deployment script
-├── setup_bigquery_sink.sh            # BigQuery dataset, partitioned tables, views & Logging sink setup
-├── pyproject.toml                    # Python package metadata & dependency pins
-├── requirements.txt                  # Production runtime dependencies
-├── constraints.txt                   # Transitive dependency lockfile verified in production
-├── vibe_lift_test.py                 # End-to-end unit, REST, MCP & DOM integration test suite
-└── README.md                         # Architecture, setup & operations documentation
+├── app/                         # ADK entry points (agents-cli agent_directory)
+│   ├── agent.py                 # ADK root_agent and tools
+│   └── fast_api_app.py          # Production ASGI app (Cloud Run CMD)
+├── vibelift/                    # Application package
+│   ├── server.py                # REST routes + standalone HTTP server
+│   ├── mcp_server.py            # MCP JSON-RPC 2.0 server and MCP App bridge
+│   ├── fleet.py                 # Gemini Enterprise inventory joined with Monitoring, Logging and Trace
+│   ├── finops.py                # Live token economics, spend drift, what-if projections
+│   ├── billing_export.py        # Cloud Billing export (BigQuery) reader
+│   ├── gcp_telemetry.py         # Cloud Run, Logging and BigQuery collectors
+│   ├── telemetry.py             # Rate cards, cache economics, @vibelift_telemetry
+│   ├── validator.py             # Deterministic checks + LLM-as-judge audit
+│   ├── optimizer.py             # Optimization engine and user analytics
+│   ├── long_running_agent.py    # Multi-turn trajectory simulator
+│   └── ui/
+│       ├── template.py          # Dashboard HTML/JS
+│       ├── logo_asset.py        # Embedded brand assets
+│       └── static/              # Source logo images
+├── tests/                       # 84 offline tests (see docs/TESTING.md)
+├── deploy/
+│   ├── deploy_cloud_run.sh      # Tests, then idempotent Cloud Run + IAM deploy
+│   ├── cloudbuild.yaml          # Build -> test -> push -> deploy
+│   ├── cloud_run_service.yaml   # Declarative service reference
+│   └── setup_bigquery_sink.sh   # BigQuery dataset, views and Logging sink
+├── docs/
+│   ├── spec.md                  # Architecture and data-source specification
+│   ├── TESTING.md               # Requirement -> test map, CI gates
+│   ├── SKILL.md                 # Agent skill reference
+│   └── mcp_spec.json            # MCP tool catalog
+├── .github/workflows/tests.yml  # CI: full test suite on push and PR
+├── Dockerfile
+├── pyproject.toml, requirements.txt, constraints.txt
+└── agents-cli-manifest.yaml
 ```
 
 ---
@@ -158,12 +165,13 @@ The test suite validates all telemetry calculations, `@vibelift_telemetry` decor
 ```bash
 GOOGLE_APPLICATION_CREDENTIALS=/nonexistent/offline.json \
 GOOGLE_CLOUD_PROJECT=test-project \
-python -m unittest -v vibe_lift_test ge_fleet_test
+python -m unittest discover -s tests -t . -v
 ```
+See [docs/TESTING.md](docs/TESTING.md) for which test enforces which requirement.
 
 ### 3. Run the Local Server
 ```bash
-python server.py --port=8080
+python -m vibelift.server --port=8080
 ```
 Open [http://localhost:8080](http://localhost:8080) to inspect the 4-Tab interactive dashboard locally.
 
@@ -174,7 +182,7 @@ Open [http://localhost:8080](http://localhost:8080) to inspect the 4-Tab interac
 Decorate any synchronous or asynchronous agent function, skill, or tool to stream real-time execution metrics into **Tab 3 (User-Centric FinOps & Decorator)**:
 
 ```python
-from telemetry import vibelift_telemetry
+from vibelift.telemetry import vibelift_telemetry
 
 @vibelift_telemetry(
     agent_id="adk_service_desk",
@@ -199,30 +207,30 @@ External services can also push telemetry spans over HTTP via `POST /api/decorat
 
 ## Production Deployment to Google Cloud Run
 
-### Option A: Automated Deployment Script (`deploy_cloud_run.sh`)
+### Option A: Automated Deployment Script (`deploy/deploy_cloud_run.sh`)
 ```bash
-./deploy_cloud_run.sh
+./deploy/deploy_cloud_run.sh
 ```
-This script is idempotent and performs the following steps:
+This script runs the full test suite first and aborts on any failure (`VIBELIFT_SKIP_TESTS=1` overrides). It is idempotent and performs the following steps:
 1. Enables required Google Cloud APIs (`run`, `cloudbuild`, `artifactregistry`, `logging`, `monitoring`, `discoveryengine`, `aiplatform`, `bigquery`).
 2. Provisions the dedicated runtime service account `vibe-lift-runtime-sa@${PROJECT_ID}.iam.gserviceaccount.com`.
 3. Creates/updates the custom least-privilege role `vibeLiftGeFleetReader` (`discoveryengine.engines.get`, `assistants.list`, `agents.list`, `agents.get`, `agents.manage`) so `agents.list` returns all agents across the Gemini Enterprise instance without granting destructive admin permissions.
 4. Deploys `vibe-lift-agent` to Cloud Run (`--no-allow-unauthenticated`, `min-instances=1`, `max-instances=10`, `1 vCPU`, `1 GiB` RAM) with `VIBELIFT_GE_ENGINES` configured for both US and Global Gemini Enterprise instances.
 5. Grants `roles/run.invoker` to the Discovery Engine service agent (`service-${PROJECT_NUMBER}@gcp-sa-discoveryengine.iam.gserviceaccount.com`) so Gemini Enterprise can invoke `/mcp` securely.
 
-### Option B: Cloud Build CI/CD Pipeline (`cloudbuild.yaml`)
+### Option B: Cloud Build CI/CD Pipeline (`deploy/cloudbuild.yaml`)
 ```bash
 # Build image, execute full offline unit test suite, push to Artifact Registry, and deploy:
-gcloud builds submit --config=cloudbuild.yaml .
+gcloud builds submit --config=deploy/cloudbuild.yaml .
 
 # Build, test, and push image only (skip Cloud Run deployment step):
-gcloud builds submit --config=cloudbuild.yaml --substitutions=_DEPLOY=false .
+gcloud builds submit --config=deploy/cloudbuild.yaml --substitutions=_DEPLOY=false .
 ```
 
-### BigQuery Analytics Sink (`setup_bigquery_sink.sh`)
+### BigQuery Analytics Sink (`deploy/setup_bigquery_sink.sh`)
 To provision the partitioned BigQuery dataset (`vibelift_analytics`), reporting views (`vw_fleet_finops_summary`), and Cloud Logging sink (`vibelift-telemetry-sink`):
 ```bash
-./setup_bigquery_sink.sh
+./deploy/setup_bigquery_sink.sh
 ```
 
 ---
@@ -275,5 +283,5 @@ VibeLift registers in Gemini Enterprise as a **Custom MCP Data Connector** (`vib
 
 - **Private IAM Authentication**: Cloud Run is deployed with `--no-allow-unauthenticated`. Only principals granted `roles/run.invoker` (including the Discovery Engine service agent) can invoke `/`, `/api/*`, or `/mcp`.
 - **Strict Content Security Policy (CSP)**: Every HTML response sets `Content-Security-Policy` headers permitting framing by `*.cloud.google.com`, `*.corp.google.com`, and `*.pantheon.corp.google.com` while blocking `object-src` and untrusted scripts.
-- **Privacy-Preserving Log Ingestion**: `ge_fleet.py` extracts only numeric token counters, model names, and anonymized conversation identifiers from OpenTelemetry `gen_ai` logs; user prompts and model completions are never stored or returned.
+- **Privacy-Preserving Log Ingestion**: `vibelift/fleet.py` extracts only numeric token counters, model names, and anonymized conversation identifiers from OpenTelemetry `gen_ai` logs; user prompts and model completions are never stored or returned.
 - **Reference-ID Error Sanitization**: Unhandled exceptions in MCP tool calls and JSON-RPC handlers log full stack traces to Cloud Logging with a correlation `ref=<id>` while returning only the sanitized exception class and reference ID to the caller.

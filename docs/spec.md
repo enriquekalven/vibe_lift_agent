@@ -41,7 +41,7 @@ Model spend is project-wide because Vertex AI usage metrics are not tagged by GE
 | Alerts | Derived from observed 4xx/5xx rates and zero cache reads | selected |
 
 Runtimes registered in several GE apps (same Cloud Run service or Agent Engine) are
-counted once in totals (`ge_fleet.runtime_backend_key`).
+counted once in totals (`vibelift.fleet.runtime_backend_key`).
 
 ## Data check
 

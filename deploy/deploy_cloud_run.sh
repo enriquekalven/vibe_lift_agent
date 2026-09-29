@@ -5,11 +5,26 @@
 # variables you set on the service by hand (for example VIBELIFT_MONITORED_SERVICES) are kept.
 set -euo pipefail
 
+# `--source .` below uploads the repo root, so always run from there regardless of the caller's cwd.
+cd "$(dirname "$0")/.."
+
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
 REGION="${GOOGLE_CLOUD_REGION:-us-central1}"
 SERVICE_NAME="${SERVICE_NAME:-vibe-lift-agent}"
 
 warn() { echo "WARNING: $*" >&2; }
+
+# Gate: never deploy a build that fails the test suite. Tests run offline (no live API calls).
+if [[ "${VIBELIFT_SKIP_TESTS:-0}" == "1" ]]; then
+  warn "VIBELIFT_SKIP_TESTS=1: deploying WITHOUT running the test suite."
+else
+  echo "Running test suite before deploy..."
+  if ! GOOGLE_APPLICATION_CREDENTIALS=/nonexistent/offline-test-credentials.json \
+      python3 -m unittest discover -s tests -t . ; then
+    echo "ERROR: tests failed; aborting deploy. Fix the failures (or set VIBELIFT_SKIP_TESTS=1 to override)." >&2
+    exit 1
+  fi
+fi
 
 if [[ -z "${PROJECT_ID}" ]]; then
   echo "ERROR: set GOOGLE_CLOUD_PROJECT or run 'gcloud config set project <project-id>'." >&2

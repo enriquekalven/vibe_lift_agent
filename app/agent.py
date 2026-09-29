@@ -19,10 +19,10 @@ from google.adk.apps import App
 from google.adk.models import Gemini
 from google.genai import types
 
-import alpha_evolve_optimizer
-import gcp_telemetry
-import ge_fleet
-import telemetry
+from vibelift import optimizer as alpha_evolve_optimizer
+from vibelift import gcp_telemetry
+from vibelift import fleet as ge_fleet
+from vibelift import telemetry
 
 MODEL_NAME = "gemini-2.5-flash"
 

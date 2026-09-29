@@ -39,8 +39,8 @@ except ImportError:  # pragma: no cover - google-auth ships with the Cloud clien
   google_auth = None
   GoogleAuthRequest = None
 
-import gcp_telemetry
-import telemetry
+from vibelift import gcp_telemetry
+from vibelift import telemetry
 
 logger = logging.getLogger(__name__)
 

@@ -849,7 +849,7 @@ def build_live_runaway_alerts(live_fleet: Mapping[str, object]) -> list[dict[str
     req = int(m.get('requests') or 0)
     if req < 10:
       continue
-    import ge_fleet  # pylint: disable=g-import-not-at-top  (avoids an import cycle at module load)
+    from vibelift import fleet as ge_fleet  # pylint: disable=g-import-not-at-top  (avoids an import cycle at module load)
 
     rt = ge_fleet.runtime_backend_key(a) or str(a.get('agent_id'))
     if rt in seen_runtimes:

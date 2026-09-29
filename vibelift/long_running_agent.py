@@ -3,8 +3,8 @@
 from collections.abc import Sequence
 import datetime
 
-import alpha_evolve_optimizer
-import telemetry
+from vibelift import optimizer as alpha_evolve_optimizer
+from vibelift import telemetry
 
 
 GCP_ADK_TOOL_SEQUENCE: tuple[tuple[str, str], ...] = (

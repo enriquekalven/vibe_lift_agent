@@ -24,18 +24,18 @@ try:
 except ImportError:
   fastapi = None
 
-import alpha_evolve_optimizer
-import billing_export
-import live_finops
-import logo_asset
-import long_running_agent
-import telemetry
-import telemetry_validator
-import ui_template
+from vibelift import optimizer as alpha_evolve_optimizer
+from vibelift import billing_export
+from vibelift import finops as live_finops
+from vibelift.ui import logo_asset
+from vibelift import long_running_agent
+from vibelift import telemetry
+from vibelift import validator as telemetry_validator
+from vibelift.ui import template as ui_template
 
-import gcp_telemetry
-import ge_fleet
-import mcp_server
+from vibelift import gcp_telemetry
+from vibelift import fleet as ge_fleet
+from vibelift import mcp_server
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)

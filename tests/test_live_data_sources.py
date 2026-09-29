@@ -2,8 +2,8 @@
 
 import unittest
 
-import ge_fleet
-import live_finops
+from vibelift import fleet as ge_fleet
+from vibelift import finops as live_finops
 
 RE = '4895941110288875520'
 RESOURCE = f'projects/project-maui/locations/us-central1/reasoningEngines/{RE}'
@@ -220,7 +220,7 @@ class LiveValidatorChecksTest(unittest.TestCase):
     return fleet
 
   def _run(self, state, fleet):
-    import telemetry_validator  # pylint: disable=g-import-not-at-top
+    from vibelift import validator as telemetry_validator  # pylint: disable=g-import-not-at-top
     checks = []
     add = lambda **kw: checks.append(dict(kw))
     telemetry_validator._add_live_finops_checks(state, fleet, fleet['agents'], fleet['totals'], add)

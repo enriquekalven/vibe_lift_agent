@@ -10,14 +10,14 @@ from unittest import mock
 import urllib.error
 import urllib.request
 
-import alpha_evolve_optimizer
-import long_running_agent
-import server
-import telemetry
-import gcp_telemetry
-import ge_fleet
-import ge_fleet_test
-import mcp_server
+from vibelift import optimizer as alpha_evolve_optimizer
+from vibelift import long_running_agent
+from vibelift import server
+from vibelift import telemetry
+from vibelift import gcp_telemetry
+from vibelift import fleet as ge_fleet
+from tests import test_fleet as ge_fleet_test
+from vibelift import mcp_server
 from app import agent as adk_agent_module
 
 _FAKE_FLEET, _FAKE_FLEET_API = ge_fleet_test.make_fake_service()
@@ -634,7 +634,7 @@ class ProductionAppTest(unittest.TestCase):
     self.assertEqual(card['url'], 'https://testserver/a2a/app')
 
 
-_REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _read_repo_file(name: str) -> str:
@@ -770,7 +770,7 @@ class DeploymentHardeningTest(unittest.TestCase):
     with mock.patch.dict(os.environ, env, clear=True), \
         mock.patch.object(gcp_telemetry.urllib.request, 'urlopen', side_effect=urllib.error.URLError('offline')), \
         mock.patch.object(gcp_telemetry.subprocess, 'run', side_effect=FileNotFoundError('gcloud')), \
-        self.assertLogs('gcp_telemetry', level='WARNING'):
+        self.assertLogs('vibelift.gcp_telemetry', level='WARNING'):
       project = gcp_telemetry.get_current_gcp_project()
     self.assertEqual(project, gcp_telemetry.UNCONFIGURED_PROJECT_ID)
     # Project IDs are 6-30 lowercase letters, digits and hyphens, so this can never be a real project.
@@ -787,7 +787,7 @@ class DeploymentHardeningTest(unittest.TestCase):
     self.assertIn('-c constraints.txt', _read_repo_file('Dockerfile'))
 
   def test_deploy_paths_stay_private_and_merge_env_vars(self) -> None:
-    for name in ('deploy_cloud_run.sh', 'cloudbuild.yaml'):
+    for name in ('deploy/deploy_cloud_run.sh', 'deploy/cloudbuild.yaml'):
       text = _read_repo_file(name)
       self.assertIn('--no-allow-unauthenticated', text, name)
       self.assertNotIn('--allow-unauthenticated', text.replace('--no-allow-unauthenticated', ''), name)
@@ -798,18 +798,18 @@ class DeploymentHardeningTest(unittest.TestCase):
       self.assertIn('VIBELIFT_PUBLIC_URL=', text, name)
       self.assertIn('GOOGLE_GENAI_USE_VERTEXAI=TRUE', text, name)
       self.assertIn('--min-instances=1', text, name)
-    self.assertNotIn(':latest', _read_repo_file('cloudbuild.yaml'))
-    self.assertIn('gcp-sa-discoveryengine', _read_repo_file('deploy_cloud_run.sh'))
+    self.assertNotIn(':latest', _read_repo_file('deploy/cloudbuild.yaml'))
+    self.assertIn('gcp-sa-discoveryengine', _read_repo_file('deploy/deploy_cloud_run.sh'))
 
   def test_real_ge_agents_and_sub_second_mcp_open_dashboard(self) -> None:
     import time
     for fname in (
-        'alpha_evolve_optimizer.py',
-        'ui_template.py',
-        'server.py',
-        'mcp_server.py',
+        'vibelift/optimizer.py',
+        'vibelift/ui/template.py',
+        'vibelift/server.py',
+        'vibelift/mcp_server.py',
         'app/agent.py',
-        'vibelift_mcp_spec_clean.json',
+        'docs/mcp_spec.json',
         'README.md',
     ):
       content = _read_repo_file(fname)
@@ -837,7 +837,7 @@ class DeploymentHardeningTest(unittest.TestCase):
     import subprocess
     import tempfile
     import shutil
-    import ui_template
+    from vibelift.ui import template as ui_template
 
     state = server._global_controller.get_state_payload(fast_mcp=True)
     html = ui_template.render_dashboard_html(initial_state=state)
@@ -929,7 +929,7 @@ class DeploymentHardeningTest(unittest.TestCase):
   def test_sme_one_pane_control_plane_endpoints_and_ui_panels(self) -> None:
     from fastapi.testclient import TestClient
     from app import fast_api_app
-    import ui_template
+    from vibelift.ui import template as ui_template
 
     client = TestClient(fast_api_app.app)
     try:
@@ -1133,7 +1133,7 @@ class DeploymentHardeningTest(unittest.TestCase):
       server._global_controller.reset()
 
   def test_ast_finops_scanner_detects_fin_01_through_fin_05(self) -> None:
-    import alpha_evolve_optimizer
+    from vibelift import optimizer as alpha_evolve_optimizer
 
     long_prompt = 'STATIC_ENTERPRISE_SYSTEM_PROMPT_' * 60  # > 1500 chars without ContextCacheConfig -> FIN-02
     sample_unoptimized_code = f'''
@@ -1180,8 +1180,8 @@ def handle_request(client, filings, retriever):
         'genome',
     )
     pattern = re.compile(r'\b(' + '|'.join(re.escape(w) for w in banned_buzzwords) + r')\b', re.IGNORECASE)
-    repo_dir = pathlib.Path(__file__).resolve().parent
-    for fname in ('ui_template.py', 'alpha_evolve_optimizer.py'):
+    repo_dir = pathlib.Path(__file__).resolve().parent.parent
+    for fname in ('vibelift/ui/template.py', 'vibelift/optimizer.py'):
       text = (repo_dir / fname).read_text(encoding='utf-8')
       matches = pattern.findall(text)
       self.assertEqual(
@@ -1191,7 +1191,7 @@ def handle_request(client, filings, retriever):
       )
 
   def test_all_js_dom_ids_exist_in_rendered_html_and_all_state_keys_surfaced(self) -> None:
-    import ui_template
+    from vibelift.ui import template as ui_template
 
     state = server._global_controller.get_state_payload(fast_mcp=True)
     html = ui_template.render_dashboard_html(initial_state=state)
@@ -1305,7 +1305,7 @@ def handle_request(client, filings, retriever):
 
   def test_ux_refinement_six_tabs_calm_palette_and_plain_english_readability(self) -> None:
     import pathlib
-    import ui_template
+    from vibelift.ui import template as ui_template
 
     state = server._global_controller.get_state_payload(fast_mcp=True)
     html = ui_template.render_dashboard_html(initial_state=state)
@@ -1358,8 +1358,8 @@ def handle_request(client, filings, retriever):
         'Deterministic engine',
         'Deterministic FinOps Engine',
     )
-    repo_dir = pathlib.Path(__file__).resolve().parent
-    for fname in ('ui_template.py', 'alpha_evolve_optimizer.py'):
+    repo_dir = pathlib.Path(__file__).resolve().parent.parent
+    for fname in ('vibelift/ui/template.py', 'vibelift/optimizer.py'):
       source_text = (repo_dir / fname).read_text(encoding='utf-8')
       for phrase in banned_big_phrases:
         self.assertNotIn(

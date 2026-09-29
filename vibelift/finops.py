@@ -72,10 +72,7 @@ def build_token_economics(fleet: Mapping[str, Any] | None) -> dict[str, Any]:
         'cost_per_1k_calls_usd': round(cost / calls * 1000, 4) if cost is not None and calls else None,
     })
   # Per agent: each runtime once (shared runtimes are registered in several apps).
-  try:
-    from ge_fleet import runtime_backend_key  # pylint: disable=g-import-not-at-top
-  except ImportError:  # pragma: no cover
-    runtime_backend_key = lambda a: str(a.get('agent_id'))
+  from vibelift.fleet import runtime_backend_key  # pylint: disable=g-import-not-at-top
   seen: set[str] = set()
   agents = []
   for a in fleet.get('agents') or []:

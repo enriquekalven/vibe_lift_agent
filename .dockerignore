@@ -16,11 +16,9 @@ venv/
 .adk
 **/.adk
 
-# Tests, CI and deployment tooling are not needed at runtime (Cloud Build runs the tests from the
+# Tests, CI, deployment tooling and docs are not needed at runtime (Cloud Build runs the tests from the
 # uploaded source, not from the image).
 tests/
-*_test.py
-cloudbuild.yaml
-cloud_run_service.yaml
-deploy_cloud_run.sh
-setup_bigquery_sink.sh
+deploy/
+docs/
+.github/

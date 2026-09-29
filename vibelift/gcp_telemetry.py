@@ -33,7 +33,7 @@ except ImportError:
   google_auth = None
   GoogleAuthRequest = None
 
-import telemetry
+from vibelift import telemetry
 
 logger = logging.getLogger(__name__)
 

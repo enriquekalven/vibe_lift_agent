@@ -11,8 +11,8 @@ import threading
 import unittest
 import urllib.parse
 
-import ge_fleet
-import telemetry
+from vibelift import fleet as ge_fleet
+from vibelift import telemetry
 
 PROJECT = 'test-project'
 ENGINE = 'agent-platform-demo'

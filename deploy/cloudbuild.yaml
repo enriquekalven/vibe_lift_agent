@@ -1,13 +1,14 @@
 # Cloud Build pipeline: build -> test (inside the built image) -> push -> deploy (private).
 #
-#   gcloud builds submit --config=cloudbuild.yaml .                              # full pipeline
-#   gcloud builds submit --config=cloudbuild.yaml --substitutions=_DEPLOY=false . # build, test, push only
+# Run from the repo root (the build context is `.`):
+#   gcloud builds submit --config=deploy/cloudbuild.yaml .                              # full pipeline
+#   gcloud builds submit --config=deploy/cloudbuild.yaml --substitutions=_DEPLOY=false . # build, test, push only
 #
 # Images are tagged with the immutable $BUILD_ID, so every revision maps to exactly one image and a
 # rollback never picks up a moved tag.
 #
 # Prerequisites:
-#   1. Run ./deploy_cloud_run.sh once. It creates the runtime service account, its IAM roles and the
+#   1. Run ./deploy/deploy_cloud_run.sh once. It creates the runtime service account, its IAM roles and the
 #      Gemini Enterprise invoker binding. This pipeline only rolls out new images.
 #   2. The deploy step runs as your Cloud Build service account, which cannot deploy Cloud Run by
 #      default. Grant it once (CB_SA is PROJECT_NUMBER@cloudbuild.gserviceaccount.com, or the Compute
@@ -23,7 +24,7 @@ steps:
     name: 'gcr.io/cloud-builders/docker'
     args: ['build', '-t', '${_IMAGE}:${BUILD_ID}', '.']
 
-  # Runs the unit and integration suites with the image's pinned dependencies. Tests run offline: the
+  # Runs the full test suite (every tests/test_*.py) with the image's pinned dependencies. Tests run offline: the
   # credentials path does not exist, so no live Google Cloud API is called.
   - id: test
     name: '${_IMAGE}:${BUILD_ID}'
@@ -38,7 +39,7 @@ steps:
         set -euo pipefail
         cp -r /workspace /tmp/src
         cd /tmp/src
-        python -m unittest vibe_lift_test ge_fleet_test
+        python -m unittest discover -s tests -t .
 
   - id: push
     name: 'gcr.io/cloud-builders/docker'

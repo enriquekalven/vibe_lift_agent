@@ -1,0 +1,34 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'  # matches the Dockerfile base image
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            constraints.txt
+
+      - name: Install pinned dependencies
+        run: pip install -r requirements.txt -c constraints.txt
+
+      # Offline: the credentials path does not exist, so no live Google Cloud API is called.
+      - name: Run test suite
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: /nonexistent/offline-test-credentials.json
+          GOOGLE_CLOUD_PROJECT: test-project
+        run: python -m unittest discover -s tests -t . -v

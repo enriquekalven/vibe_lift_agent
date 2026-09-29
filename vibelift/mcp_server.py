@@ -20,10 +20,10 @@ from typing import Any
 
 from starlette.responses import JSONResponse, Response
 
-import gcp_telemetry
-import ge_fleet
-import telemetry
-import ui_template
+from vibelift import gcp_telemetry
+from vibelift import fleet as ge_fleet
+from vibelift import telemetry
+from vibelift.ui import template as ui_template
 
 logger = logging.getLogger('vibelift-mcp')
 
@@ -150,7 +150,7 @@ def _widget_html() -> str:
 
 def _get_controller():
   """Lazy helper to get VibeLiftRuntimeController without circular import."""
-  import server
+  from vibelift import server
   return server._global_controller
 
 

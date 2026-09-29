@@ -4,10 +4,10 @@ import os
 import unittest
 from unittest import mock
 
-import alpha_evolve_optimizer
-import billing_export
-import ge_fleet
-import telemetry_validator
+from vibelift import optimizer as alpha_evolve_optimizer
+from vibelift import billing_export
+from vibelift import fleet as ge_fleet
+from vibelift import validator as telemetry_validator
 
 
 class BillingExportTest(unittest.TestCase):

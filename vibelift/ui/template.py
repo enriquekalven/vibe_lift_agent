@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 import json
-import logo_asset
+from vibelift.ui import logo_asset
 
 # pylint: disable=line-too-long
 _DASHBOARD_HTML = """<!DOCTYPE html>

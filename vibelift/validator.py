@@ -101,10 +101,7 @@ def validate_dashboard_state(
   )
 
   # Recompute request volume from per-agent metrics, counting each runtime once.
-  try:
-    from ge_fleet import runtime_backend_key  # pylint: disable=g-import-not-at-top
-  except ImportError:  # pragma: no cover
-    runtime_backend_key = lambda a: str(a.get('agent_id'))
+  from vibelift.fleet import runtime_backend_key  # pylint: disable=g-import-not-at-top
   seen_rt: set[str] = set()
   sum_calls = 0
   for a in fleet_agents:
@@ -146,7 +143,7 @@ def validate_dashboard_state(
       metric_or_panel='active_agent.parameters (Baseline vs Current Delta %)',
       passed=param_math_ok and len(params) >= 4,
       provenance='OPTIMIZER_SIMULATION' if live_mode else 'DERIVED_FROM_LIVE_TELEMETRY',
-      source_dataset='alpha_evolve_optimizer.OptimizationParameter',
+      source_dataset='vibelift.optimizer.OptimizationParameter',
       evidence=f'Verified {len(params)} optimization parameters with exact delta_pct math.',
   )
 
@@ -256,7 +253,7 @@ def validate_dashboard_state(
         metric_or_panel='user_centric.power_users_ldap',
         passed=has_defined_csat_and_cost and len(user_ldaps) > 0,
         provenance='DERIVED_FROM_LIVE_TELEMETRY',
-        source_dataset='alpha_evolve_optimizer.build_user_centric_analytics',
+        source_dataset='vibelift.optimizer.build_user_centric_analytics',
         evidence=f'Verified {len(user_ldaps)} user records with complete avg_csat and monthly_cost_usd fields.',
     )
 

@@ -1,4 +1,4 @@
-# Declarative reference for a FRESH vibe-lift-agent service. Prefer ./deploy_cloud_run.sh or cloudbuild.yaml.
+# Declarative reference for a FRESH vibe-lift-agent service. Prefer ./deploy/deploy_cloud_run.sh or deploy/cloudbuild.yaml.
 #
 # WARNING: `gcloud run services replace` swaps in this whole spec. Settings that are not in this file are
 # removed from the live service, for example custom audiences (run.googleapis.com/custom-audiences) and
@@ -11,7 +11,7 @@
 # Example:
 #   sed -e 's|__PROJECT_ID__|my-project|g; s|__PROJECT_NUMBER__|123456789|g; s|__REGION__|us-central1|g' \
 #       -e 's|__IMAGE_URI__|us-central1-docker.pkg.dev/my-project/cloud-run-source-deploy/vibe-lift-agent:BUILD_ID|' \
-#       cloud_run_service.yaml > /tmp/service.yaml
+#       deploy/cloud_run_service.yaml > /tmp/service.yaml
 #   gcloud run services replace /tmp/service.yaml --region=us-central1
 # replace does not change IAM, so the service stays private. Grant roles/run.invoker as deploy_cloud_run.sh does.
 apiVersion: serving.knative.dev/v1
