@@ -164,15 +164,22 @@ class RequestTrendTest(unittest.TestCase):
       results = {('run_series', 'p'): {'svc': {
           end_last: {'requests': 5, 'errors_4xx': 1, 'errors_5xx': 0},
           end_last - 3600: {'requests': 3, 'errors_4xx': 0, 'errors_5xx': 1},
+          # Raw per-minute point inside the oldest partial hour (window starts 12:30 yesterday).
+          end_last - 24 * 3600 - 600: {'requests': 2, 'errors_4xx': 0, 'errors_5xx': 0},
+          # Exactly at the window start: outside the window, must be ignored.
+          end_last - 24 * 3600 - 1800: {'requests': 100, 'errors_4xx': 0, 'errors_5xx': 0},
       }}}
       tr = ge_fleet.build_request_trend(agents, results, 24 * 3600, 3600, 'p')
-    self.assertEqual(len(tr['bucket_ends']), 24)
+    # 25 buckets: the first (12:00-13:00 yesterday) holds the window's first partial half hour.
+    self.assertEqual(len(tr['bucket_ends']), 25)
+    self.assertEqual(tr['bucket_ends'][0], '2026-09-28T13:00:00Z')
     self.assertEqual(tr['bucket_ends'][-1], '2026-09-29T13:00:00Z')
     row = tr['by_runtime']['cloud_run:svc']
     self.assertEqual(list(tr['by_runtime']), ['cloud_run:svc'])
     self.assertEqual(row['requests'][-1], 5)
     self.assertEqual(row['requests'][-2], 3)
-    self.assertEqual(sum(row['requests']), 8)
+    self.assertEqual(row['requests'][0], 2)
+    self.assertEqual(sum(row['requests']), 10)
     self.assertEqual(tr['status'], 'ok')
 
   def test_bucket_sizes(self):

@@ -124,6 +124,10 @@ def parse_window_hours(value: Any) -> int | None:
   return hours if 1 <= hours <= 720 else None
 
 
+# Up to this window the trend bins raw per-minute points itself (exact); beyond it, server-side alignment.
+RAW_SERIES_MAX_WINDOW_S = 7 * 24 * 3600
+
+
 def trend_bucket_seconds(hours: int) -> int:
   """Bucket size for the requests-over-time chart (about 24 buckets per window)."""
   if hours <= 1:
@@ -146,8 +150,10 @@ def build_request_trend(
 ) -> dict[str, Any]:
   """Aligns per-runtime request series onto one bucket grid, keyed like runtime_backend_key()."""
   now = int(_utcnow().timestamp())
+  start = now - window_s
   last = now - (now % bucket_s) + bucket_s
-  n = max(1, window_s // bucket_s)
+  # Enough buckets that the first one starts at or before the window start.
+  n = max(1, -(-(last - start) // bucket_s))
   grid = [last - bucket_s * (n - 1 - i) for i in range(n)]
   index = {t: i for i, t in enumerate(grid)}
   by_runtime: dict[str, dict[str, list[int]]] = {}
@@ -172,7 +178,9 @@ def build_request_trend(
       continue
     row = {'requests': [0] * n, 'errors_4xx': [0] * n, 'errors_5xx': [0] * n}
     for epoch, vals in series_map[rid].items():
-      # Snap each point's end time to the nearest grid bucket end.
+      if epoch <= start:
+        continue
+      # Snap each point's end time up to the bucket end that contains it.
       snapped = epoch + ((bucket_s - epoch % bucket_s) % bucket_s)
       i = index.get(snapped)
       if i is None:
@@ -660,18 +668,26 @@ class GeminiEnterpriseFleetService:
   def _request_series(
       self, project: str, metric: str, label: str, ids: list[str], window_s: int, bucket_s: int
   ) -> dict[str, dict[int, dict[str, int]]]:
-    """Request counts per runtime id per time bucket: {id: {bucket_end_epoch: {requests, errors_4xx, errors_5xx}}}."""
+    """Request counts per runtime id per point end time: {id: {end_epoch: {requests, errors_4xx, errors_5xx}}}.
+
+    For windows up to RAW_SERIES_MAX_WINDOW_S the raw 60 s DELTA points are fetched and binned by the
+    caller. Server-side alignment is avoided there because Cloud Monitoring adds a raw point that
+    straddles an alignment boundary to both adjacent buckets, which double-counts requests.
+    """
     end = _utcnow()
     params = [
         ('filter', f'metric.type="{metric}" AND resource.label.{label} = {self._one_of(ids)}'),
         ('interval.startTime', _iso(end - datetime.timedelta(seconds=window_s))),
         ('interval.endTime', _iso(end)),
-        ('aggregation.alignmentPeriod', f'{bucket_s}s'),
-        ('aggregation.perSeriesAligner', 'ALIGN_SUM'),
-        ('aggregation.crossSeriesReducer', 'REDUCE_SUM'),
-        ('aggregation.groupByFields', f'resource.label.{label}'),
-        ('aggregation.groupByFields', 'metric.label.response_code_class'),
     ]
+    if window_s > RAW_SERIES_MAX_WINDOW_S:
+      params += [
+          ('aggregation.alignmentPeriod', f'{bucket_s}s'),
+          ('aggregation.perSeriesAligner', 'ALIGN_SUM'),
+          ('aggregation.crossSeriesReducer', 'REDUCE_SUM'),
+          ('aggregation.groupByFields', f'resource.label.{label}'),
+          ('aggregation.groupByFields', 'metric.label.response_code_class'),
+      ]
     url = f'{_MONITORING}/projects/{project}/timeSeries?{urllib.parse.urlencode(params)}'
     out: dict[str, dict[int, dict[str, int]]] = {}
     for series in self._paged(url, 'timeSeries'):

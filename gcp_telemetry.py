@@ -591,7 +591,7 @@ class GoogleCloudTelemetryService:
       SELECT
         CAST(timestamp AS STRING) AS ts,
         COALESCE(labels.gen_ai_agent_name, 'sre_triage_root_agent') AS agent_name,
-        COALESCE(labels.user_id, 'cli-user') AS user_id,
+        labels.user_id AS user_id,
         COALESCE(labels.gen_ai_conversation_id, 'conv') AS conv_id,
         COALESCE(labels.gen_ai_usage_input_tokens, '0') AS input_tokens,
         COALESCE(labels.gen_ai_usage_output_tokens, '0') AS output_tokens,
@@ -599,6 +599,7 @@ class GoogleCloudTelemetryService:
         COALESCE(labels.gen_ai_input_messages_ref, '') AS in_ref,
         COALESCE(labels.gen_ai_output_messages_ref, '') AS out_ref
       FROM `{self.project_id}.sre_triage_agent_telemetry.gen_ai_client_inference_operation_details`
+      WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
       ORDER BY timestamp DESC
       LIMIT {int(max_results)}
     """, timeout_s=6.0)
@@ -784,6 +785,7 @@ class GoogleCloudTelemetryService:
             CAST(timestamp AS STRING) AS ts,
             TO_JSON_STRING(jsonPayload) AS payload_json
           FROM `{p}.ds_ge_assistant_raw.discoveryengine_googleapis_com_gemini_enterprise_user_activity`
+          WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
           ORDER BY timestamp DESC
           LIMIT 20
         """,
@@ -792,13 +794,14 @@ class GoogleCloudTelemetryService:
             COUNT(*) AS search_count,
             CAST(MAX(timestamp) AS STRING) AS last_search_ts
           FROM `{p}.ds_ge_search_raw.discoveryengine_googleapis_com_gemini_enterprise_user_activity`
+          WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
         """,
         'sre_triage_turns': f"""
           SELECT
             insertId AS event_id,
             CAST(timestamp AS STRING) AS ts,
-            COALESCE(labels.user_id, 'cli-user') AS user_id,
-            COALESCE(labels.gen_ai_agent_name, 'root_agent') AS agent_name,
+            labels.user_id AS user_id,
+            labels.gen_ai_agent_name AS agent_name,
             COALESCE(labels.gen_ai_conversation_id, '') AS conversation_id,
             CAST(COALESCE(labels.gen_ai_usage_input_tokens, '0') AS INT64) AS input_tokens,
             CAST(COALESCE(labels.gen_ai_usage_output_tokens, '0') AS INT64) AS output_tokens,
@@ -806,10 +809,11 @@ class GoogleCloudTelemetryService:
             COALESCE(labels.gen_ai_output_messages_ref, '') AS output_gcs_uri,
             COALESCE(labels.gen_ai_system_instructions_ref, '') AS sys_gcs_uri,
             COALESCE(labels.gen_ai_tool_definitions, '[]') AS tool_defs_json,
-            COALESCE(resource.labels.reasoning_engine_id, '27056782136311808') AS engine_id
+            resource.labels.reasoning_engine_id AS engine_id
           FROM `{p}.sre_triage_agent_telemetry.gen_ai_client_inference_operation_details`
+          WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
           ORDER BY timestamp DESC
-          LIMIT 30
+          LIMIT 2000
         """,
         'cloud_run_requests': f"""
           SELECT
@@ -819,6 +823,8 @@ class GoogleCloudTelemetryService:
             ROUND(AVG(httpRequest.latency * 1000), 1) AS avg_latency_ms,
             ROUND(MAX(httpRequest.latency * 1000), 1) AS max_latency_ms
           FROM `{p}.vibelift_analytics.run_googleapis_com_requests_*`
+          WHERE _TABLE_SUFFIX >= FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE(), INTERVAL 8 DAY))
+            AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
           GROUP BY 1, 2
           ORDER BY revision DESC, status ASC
           LIMIT 30
@@ -833,6 +839,7 @@ class GoogleCloudTelemetryService:
               CAST(MAX(timestamp) AS STRING) AS last_seen
             FROM `{p}.ds_vertex_agents_raw.cloudaudit_googleapis_com_data_access`
             WHERE protopayload_auditlog.authenticationInfo.principalEmail IS NOT NULL
+              AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
             GROUP BY 1, 2, 3
             UNION ALL
             SELECT
@@ -843,6 +850,8 @@ class GoogleCloudTelemetryService:
               CAST(MAX(timestamp) AS STRING) AS last_seen
             FROM `{p}.vibelift_analytics.cloudaudit_googleapis_com_data_access_*`
             WHERE protopayload_auditlog.authenticationInfo.principalEmail IS NOT NULL
+              AND _TABLE_SUFFIX >= FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE(), INTERVAL 8 DAY))
+              AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
             GROUP BY 1, 2, 3
           )
           ORDER BY call_count DESC
@@ -930,7 +939,7 @@ class GoogleCloudTelemetryService:
       })
 
     for idx, row in enumerate(sre_turns[:15]):
-      uid = str(row.get('user_id') or 'cli-user')
+      uid = str(row.get('user_id') or 'unknown')
       in_tok = int(row.get('input_tokens') or 0)
       out_tok = int(row.get('output_tokens') or 0)
       tot_tok = in_tok + out_tok
@@ -1026,11 +1035,17 @@ class GoogleCloudTelemetryService:
       if ls > st['last_seen']:
         st['last_seen'] = ls
 
-    # Aggregate sre_triage OTel users (cli-user, vais-query-reasoning-engine)
+    # Aggregate Agent Engine OTel session user ids (app-supplied labels, not authenticated identities).
     sre_by_user: dict[str, dict[str, Any]] = {}
     extracted_tools: list[dict[str, str]] = []
+    otel_engine_ids = sorted({str(r.get('engine_id')) for r in sre_turns if r.get('engine_id')})
+    otel_agent_label = (
+        'Agent Engine ' + ', '.join(otel_engine_ids) if otel_engine_ids else 'Agent Engine (id not logged)'
+    )
     for r in sre_turns:
-      uid = str(row_uid := (r.get('user_id') or 'cli-user'))
+      if not r.get('user_id'):
+        continue  # No session user id logged: do not attribute to anyone.
+      uid = str(r.get('user_id'))
       u = sre_by_user.setdefault(uid, {'turns': 0, 'convs': set(), 'in_tok': 0, 'out_tok': 0, 'last_ts': ''})
       u['turns'] += 1
       if r.get('conversation_id'):
@@ -1051,10 +1066,11 @@ class GoogleCloudTelemetryService:
     for uid, u in sre_by_user.items():
       st = _ensure_p(
           uid,
-          'ADK SRE Triage OTel Principal (sre_triage_agent_telemetry)',
-          'IT Service Desk / SRE Triage (RE 27056782136311808)',
+          'Agent session user id (OTel label, not an authenticated identity)',
+          otel_agent_label,
           is_sa=(uid == 'vais-query-reasoning-engine'),
       )
+      st['otel_session_id_only'] = True
       st['api_calls'] += u['turns']
       st['interactive_sessions'] += len(u['convs']) or u['turns']
       st['observed_tokens'] += (u['in_tok'] + u['out_tok'])
@@ -1063,11 +1079,6 @@ class GoogleCloudTelemetryService:
       if u['last_ts'] > st['last_seen']:
         st['last_seen'] = u['last_ts']
 
-    # Also attribute interactive StreamAssist token estimates to enriq@google.com if present
-    if 'enriq@google.com' in principal_stats:
-      enriq_assist_tok = sum(int(x.get('total_tokens') or 0) for x in live_usage_logs if x.get('user_email') == 'enriq@google.com')
-      principal_stats['enriq@google.com']['observed_tokens'] += enriq_assist_tok
-      principal_stats['enriq@google.com']['interactive_sessions'] += len(ge_assist)
 
     live_power_users: list[dict[str, object]] = []
     for pr, st in sorted(
@@ -1078,7 +1089,13 @@ class GoogleCloudTelemetryService:
       tok_m = round(obs_tok / 1_000_000.0, 4)
       est_cost = round(obs_tok / 1_000_000.0 * 0.75, 4)
       sessions_val = st['interactive_sessions'] if st['interactive_sessions'] > 0 else st['api_calls']
-      role_tag = 'SERVICE_ACCOUNT_TELEMETRY' if st['is_service_account'] else 'LIVE_HUMAN_PRINCIPAL'
+      if st['is_service_account']:
+        role_tag = 'SERVICE_ACCOUNT_TELEMETRY'
+      elif st.get('otel_session_id_only') and '@' not in str(pr):
+        # e.g. agents-cli's default session id 'cli-user': real traffic, but not a verified person.
+        role_tag = 'UNVERIFIED_SESSION_ID'
+      else:
+        role_tag = 'LIVE_HUMAN_PRINCIPAL'
       live_power_users.append({
           'user_ldap': st['user_ldap'],
           'user_email': st['user_email'],
@@ -1117,7 +1134,7 @@ class GoogleCloudTelemetryService:
       live_skills_mcp.append({
           'resource_name': f'adk_tool://{tname}',
           'kind': 'ADK FunctionTool (OTel)',
-          'attached_agent': 'IT Service Desk / SRE Triage (RE 27056782136311808)',
+          'attached_agent': otel_agent_label,
           # Tool definitions are attached to every inference turn; per-tool call counts are not logged.
           'calls_24h': None,
           'prompt_tokens_m': round(total_sre_in / 1_000_000.0, 4),

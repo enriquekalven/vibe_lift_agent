@@ -221,7 +221,7 @@ def validate_dashboard_state(
   if live_mode:
     # Provenance check, not a name blocklist: every row must carry a live status
     # and a BigQuery source tag. Seed/demo rows have neither.
-    live_statuses = ('LIVE_HUMAN_PRINCIPAL', 'SERVICE_ACCOUNT_TELEMETRY')
+    live_statuses = ('LIVE_HUMAN_PRINCIPAL', 'SERVICE_ACCOUNT_TELEMETRY', 'UNVERIFIED_SESSION_ID')
     ungrounded = sorted(
         str(u.get('user_ldap') or '?')
         for u in power_users

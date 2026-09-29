@@ -502,6 +502,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .adv-toggle[aria-pressed="true"] { background:#1e293b; color:#fff; border-color:#1e293b; }
     .verify-chip { font-size:11.5px; padding:4px 10px; }
     .scope-select { font-size:12px; padding:5px 8px; border:1px solid #cbd5e1; border-radius:6px; background:#fff; color:#0f172a; max-width:320px; }
+    .time-ranges { margin-top: 6px; font-size: 11.5px; color: #475569; line-height: 1.45; }
     .scope-note { font-size:12px; color:#854d0e; background:#fefce8; border:1px solid #fde68a; border-radius:6px; padding:6px 10px; margin-top:8px; }
     .fleet-agent-app { font-size:11px; color: var(--text-secondary); margin-top:2px; }
     details.role-disclosure {
@@ -546,6 +547,13 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <label for="geScopeSelect" style="font-size:11.5px;font-weight:600;color:#475569;">Gemini Enterprise app</label>
       <select id="geScopeSelect" class="scope-select" onchange="onGeScopeChange(this.value)" title="Filter by region and Gemini Enterprise app">
         <option value="all">All apps &middot; all regions</option>
+      </select>
+      <label for="fleetWindow" style="font-size:11.5px;font-weight:600;color:#475569;">Time range</label>
+      <select id="fleetWindow" class="scope-select" onchange="onFleetWindowChange()" title="Time range for agent traffic, errors, tokens and model spend">
+        <option value="1">Last hour</option>
+        <option value="6">Last 6 hours</option>
+        <option value="24" selected>Last 24 hours</option>
+        <option value="168">Last 7 days</option>
       </select>
     </div>
     <div class="action-bar">
@@ -777,8 +785,9 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           <div class="chart-legend">
             <span><i style="background:#10b981"></i>People</span>
             <span><i style="background:#94a3b8"></i>Service accounts</span>
+            <span title="A user id set by the calling app (e.g. agents-cli uses cli-user), not an authenticated identity"><i style="background:#f59e0b"></i>Unverified session id</span>
           </div>
-          <div class="chart-source">Source: BigQuery audit logs &amp; agent telemetry (sessions, last 7 days)</div>
+          <div class="chart-source">Source: BigQuery audit logs &amp; agent telemetry (sessions, last 7 days; does not follow Time range)</div>
         </div>
       </div>
       <div class="panel" style="margin-top:14px;">
@@ -796,13 +805,6 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
             <span id="fleetEngineBadge" class="badge badge-blue">Loading&hellip;</span>
           </div>
           <div class="fleet-controls">
-            <label for="fleetWindow">Window</label>
-            <select id="fleetWindow" onchange="onFleetWindowChange()">
-              <option value="1">Last hour</option>
-              <option value="6">Last 6 hours</option>
-              <option value="24" selected>Last 24 hours</option>
-              <option value="168">Last 7 days</option>
-            </select>
             <label><input type="checkbox" id="fleetAuto" checked onchange="scheduleFleetRefresh()" /> Auto-refresh (60 s)</label>
             <button class="btn" id="fleetRefreshBtn" onclick="refreshFleet(true)">Refresh now</button>
           </div>
@@ -3939,9 +3941,14 @@ async def handle_agent_turn(message_envelope):
         el('span', 'muted', ['Project ' + (fleet.project_id || '—') + ' · ' + win + ' · updated ' +
           (fleet.generated_at ? new Date(fleet.generated_at).toLocaleTimeString() : '—') +
           ' · spend is tokens × Vertex AI list price, not your invoice']),
+        el('div', 'time-ranges', [
+          el('strong', null, ['Time ranges: ']),
+          'Traffic, errors, tokens and model spend: ' + win + ' (Time range menu; Cloud Monitoring, usually 3–10 min behind). ' +
+          'Users: last 7 days, fixed (BigQuery audit logs and agent telemetry). ' +
+          'Agent list: current. Invoice: last 30 days when a billing export is connected.']),
         scoped ? el('div', 'scope-note', ['Filtered to ' + geScopeLabel(geScope) +
           '. Agents, requests and users are filtered. Model spend is project-wide: Vertex AI usage metrics are not tagged by Gemini Enterprise app.' +
-          (fleet.__shared_runtimes ? ' ' + fleet.__shared_runtimes + ' runtime(s) here are also registered in other apps; their traffic cannot be split by app.' : '')]) : null
+          (fleet.__shared_runtimes ? ' ' + fleet.__shared_runtimes + ' runtime(s) here are also registered in other apps; their traffic cannot be split by app.' : '')]) : ''
       );
 
       const kpis = document.getElementById('execKpis');
@@ -4010,10 +4017,12 @@ async def handle_agent_turn(message_envelope):
       // Most active users
       const userRows = users.slice().sort(function(a, b) { return Number(b.sessions_7d || 0) - Number(a.sessions_7d || 0); })
         .slice(0, 6).map(function(u) {
-          const human = String(u.status || '').indexOf('HUMAN') >= 0;
+          const st = String(u.status || '');
+          const kind = st.indexOf('HUMAN') >= 0 ? ['Person', '#10b981'] :
+            (st.indexOf('UNVERIFIED') >= 0 ? ['Unverified session id', '#f59e0b'] : ['Service account', '#94a3b8']);
           const v = Number(u.sessions_7d || 0);
           return {label: u.user_ldap || u.user_email || '—', total: v,
-            segments: [{name: human ? 'Person' : 'Service account', value: v, color: human ? '#10b981' : '#94a3b8'}]};
+            segments: [{name: kind[0], value: v, color: kind[1]}]};
         });
       const usersBox = document.getElementById('execChartUsers');
       if (usersBox) usersBox.replaceChildren(users.length ? hbarChart(userRows) :

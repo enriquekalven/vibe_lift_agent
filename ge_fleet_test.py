@@ -113,7 +113,7 @@ class FakeGoogleApi:
 
   def _monitoring(self, path, query):
     with self._lock:
-      self.alignment_periods.append(query['aggregation.alignmentPeriod'][0])
+      self.alignment_periods.append(query.get('aggregation.alignmentPeriod', ['raw'])[0])
     project = path.split('/')[3]
     metric = re.search(r'metric\.type="([^"]+)"', query['filter'][0]).group(1)
     p50 = query.get('aggregation.crossSeriesReducer', [''])[0].endswith('_50')
@@ -338,6 +338,10 @@ class GeFleetCollectionTest(unittest.TestCase):
     # Window-level aggregates use the whole window; the trend uses 6h buckets for a 30-day window.
     self.assertEqual(set(api.alignment_periods), {'2592000s', '21600s'})
     self.assertEqual(service.collect(window_hours=0)['window_hours'], 1)
+    # Up to 7 days the trend fetches raw per-minute points (no server-side alignment double counting).
+    api.alignment_periods.clear()
+    service.collect(window_hours=24)
+    self.assertEqual(set(api.alignment_periods), {'86400s', 'raw'})
 
 
 class GeFleetDiscoveryTest(unittest.TestCase):
