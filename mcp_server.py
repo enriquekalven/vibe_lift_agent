@@ -158,20 +158,26 @@ def _get_controller():
 # Tool Handlers
 # ---------------------------------------------------------------------------
 
-FLEET_TAB, DEMO_PARAMETERS_TAB, DEMO_ALPHAEVOLVE_TAB, USER_CENTRIC_FINOPS_TAB = 0, 1, 2, 3
+# Dashboard tab ids (match switchTab() in ui_template.py). Overview is the default landing tab.
+# Goals & Metrics (1), Optimizer & Testing (2) and Tools & SDK (5) are Advanced-mode tabs; asking
+# for one turns Advanced mode on in the UI.
+FLEET_TAB = 0
+GOALS_METRICS_TAB = 1
+OPTIMIZER_TESTING_TAB = 2
+COST_BILLING_TAB = 3
+USERS_FEEDBACK_TAB = 4
+TOOLS_SDK_TAB = 5
+OVERVIEW_TAB = 6
+VALID_TABS = frozenset(range(7))
 
 
 def _parse_focus_tab(value: Any) -> int:
-  """Validates the untrusted focus_tab argument; defaults to the live fleet tab."""
+  """Validates the untrusted focus_tab argument; defaults to the Overview tab."""
   try:
     tab = int(value)
   except (TypeError, ValueError):
-    return FLEET_TAB
-  return (
-      tab
-      if tab in (FLEET_TAB, DEMO_PARAMETERS_TAB, DEMO_ALPHAEVOLVE_TAB, USER_CENTRIC_FINOPS_TAB)
-      else FLEET_TAB
-  )
+    return OVERVIEW_TAB
+  return tab if tab in VALID_TABS else OVERVIEW_TAB
 
 
 async def _tool_open_dashboard(session_key: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -368,10 +374,8 @@ _TOOLS: list[dict[str, Any]] = [
                 'focus_tab': {
                     'type': 'integer',
                     'description': (
-                        'Tab to open: 0 = live Gemini Enterprise agent fleet (default), '
-                        '1 = agent optimization parameters, 2 = optimizer performance and actions, '
-                        '3 = User-Centric FinOps, Skill/MCP token consumption & @vibelift_telemetry decorator stream. '
-                        'Omit to open the live fleet.'
+                        'Tab to open: 6 = Overview (default), 0 = Agents, 3 = Cost, 4 = Users. '
+                        'Advanced tabs: 1 = Goals & Metrics, 2 = Optimizer & Testing, 5 = Tools & SDK.'
                     ),
                 },
                 'window_hours': {

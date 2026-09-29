@@ -477,6 +477,9 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .exec-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 14px; }
     @media (max-width: 900px) { .exec-grid { grid-template-columns: 1fr; } }
     .exec-grid .panel { margin-bottom: 0; }
+    .trend-panel { margin-top: 14px; margin-bottom: 0; }
+    .trend-svg { width: 100%; height: 170px; display: block; }
+    .trend-svg text { font-size: 10px; fill: #64748b; font-family: var(--font-mono); }
     .chart-source { font-size: 11px; color: var(--text-secondary); margin-top: 10px; }
     .hbar-row { display: grid; grid-template-columns: 170px 1fr 64px; align-items: center; gap: 10px; margin: 7px 0; font-size: 12.5px; }
     .hbar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
@@ -737,6 +740,16 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     <section id="tabPanel6">
       <div class="exec-headline" id="execHeadline">Loading live data from Google Cloud&hellip;</div>
       <div class="kpi-grid" id="execKpis"></div>
+      <div class="panel trend-panel">
+        <div class="panel-header"><div class="panel-title"><span>Requests over time</span></div></div>
+        <div id="execChartTrend"></div>
+        <div class="chart-legend">
+          <span><i style="background:#2563eb"></i>Successful</span>
+          <span><i style="background:#f59e0b"></i>Rejected (4xx)</span>
+          <span><i style="background:#ef4444"></i>Server error (5xx)</span>
+        </div>
+        <div class="chart-source" id="execSrcTrend"></div>
+      </div>
       <div class="exec-grid">
         <div class="panel">
           <div class="panel-header"><div class="panel-title"><span>Requests by agent</span></div></div>
@@ -1241,7 +1254,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:14px;">
           <div>
             <div style="font-size:12px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">
-              Why Your Cloud Bill Differs from Raw Token Counts (5 Cost Drivers &bull; Within 1.7% of Invoice)
+              Why Your Cloud Bill Differs from Raw Token Counts (5 Cost Drivers &bull; model, not measured)
             </div>
             <div class="table-scroll">
               <table>
@@ -1286,10 +1299,10 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="panel-header">
           <div class="panel-title">
             <span>Cloud Billing SKU Comparison, Reserved Capacity (GSU) Advisor &amp; Platform Hosting Cost</span>
-            <span class="badge badge-green" id="billingReconDeltaBadge">Tracked Tokens vs. Cloud Bill: -1.67% Difference (Matched)</span>
+            <span class="badge badge-blue" id="billingReconDeltaBadge">Billing export: checking&hellip;</span>
           </div>
           <div style="font-size:12px;color:var(--text-secondary);">
-            Compares <span class="mono">@vibelift_telemetry</span> token estimates with official GCP Cloud Billing SKUs, reserved capacity (GSU) savings, and VibeLift's own ~$48/mo hosting cost.
+            Billed cost per SKU from your Cloud Billing BigQuery export (last 30 days). Nothing is shown when the export is not connected.
           </div>
         </div>
         <div class="table-scroll" style="margin-bottom:12px;">
@@ -1622,11 +1635,11 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="panel adv-only">
         <div class="panel-header">
           <div class="panel-title">
-            <span>User Groups &amp; Monthly Savings (modeled)</span>
-            <span class="badge badge-green" id="oauthGovernanceBadge">OAuth 2.0 Cross-Project Consent &amp; PDD Verified</span>
+            <span id="userCohortsTitle">User Groups &amp; Monthly Savings (modeled)</span>
+            <span class="badge badge-blue" id="oauthGovernanceBadge">Simulator data</span>
           </div>
           <div style="font-size:12px;color:var(--text-secondary);">
-            Shows token usage, extra chat context reduction, wait time, and monthly dollar savings for each user group.
+            <span id="userCohortsSubtitle">Shows token usage, extra chat context reduction, wait time, and monthly dollar savings for each user group.</span>
           </div>
         </div>
         <div class="table-scroll">
@@ -1777,7 +1790,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
                 <th>Skill / MCP Tool</th>
                 <th>Type</th>
                 <th>Connected Agent</th>
-                <th>24h Calls</th>
+                <th>Calls</th>
                 <th>Prompt Tokens</th>
                 <th>Cache Hit %</th>
                 <th>Extra Context %</th>
@@ -2286,22 +2299,26 @@ async def handle_agent_turn(message_envelope):
       const judgeBox = document.getElementById('telemetryValidatorJudgeBox');
       if (judgeBox) {
         const judge = val.llm_judge || {};
-        const verdict = judge.verdict || val.overall_status || 'VERIFIED_GROUNDED';
-        const vCls = String(verdict).includes('FAIL') ? 'badge-red' : 'badge-green';
-        judgeBox.replaceChildren(
+        const verdict = judge.verdict || val.overall_status || 'NOT RUN';
+        const vCls = String(verdict) === 'VERIFIED_GROUNDED' ? 'badge-green' : 'badge-red';
+        const score = judge.grounding_score_100 ?? val.grounding_score_pct;
+        const rows = [
           el('div', 'action-box-title', [
-            'LLM-as-a-Judge Grounding Audit • Model: ' + (judge.judge_model || 'gemini-2.5-flash') +
-            ' • Mode: ' + (val.mode || 'LIVE_GCP_TELEMETRY') +
-            ' • Grounding Score: ' + (judge.grounding_score_100 ?? val.grounding_score_pct ?? 100) + '/100'
+            'Judge: ' + (judge.judge_model_used || judge.judge_model || 'not run') +
+            ' \u2022 Score: ' + (score == null ? '\u2014' : score + '/100')
           ]),
           el('div', null, [
             badge(verdict, vCls),
-            el('span', null, [' ' + (judge.executive_summary || 'All dashboard tabs verified against ground-truth telemetry.')])
-          ]),
-          el('div', 'kpi-sub', [
-            'Tab Findings: ' + (Array.isArray(judge.tab_findings) ? judge.tab_findings.join(' | ') : 'All 6 tabs verified.')
+            el('span', null, [' ' + (judge.executive_summary || '')])
           ])
-        );
+        ];
+        if (judge.judge_error) {
+          rows.push(el('div', 'kpi-sub', ['LLM judge unavailable: ' + judge.judge_error]));
+        }
+        if (Array.isArray(judge.tab_findings) && judge.tab_findings.length) {
+          rows.push(el('div', 'kpi-sub', ['Checks: ' + judge.tab_findings.join(' | ')]));
+        }
+        judgeBox.replaceChildren.apply(judgeBox, rows);
       }
       const tbody = document.getElementById('telemetryValidatorChecksBody');
       if (tbody && Array.isArray(val.checks)) {
@@ -2739,29 +2756,48 @@ async def handle_agent_turn(message_envelope):
       const br = state.billing_reconciliation || {};
       const ue = br.unit_economics || {};
       const nsKpis = document.getElementById('northStarUnitEconKpis');
-      if (nsKpis) {
+      const liveBilling = !!br.status;
+      if (nsKpis && liveBilling) {
+        const connected = br.status === 'LIVE';
+        const topSvc = Object.keys(br.net_by_service || {})[0];
+        nsKpis.replaceChildren(
+          kpiCard('Billed net cost (' + (br.window_days || 30) + 'd)', connected ? money(br.total_net_invoice_usd) : '—',
+                  connected ? 'Gross ' + money(br.total_gross_usd) + ' · credits ' + money(br.total_credits_usd) : String(br.message || '')),
+          kpiCard('Largest service', connected && topSvc ? topSvc : '—',
+                  connected && topSvc ? money(br.net_by_service[topSvc]) + ' net' : 'Source: Cloud Billing export'),
+          kpiCard('Billing export', br.status, br.billing_export_table || 'not configured')
+        );
+      } else if (nsKpis) {
         nsKpis.replaceChildren(
           kpiCard(
-            'North-Star: Cost / CSAT-Positive Resolved Session',
-            '$' + Number(ue.baseline_cost_per_resolved_session_usd || 0.2293).toFixed(4) + ' → $' + Number(ue.optimized_cost_per_resolved_session_usd || 0.0110).toFixed(4),
-            '-' + Number(ue.unit_cost_reduction_pct || 95.2).toFixed(1) + '% outcome-adjusted unit cost reduction'
+            'North-Star: Cost / CSAT-Positive Resolved Session (simulator)',
+            '$' + Number(ue.baseline_cost_per_resolved_session_usd || 0).toFixed(4) + ' → $' + Number(ue.optimized_cost_per_resolved_session_usd || 0).toFixed(4),
+            orDash(ue.unit_cost_reduction_pct, '% simulated reduction')
           ),
           kpiCard(
-            'First-Contact Resolution Rate',
-            Number(ue.baseline_resolution_rate_pct || 76.2).toFixed(1) + '% → ' + Number(ue.optimized_resolution_rate_pct || 96.4).toFixed(1) + '%',
-            'Avg Turns / Session: ' + (ue.avg_turns_per_session_baseline || 4.8) + ' → ' + (ue.avg_turns_per_session_optimized || 3.1)
+            'First-Contact Resolution Rate (simulator)',
+            orDash(ue.baseline_resolution_rate_pct, '%') + ' → ' + orDash(ue.optimized_resolution_rate_pct, '%'),
+            'Avg Turns / Session: ' + orDash(ue.avg_turns_per_session_baseline) + ' → ' + orDash(ue.avg_turns_per_session_optimized)
           ),
           kpiCard(
-            'Voice-of-Customer CSAT Positive (≥4★)',
-            Number(ue.baseline_csat_positive_pct || 68.4).toFixed(1) + '% → ' + Number(ue.optimized_csat_positive_pct || 93.8).toFixed(1) + '%',
-            'Joined from BigQuery aive_logs.ratings_log'
-          ),
-          kpiCard(
-            'Reconciled Net Cloud Invoice (30d)',
-            '$' + fmtInt(br.total_net_invoice_usd || 32220) + '/mo',
-            'Credits Applied: -$' + fmtInt(br.total_credits_usd || 17560) + ' (Variance: ' + (br.reconciliation_delta_pct || -1.67) + '%)'
+            'Net Cloud Invoice (simulator)',
+            money(br.total_net_invoice_usd),
+            'Credits: ' + money(br.total_credits_usd)
           )
         );
+      }
+      const brBadge = document.getElementById('billingReconDeltaBadge');
+      if (brBadge) {
+        if (!liveBilling) {
+          brBadge.textContent = 'Simulator data';
+          brBadge.className = 'badge badge-blue';
+        } else if (br.status === 'LIVE') {
+          brBadge.textContent = 'Billing export: live · ' + (br.window_days || 30) + 'd';
+          brBadge.className = 'badge badge-green';
+        } else {
+          brBadge.textContent = 'Billing export: ' + String(br.status).toLowerCase().replace('_', ' ');
+          brBadge.className = 'badge badge-yellow';
+        }
       }
 
       // 2. NL2SQL Co-Pilot Initial Result
@@ -2785,7 +2821,22 @@ async def handle_agent_turn(message_envelope):
       // 5. Token Category Breakdown & Runaway Agent Alerts
       const uc = state.user_centric || {};
       const tcBody = document.getElementById('tokenCategoryBody');
-      if (tcBody && uc.token_category_breakdown) {
+      if (tcBody && uc.live) {
+        const tc = uc.token_category_breakdown || {};
+        setTableHead('tokenCategoryBody', ['Observed token type', 'Tokens', 'Share', 'Source', '']);
+        tcBody.replaceChildren();
+        const tin = tc.observed_gcp_prompt_tokens;
+        [['Prompt (input)', tin], ['Cached input', tc.observed_gcp_cached_tokens], ['Output', tc.observed_gcp_output_tokens]]
+          .forEach(function(r) {
+            tcBody.appendChild(el('tr', null, [
+              el('td', null, [el('strong', null, [r[0]])]),
+              el('td', 'mono', [fmtTokens(r[1])]),
+              el('td', 'mono', [r[0] === 'Cached input' ? orDash(tc.observed_gcp_cache_hit_pct, '% of input') : '']),
+              el('td', 'kpi-sub', ['OTel GenAI spans / fleet totals']),
+              el('td', null, ['']),
+            ]));
+          });
+      } else if (tcBody && uc.token_category_breakdown) {
         tcBody.replaceChildren();
         const rawTc = uc.token_category_breakdown;
         const tcRows = Array.isArray(rawTc)
@@ -2819,6 +2870,10 @@ async def handle_agent_turn(message_envelope):
       const raBody = document.getElementById('runawayAlertsBody');
       if (raBody && Array.isArray(uc.runaway_agent_alerts)) {
         raBody.replaceChildren();
+        if (uc.live) {
+          setTableHead('runawayAlertsBody', ['Alert', 'Agent / model & issue', 'Observed', 'Suggested fix', 'Status']);
+          if (!uc.runaway_agent_alerts.length) emptyRow(raBody, 5, 'No alerts: no agent or model crossed an alert rule in this window.');
+        }
         uc.runaway_agent_alerts.forEach(function(al, idx) {
           raBody.appendChild(el('tr', null, [
             el('td', 'mono', [
@@ -2830,12 +2885,13 @@ async def handle_agent_turn(message_envelope):
               el('div', null, [al.issue_type || al.runaway_pattern || '']),
             ]),
             el('td', 'mono', [
-              al.wasted_tokens !== undefined
+              al.observed ? al.observed
+              : al.wasted_tokens !== undefined
                 ? (fmtInt(al.wasted_tokens) + ' tok ($' + Number(al.cost_impact_usd || 0).toFixed(2) + ')')
-                : ('$' + Number(al.baseline_burn_per_1k_turns || 0).toFixed(2) + ' → $' + Number(al.optimized_burn_per_1k_turns || 0).toFixed(2) + '/1k')
+                : String(al.baseline_burn_per_1k_turns || '') + ' → ' + String(al.optimized_burn_per_1k_turns || '')
             ]),
             el('td', null, [al.remediation_applied || al.mitigation_applied || '']),
-            el('td', null, [badge(al.status || 'MITIGATED', 'badge-green')]),
+            el('td', null, [badge(al.status || '—', al.status === 'OPEN' ? 'badge-yellow' : 'badge-blue')]),
           ]));
         });
       }
@@ -2844,23 +2900,31 @@ async def handle_agent_turn(message_envelope):
       const skuBody = document.getElementById('billingSkuBody');
       if (skuBody && Array.isArray(br.sku_ledger)) {
         skuBody.replaceChildren();
+        if (liveBilling && !br.sku_ledger.length) {
+          emptyRow(skuBody, 9, (br.status === 'LIVE' ? '' : 'Not connected. ') + String(br.message || ''));
+        }
         br.sku_ledger.forEach(function(row) {
           skuBody.appendChild(el('tr', null, [
             el('td', 'mono', [row.sku_id || '']),
             el('td', null, [badge(row.service || '', 'badge-blue')]),
             el('td', null, [el('strong', null, [row.sku_description || ''])]),
-            el('td', 'mono', [row.usage_volume || '']),
-            el('td', 'mono', ['$' + fmtInt(row.telemetry_estimated_usd)]),
-            el('td', 'mono', ['$' + fmtInt(row.billing_export_gross_usd)]),
-            el('td', 'mono', ['-$' + fmtInt(Math.abs(Number(row.cud_and_cache_credits_usd || 0)))]),
-            el('td', 'mono', [el('strong', null, ['$' + fmtInt(row.net_invoice_usd)])]),
-            el('td', 'mono', [badge(row.variance_pct + '%', 'badge-green')]),
+            el('td', 'mono', [row.usage_volume || '—']),
+            el('td', 'mono', [money(row.telemetry_estimated_usd)]),
+            el('td', 'mono', [money(row.billing_export_gross_usd)]),
+            el('td', 'mono', [money(row.cud_and_cache_credits_usd)]),
+            el('td', 'mono', [el('strong', null, [money(row.net_invoice_usd)])]),
+            el('td', 'mono', [row.variance_pct == null ? '—' : badge(row.variance_pct + '%', 'badge-blue')]),
           ]));
         });
       }
 
       const gsuBox = document.getElementById('gsuAdvisorBox');
-      if (gsuBox && br.gsu_advisor) {
+      if (gsuBox && liveBilling) {
+        gsuBox.replaceChildren(
+          el('div', 'action-box-title', ['Provisioned Throughput (GSU) advisor']),
+          el('div', 'kpi-sub', ['Not shown: a GSU recommendation needs sustained tokens-per-second history, which is not collected yet.'])
+        );
+      } else if (gsuBox && br.gsu_advisor) {
         const ga = br.gsu_advisor;
         gsuBox.replaceChildren(
           el('div', 'action-box-title', ['Provisioned Throughput (GSU) & 1-Year CUD Capacity Advisor']),
@@ -2877,8 +2941,8 @@ async def handle_agent_turn(message_envelope):
         const totalHosting = tco.estimated_monthly_total_usd ?? tco.total_monthly_platform_tco_usd ?? 39.0;
         const comps = tco.components || tco.line_items || [];
         tcoBox.replaceChildren(
-          el('div', 'action-box-title', ['VibeLift Observability Platform Own 30-Day GCP Infrastructure TCO']),
-          el('div', null, ['Total Platform Hosting Cost: $' + Number(totalHosting).toFixed(2) + '/mo (' + (tco.target_scale || tco.scale_profile || '4,000 - 10,000 DAU') + ')']),
+          el('div', 'action-box-title', ['VibeLift hosting cost (estimate from list prices, not billed)']),
+          el('div', null, ['Estimated: $' + Number(totalHosting).toFixed(2) + '/mo' + (tco.target_scale || tco.scale_profile ? ' (' + (tco.target_scale || tco.scale_profile) + ')' : '')]),
           el('div', 'kpi-sub', [
             comps.map(function(c) {
               return (c.service || c.component) + ': $' + Number(c.monthly_cost_usd || 0).toFixed(2) + '/mo';
@@ -3104,7 +3168,7 @@ async def handle_agent_turn(message_envelope):
             el('td', 'mono', [r.join_keys || '']),
             el('td', 'mono', ['labels.agent_id + trace_id']),
             el('td', 'mono', [r.extracted_fields || '']),
-            el('td', 'mono', ['Reconciled (<1.7% var)']),
+            el('td', 'mono', [r.variance || '—']),
             el('td', null, [badge('JOIN ACTIVE', 'badge-green')]),
           ]));
         });
@@ -3333,7 +3397,7 @@ async def handle_agent_turn(message_envelope):
           matBody.appendChild(el('tr', null, [
             el('td', null, [badge(m.stage || '', isCur ? 'badge-green' : 'badge-blue')]),
             el('td', null, [m.focus || '']),
-            el('td', 'mono', ['CpO + Drift < 1.7%']),
+            el('td', 'mono', [m.target || '—']),
             el('td', 'mono', ['Canary + Apigee Enforced']),
             el('td', null, [badge(m.status || '', isCur ? 'badge-green' : 'badge-blue')]),
           ]));
@@ -3374,33 +3438,43 @@ async def handle_agent_turn(message_envelope):
     function renderUserCentricAndDecorator(uc, decoratorEvents) {
       if (uc && typeof uc === 'object') {
         const kpiBox = document.getElementById('userCentricKpis');
-        if (kpiBox) {
+        if (kpiBox && uc.live) {
           kpiBox.replaceChildren(
-            kpiCard(
-              'Active Enterprise Users (DAU)',
-              (uc.total_active_dau != null ? fmtInt(uc.total_active_dau) : '\u2014'),
-              'Supported Scale: ' + (uc.supported_dau_capacity || 'n/a')
-            ),
-            kpiCard(
-              'Cost per 1k Turns (Baseline → Now)',
-              '$' + Number(uc.baseline_cost_per_1k_turns_usd || 29.40).toFixed(2) + ' → $' + Number(uc.optimized_cost_per_1k_turns_usd || 3.45).toFixed(2),
-              '-' + (uc.avg_cost_reduction_pct || 88.3) + '% via Prefix Cache & Pruning'
-            ),
-            kpiCard(
-              'Monthly Token Spend per User',
-              '$' + Number(uc.per_user_monthly_baseline_usd || 7.85).toFixed(2) + ' → $' + Number(uc.per_user_monthly_optimized_usd || 0.98).toFixed(2),
-              'User-centric token spend savings'
-            ),
-            kpiCard(
-              'Total Fleet Savings (Monthly / Annual)',
-              '$' + fmtInt(uc.total_monthly_savings_usd || 46870) + '/mo',
-              '$' + fmtInt(uc.annualized_savings_usd || 562440) + '/yr annualized net savings'
-            )
+            kpiCard('Active people (7d)', fmtInt(uc.active_people_7d), 'Human principals in audit logs'),
+            kpiCard('Service accounts (7d)', fmtInt(uc.active_service_accounts_7d), 'Automated callers'),
+            kpiCard('Sessions / calls (7d)', fmtInt(uc.sessions_7d), 'ds_ge_audit_raw + agent telemetry'),
+            kpiCard('Savings', 'Not measured', uc.savings_note || '')
+          );
+        } else if (kpiBox) {
+          kpiBox.replaceChildren(
+            kpiCard('Active Enterprise Users (simulator)', fmtInt(uc.total_active_dau), 'Supported Scale: ' + (uc.supported_dau_capacity || 'n/a')),
+            kpiCard('Cost per 1k Turns (simulator)', money(uc.baseline_cost_per_1k_turns_usd) + ' → ' + money(uc.optimized_cost_per_1k_turns_usd), orDash(uc.avg_cost_reduction_pct, '% simulated reduction')),
+            kpiCard('Monthly Token Spend per User (simulator)', money(uc.per_user_monthly_baseline_usd) + ' → ' + money(uc.per_user_monthly_optimized_usd), 'Simulated'),
+            kpiCard('Fleet Savings (simulator)', money(uc.total_monthly_savings_usd) + '/mo', money(uc.annualized_savings_usd) + '/yr simulated')
           );
         }
 
         const cohortBody = document.getElementById('userCohortsTableBody');
-        if (cohortBody) {
+        if (cohortBody && uc.cohorts_live) {
+          const t = document.getElementById('userCohortsTitle');
+          if (t) t.textContent = 'Users by Gemini Enterprise app (last 7 days)';
+          const st = document.getElementById('userCohortsSubtitle');
+          if (st) st.textContent = 'People and service accounts seen in audit logs per app. Source: ds_ge_audit_raw.';
+          const gb = document.getElementById('oauthGovernanceBadge');
+          if (gb) { gb.textContent = 'Live'; gb.className = 'badge badge-green'; }
+          setTableHead('userCohortsTableBody', ['App', 'Region', 'People', 'Service accounts', 'Sessions / calls (7d)']);
+          cohortBody.replaceChildren();
+          if (!(uc.cohorts || []).length) emptyRow(cohortBody, 5, 'No per-app activity in audit logs for the last 7 days.');
+          (uc.cohorts || []).forEach(function(c) {
+            cohortBody.appendChild(el('tr', null, [
+              el('td', null, [el('strong', null, [c.cohort]), el('div', 'kpi-sub mono', [c.engine_key || ''])]),
+              el('td', null, [badge(c.primary_agent, 'badge-blue')]),
+              el('td', 'mono', [fmtInt(c.people)]),
+              el('td', 'mono', [fmtInt(c.service_accounts)]),
+              el('td', 'mono', [fmtInt(c.sessions_7d)]),
+            ]));
+          });
+        } else if (cohortBody) {
           cohortBody.replaceChildren();
           (uc.cohorts || []).forEach(function(c) {
             cohortBody.appendChild(el('tr', null, [
@@ -3411,8 +3485,8 @@ async def handle_agent_turn(message_envelope):
               el('td', 'mono', [c.tokens_per_user_k + 'k tok']),
               el('td', 'mono', [c.context_bloat_before_pct + '% → ' + c.context_bloat_after_pct + '%']),
               el('td', 'mono', [c.idle_ratio_pct + '%']),
-              el('td', 'mono', ['$' + Number(c.baseline_cost_per_1k_usd).toFixed(2) + ' → $' + Number(c.optimized_cost_per_1k_usd).toFixed(2)]),
-              el('td', 'mono', [badge('$' + fmtInt(c.monthly_savings_usd) + '/mo saved', 'badge-green')]),
+              el('td', 'mono', [money(c.baseline_cost_per_1k_usd) + ' → ' + money(c.optimized_cost_per_1k_usd)]),
+              el('td', 'mono', [badge(money(c.monthly_savings_usd) + '/mo simulated', 'badge-blue')]),
             ]));
           });
         }
@@ -3426,11 +3500,11 @@ async def handle_agent_turn(message_envelope):
               el('td', null, [badge(s.kind, 'badge-blue')]),
               el('td', null, [s.attached_agent]),
               el('td', 'mono', [fmtInt(s.calls_24h)]),
-              el('td', 'mono', [s.prompt_tokens_m + 'M']),
-              el('td', 'mono', [s.cache_hit_pct == null ? '—' : s.cache_hit_pct + '%']),
-              el('td', 'mono', [s.context_bloat_pct + '%']),
+              el('td', 'mono', [orDash(s.prompt_tokens_m, 'M')]),
+              el('td', 'mono', [orDash(s.cache_hit_pct, '%')]),
+              el('td', 'mono', [orDash(s.context_bloat_pct, '%')]),
               el('td', null, [s.optimization_applied]),
-              el('td', 'mono', [badge('$' + fmtInt(s.monthly_saved_usd) + '/mo', 'badge-green')]),
+              el('td', 'mono', [s.monthly_saved_usd == null ? '—' : badge('$' + fmtInt(s.monthly_saved_usd) + '/mo', 'badge-green')]),
             ]));
           });
         }
@@ -3447,11 +3521,11 @@ async def handle_agent_turn(message_envelope):
             el('td', null, [ev.protocol]),
             el('td', 'mono', [ev.skill_or_mcp]),
             el('td', null, [ev.user_cohort]),
-            el('td', 'mono', [ev.latency_ms + ' ms']),
-            el('td', 'mono', [ev.cache_hit_pct == null ? '—' : ev.cache_hit_pct + '%']),
-            el('td', 'mono', [ev.context_bloat_pct + '%']),
-            el('td', 'mono', [ev.idle_ratio_pct + '%']),
-            el('td', null, [badge(ev.status, 'badge-green')]),
+            el('td', 'mono', [orDash(ev.latency_ms, ' ms')]),
+            el('td', 'mono', [orDash(ev.cache_hit_pct, '%')]),
+            el('td', 'mono', [orDash(ev.context_bloat_pct, '%')]),
+            el('td', 'mono', [orDash(ev.idle_ratio_pct, '%')]),
+            el('td', null, [badge(ev.status || '—', 'badge-blue')]),
           ]));
         });
       }
@@ -3491,6 +3565,21 @@ async def handle_agent_turn(message_envelope):
     }
 
     function badge(text, cls) { return el('span', 'badge ' + cls, [text]); }
+    function orDash(v, suffix) { return v == null ? '—' : String(v) + (suffix || ''); }
+    function money(v) {
+      return v == null ? '—' : '$' + Number(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    }
+    function setTableHead(tbodyId, headers) {
+      const tb = document.getElementById(tbodyId);
+      const tr = tb && tb.parentElement ? tb.parentElement.querySelector('thead tr') : null;
+      if (!tr) return;
+      tr.replaceChildren.apply(tr, headers.map(function(h) { return el('th', null, [h]); }));
+    }
+    function emptyRow(tbody, cols, text) {
+      const td = el('td', 'kpi-sub', [text]);
+      td.colSpan = cols;
+      tbody.appendChild(el('tr', null, [td]));
+    }
     function fmtInt(v) { return v == null ? '—' : Number(v).toLocaleString(); }
     function fmtTokens(v) {
       if (v == null) return '—';
@@ -3688,6 +3777,70 @@ async def handle_agent_turn(message_envelope):
       return wrap;
     }
 
+    function trendChart(trend, runtimeKeys) {
+      if (!trend || !Array.isArray(trend.bucket_ends) || !trend.bucket_ends.length) {
+        return el('div', 'chart-empty', ['No request history available.']);
+      }
+      const n = trend.bucket_ends.length;
+      const ok = new Array(n).fill(0), r4 = new Array(n).fill(0), r5 = new Array(n).fill(0);
+      runtimeKeys.forEach(function(k) {
+        const row = (trend.by_runtime || {})[k];
+        if (!row) return;
+        for (let i = 0; i < n; i++) {
+          const t = Number((row.requests || [])[i] || 0), a = Number((row.errors_4xx || [])[i] || 0), b = Number((row.errors_5xx || [])[i] || 0);
+          ok[i] += Math.max(0, t - a - b); r4[i] += a; r5[i] += b;
+        }
+      });
+      const tot = ok.map(function(v, i) { return v + r4[i] + r5[i]; });
+      const max = Math.max.apply(null, tot);
+      if (!max) return el('div', 'chart-empty', ['No requests in this window.']);
+      const NS = 'http://www.w3.org/2000/svg';
+      const W = 1000, H = 170, L = 38, B = 20, T = 8;
+      const svg = document.createElementNS(NS, 'svg');
+      svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+      svg.setAttribute('preserveAspectRatio', 'none');
+      svg.setAttribute('class', 'trend-svg');
+      const mk = function(tag, attrs, text) {
+        const e = document.createElementNS(NS, tag);
+        Object.keys(attrs).forEach(function(k) { e.setAttribute(k, attrs[k]); });
+        if (text != null) e.textContent = text;
+        svg.appendChild(e);
+        return e;
+      };
+      const plotH = H - B - T, bw = (W - L) / n;
+      [0, 0.5, 1].forEach(function(f) {
+        const y = T + plotH * (1 - f);
+        mk('line', {x1: L, x2: W, y1: y, y2: y, stroke: '#e2e8f0', 'stroke-width': 1});
+        mk('text', {x: L - 4, y: y + 3, 'text-anchor': 'end'}, String(Math.round(max * f)));
+      });
+      const bucketS = Number(trend.bucket_seconds || 3600);
+      for (let i = 0; i < n; i++) {
+        let y = T + plotH;
+        const x = L + i * bw + bw * 0.12, w = bw * 0.76;
+        [[ok[i], '#2563eb'], [r4[i], '#f59e0b'], [r5[i], '#ef4444']].forEach(function(seg) {
+          if (!seg[0]) return;
+          const h = plotH * seg[0] / max;
+          y -= h;
+          mk('rect', {x: x, y: y, width: w, height: h, fill: seg[1]});
+        });
+        const end = new Date(trend.bucket_ends[i]);
+        const start = new Date(end.getTime() - bucketS * 1000);
+        const hit = mk('rect', {x: L + i * bw, y: T, width: bw, height: plotH, fill: 'transparent'});
+        const tip = document.createElementNS(NS, 'title');
+        tip.textContent = start.toLocaleString() + ' – ' + end.toLocaleTimeString() + ': ' + tot[i] +
+          ' requests (' + r4[i] + ' 4xx, ' + r5[i] + ' 5xx)';
+        hit.appendChild(tip);
+        const every = Math.max(1, Math.ceil(n / 8));
+        if (i % every === 0) {
+          const lbl = bucketS >= 86400 || n * bucketS > 2 * 86400
+            ? start.toLocaleDateString(undefined, {month: 'short', day: 'numeric'}) + ' ' + start.getHours() + 'h'
+            : start.toLocaleTimeString(undefined, {hour: 'numeric', minute: bucketS < 3600 ? '2-digit' : undefined});
+          mk('text', {x: L + i * bw + bw / 2, y: H - 5, 'text-anchor': 'middle'}, lbl);
+        }
+      }
+      return svg;
+    }
+
     function donutChart(slices, centerTop, centerBottom, fmt) {
       const total = slices.reduce(function(a, x) { return a + x.value; }, 0);
       if (!total) return el('div', 'chart-empty', ['No data in this window.']);
@@ -3813,6 +3966,17 @@ async def handle_agent_turn(message_envelope):
           {name: 'Server error (5xx)', value: x5, color: '#ef4444'},
         ]};
       }).filter(function(r) { return r.total > 0; }).sort(function(a, b) { return b.total - a.total; }).slice(0, 8);
+      const trendBox = document.getElementById('execChartTrend');
+      if (trendBox) {
+        const keys = runtimes.map(function(rt) { return runtimeKey(rt.agent); });
+        trendBox.replaceChildren(trendChart(fleet.trend, keys));
+        const srcT = document.getElementById('execSrcTrend');
+        const tr = fleet.trend || {};
+        const bh = Number(tr.bucket_seconds || 0) / 3600;
+        if (srcT) srcT.textContent = 'Source: ' + (tr.source || 'Cloud Monitoring') + ' · ' + win +
+          (bh ? ' · ' + (bh >= 1 ? bh + 'h' : Math.round(bh * 60) + 'min') + ' buckets' : '') +
+          (tr.status && tr.status !== 'ok' ? ' · status: ' + tr.status : '');
+      }
       const reqBox = document.getElementById('execChartRequests');
       if (reqBox) reqBox.replaceChildren(hbarChart(reqRows));
       const srcReq = document.getElementById('execSrcRequests');
@@ -4592,7 +4756,11 @@ async def handle_agent_turn(message_envelope):
         const structured = data.params.structuredContent || data.params;
         if (structured && structured.state) {
           renderState(structured.state);
-          if (structured.focus_tab != null) switchTab(structured.focus_tab);
+          if (structured.focus_tab != null) {
+            // An explicit request for an Advanced tab turns Advanced mode on instead of being ignored.
+            if (ADVANCED_ONLY_TABS.indexOf(Number(structured.focus_tab)) >= 0 && !isAdvancedMode()) applyAdvancedMode(true);
+            switchTab(structured.focus_tab);
+          }
         } else if (structured && structured.active_agent) {
           renderState(structured);
         } else if (structured && structured.source === 'gemini_enterprise') {

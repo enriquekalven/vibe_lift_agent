@@ -112,6 +112,12 @@ done
 # Deploy container directly from source to Cloud Run. Sizing matches the verified production service.
 # "auto" discovers every Gemini Enterprise app in global/us/eu; set an explicit list to pin apps.
 GE_ENGINES="${VIBELIFT_GE_ENGINES:-auto}"
+# Optional: Cloud Billing BigQuery export (project.dataset.table) for real invoice figures.
+# The runtime service account needs roles/bigquery.dataViewer on that dataset.
+EXTRA_ENV=""
+if [[ -n "${VIBELIFT_BILLING_EXPORT_TABLE:-}" ]]; then
+  EXTRA_ENV=";VIBELIFT_BILLING_EXPORT_TABLE=${VIBELIFT_BILLING_EXPORT_TABLE}"
+fi
 echo "Building and deploying container to Cloud Run..."
 gcloud run deploy "${SERVICE_NAME}" \
     --source . \
@@ -128,7 +134,7 @@ gcloud run deploy "${SERVICE_NAME}" \
     --cpu-boost \
     --min-instances=1 \
     --max-instances=10 \
-    --update-env-vars="^;^GOOGLE_CLOUD_PROJECT=${PROJECT_ID};GOOGLE_CLOUD_REGION=${REGION};GOOGLE_CLOUD_LOCATION=${REGION};GOOGLE_GENAI_USE_VERTEXAI=TRUE;USE_UVICORN=1;ENABLE_MCP_APP=1;MCP_PROTOCOL_VERSION=2025-06-18;VIBELIFT_PUBLIC_URL=${PUBLIC_URL};VIBELIFT_GE_ENGINES=${GE_ENGINES}"
+    --update-env-vars="^;^GOOGLE_CLOUD_PROJECT=${PROJECT_ID};GOOGLE_CLOUD_REGION=${REGION};GOOGLE_CLOUD_LOCATION=${REGION};GOOGLE_GENAI_USE_VERTEXAI=TRUE;USE_UVICORN=1;ENABLE_MCP_APP=1;MCP_PROTOCOL_VERSION=2025-06-18;VIBELIFT_PUBLIC_URL=${PUBLIC_URL};VIBELIFT_GE_ENGINES=${GE_ENGINES}${EXTRA_ENV}"
 
 # The service is private, so Gemini Enterprise needs permission to call /mcp. The Discovery Engine
 # service agent is the identity granted roles/run.invoker on the verified deployment.

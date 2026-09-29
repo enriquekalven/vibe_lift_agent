@@ -16,7 +16,7 @@
           },
           "focus_tab": {
             "type": "integer",
-            "description": "Tab to open: 0 = live Gemini Enterprise agent fleet (default), 1 = agent optimization parameters, 2 = AlphaEvolve performance and actions, 3 = User-Centric FinOps, Skill/MCP token consumption & @vibelift_telemetry decorator stream. Omit to open the live fleet."
+            "description": "Tab to open: 6 = Overview (default), 0 = Agents, 3 = Cost, 4 = Users. Advanced tabs: 1 = Goals & Metrics, 2 = Optimizer & Testing, 5 = Tools & SDK."
           },
           "window_hours": {
             "type": "integer",

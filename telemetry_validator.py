@@ -23,13 +23,8 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# Known fictional/demo personas and fake URIs that must NEVER appear in Live GCP mode
-BANNED_MOCK_LDAPS_IN_LIVE_MODE = frozenset({
-    'sbahirat',
-    'russellmyers',
-    'rseshadri',
-    'sloona',
-})
+# Fake GCS URIs from the old demo seed data that must never appear in Live GCP mode.
+# (User rows are validated by BigQuery provenance, not by a name blocklist.)
 BANNED_MOCK_GCS_PREFIX_IN_LIVE_MODE = 'gs://project-maui-aive-assets/'
 
 
@@ -342,14 +337,19 @@ def validate_dashboard_state(
         bq_insights=bq_insights,
     )
   else:
-    exec_finding = (
-        f'All {passed_count}/{total_checks} deterministic telemetry grounding & math checks passed '
-        f'({"Live GCP project-maui BigQuery + Cloud Monitoring" if live_mode else "Standard Test/Simulator Mode"}).'
-    )
+    source_label = 'live GCP telemetry' if live_mode else 'simulator/test mode'
+    if flagged_unverified_fields:
+      exec_finding = (
+          f'{passed_count}/{total_checks} rule-based checks passed ({source_label}). Failing: '
+          + ', '.join(f['check_id'] for f in flagged_unverified_fields)
+          + '.'
+      )
+    else:
+      exec_finding = f'All {total_checks} rule-based checks passed ({source_label}).'
     llm_judge_report = {
         'executed': False,
         'judge_model': 'gemini-2.5-flash (Vertex AI Grounding Judge)',
-        'judge_model_used': 'deterministic-fast-gate (click "Run Live LLM-as-a-Judge Audit" for live Vertex AI model review)',
+        'judge_model_used': 'rule-based checks only (run the LLM judge for a model review)',
         'grounding_score_100': deterministic_score,
         'verdict': overall_verdict,
         'executive_finding': exec_finding,
@@ -398,8 +398,7 @@ def run_llm_as_judge_audit(
     deterministic_checks: list[dict[str, object]],
     bq_insights: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
-  """Calls Vertex AI (`gemini-2.5-flash`) as an independent LLM-as-a-Judge auditor."""
-  import subprocess
+  """Calls Vertex AI Gemini as an independent LLM-as-a-Judge auditor, with a rule-based fallback."""
 
   project_id = str(state.get('gcp_project') or os.environ.get('GOOGLE_CLOUD_PROJECT') or 'project-maui')
   fleet = state.get('ge_fleet') if isinstance(state.get('ge_fleet'), Mapping) else {}
@@ -440,107 +439,170 @@ def run_llm_as_judge_audit(
       '1. Every user row carries BigQuery provenance (status LIVE_HUMAN_PRINCIPAL/SERVICE_ACCOUNT_TELEMETRY '
       'and a source table); per-user metrics that are not measured must be null, not invented constants.\n'
       '2. Fleet totals, BigQuery audit principals, and OTel GenAI token spans are grounded in real telemetry.\n'
-      '3. What-If simulators and rate-card projections are clearly distinguished from observed telemetry.\n\n'
+      '3. What-If simulators and rate-card projections are clearly distinguished from observed telemetry.\n'
+      '4. If any deterministic check has status FAIL, the verdict must be FLAGGED_ISSUES.\n'
+      'Base the score only on the digest; do not assume data that is not shown.\n\n'
       'Respond ONLY with a valid JSON object matching this exact schema:\n'
-      '{"grounding_score_100": 98, "verdict": "VERIFIED_GROUNDED", '
+      '{"grounding_score_100": <0-100>, "verdict": "VERIFIED_GROUNDED" | "FLAGGED_ISSUES", '
       '"executive_finding": "2-sentence rigorous audit conclusion citing specific observed numbers."}\n\n'
       'Telemetry Digest:\n'
       + json.dumps(audit_digest, default=str)
   )
 
-  # 1. Try Vertex AI Gemini 2.5 Flash via REST API using ADC or gcloud CLI token
-  if project_id not in ('test-project', 'UNCONFIGURED-PROJECT'):
-    token = None
-    if google is not None and GoogleAuthRequest is not None:
-      try:
-        creds, _ = google.auth.default(scopes=['https://www.googleapis.com/auth/cloud-platform'])
-        if not creds.valid:
-          creds.refresh(GoogleAuthRequest())
-        token = getattr(creds, 'token', None)
-      except Exception:
-        token = None
-    if not token:
-      try:
-        res = subprocess.run(
-            ['gcloud', 'auth', 'print-access-token'],
-            capture_output=True,
-            text=True,
-            timeout=3.0,
-            check=False,
-        )
-        if res.returncode == 0 and res.stdout.strip():
-          token = res.stdout.strip()
-      except Exception:
-        token = None
-    if token:
-      try:
-        url = (
-            f'https://us-central1-aiplatform.googleapis.com/v1/projects/{project_id}'
-            '/locations/us-central1/publishers/google/models/gemini-2.5-flash:generateContent'
-        )
-        req_body = {
-            'contents': [{'role': 'user', 'parts': [{'text': prompt}]}],
-            'generationConfig': {
-                'temperature': 0.0,
-                'maxOutputTokens': 1024,
-                'responseMimeType': 'application/json',
-                'thinkingConfig': {'thinkingBudget': 0},
-            },
-        }
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(req_body).encode('utf-8'),
-            headers={
-                'Authorization': f'Bearer {token}',
-                'Content-Type': 'application/json',
-                'x-goog-user-project': project_id,
-            },
-            method='POST',
-        )
-        with urllib.request.urlopen(req, timeout=8.0) as resp:
-          resp_data = json.loads(resp.read().decode('utf-8'))
-        candidates = resp_data.get('candidates') or []
-        if candidates:
-          parts = ((candidates[0].get('content') or {}).get('parts')) or []
-          if parts and parts[0].get('text'):
-            parsed = json.loads(str(parts[0]['text']).strip())
-            exec_f = str(parsed.get('executive_finding') or '')
-            verdict_str = str(parsed.get('verdict') or 'VERIFIED_GROUNDED')
-            if verdict_str == 'PASS_GROUNDED':
-              verdict_str = 'VERIFIED_GROUNDED'
-            return {
-                'executed': True,
-                'judge_model': 'vertex_ai/gemini-2.5-flash',
-                'judge_model_used': 'vertex_ai/gemini-2.5-flash (Live GCP)',
-                'grounding_score_100': int(parsed.get('grounding_score_100') or 99),
-                'verdict': verdict_str,
-                'executive_finding': exec_f,
-                'executive_summary': exec_f,
-                'tab_findings': [
-                    f"{c['tab']}: {c['status']} ({c['check_id']})"
-                    for c in deterministic_checks[:6]
-                ],
-            }
-      except Exception as exc:
-        logger.debug('Vertex AI LLM-as-a-Judge live call fell back to deterministic judge: %s', exc)
+  failed_checks = [c for c in deterministic_checks if c.get('status') != 'PASS']
+  judge_error = None
 
-  passed_count = sum(1 for c in deterministic_checks if c.get('status') == 'PASS')
+  # 1. Vertex AI Gemini via REST, authenticated with ADC (Cloud Run service account) or the gcloud CLI.
+  if project_id not in ('test-project', 'UNCONFIGURED-PROJECT'):
+    token, judge_error = _get_access_token()
+    if token:
+      parsed, judge_error = _call_vertex_judge(project_id, token, prompt)
+      if parsed is not None:
+        exec_f = str(parsed.get('executive_finding') or '').strip()
+        verdict_str = str(parsed.get('verdict') or '').strip().upper()
+        if verdict_str == 'PASS_GROUNDED':
+          verdict_str = 'VERIFIED_GROUNDED'
+        score = parsed.get('grounding_score_100')
+        # The LLM can only lower confidence: a failed deterministic check is never overridden.
+        if failed_checks and verdict_str == 'VERIFIED_GROUNDED':
+          verdict_str = 'FLAGGED_ISSUES'
+        return {
+            'executed': True,
+            'judge_model': f'vertex_ai/{JUDGE_MODEL}',
+            'judge_model_used': f'vertex_ai/{JUDGE_MODEL} (Live GCP)',
+            'grounding_score_100': int(score) if isinstance(score, (int, float)) else None,
+            'verdict': verdict_str or 'UNKNOWN',
+            'executive_finding': exec_f,
+            'executive_summary': exec_f,
+            'judge_error': None,
+            'tab_findings': [
+                f"{c['tab']}: {c['status']} ({c['check_id']})"
+                for c in deterministic_checks[:6]
+            ],
+        }
+    logger.warning('LLM-as-a-Judge unavailable, using rule-based result: %s', judge_error)
+
+  passed_count = len(deterministic_checks) - len(failed_checks)
   total_count = max(1, len(deterministic_checks))
   score = int(round((passed_count / total_count) * 100.0))
-  exec_f = (
-      f'Audited {total_count} cross-tab telemetry invariants ({passed_count}/{total_count} PASS). '
-      f'All observed principals, BigQuery OTel spans, and Cloud Monitoring fleet counters are grounded.'
-  )
+  if failed_checks:
+    exec_f = (
+        f'{passed_count}/{total_count} rule-based checks passed. Failing: '
+        + ', '.join(str(c.get('check_id')) for c in failed_checks)
+        + '.'
+    )
+  else:
+    exec_f = f'All {total_count} rule-based checks passed. No LLM review was performed.'
   return {
       'executed': True,
       'judge_model': 'deterministic-rule-auditor-v1',
       'judge_model_used': 'deterministic-rule-auditor-v1 (Vertex AI fallback)',
       'grounding_score_100': score,
-      'verdict': 'VERIFIED_GROUNDED' if score >= 95 else 'NEEDS_REMEDIATION',
+      'verdict': 'VERIFIED_GROUNDED' if not failed_checks else 'FLAGGED_ISSUES',
       'executive_finding': exec_f,
       'executive_summary': exec_f,
+      'judge_error': judge_error,
       'tab_findings': [
           f"{c['tab']}: {c['status']} ({c['check_id']})"
           for c in deterministic_checks[:6]
       ],
   }
+
+
+JUDGE_MODEL = os.environ.get('VIBELIFT_JUDGE_MODEL', 'gemini-2.5-flash')
+JUDGE_LOCATION = os.environ.get('VIBELIFT_JUDGE_LOCATION', 'us-central1')
+JUDGE_TIMEOUT_S = float(os.environ.get('VIBELIFT_JUDGE_TIMEOUT_S', '25'))
+
+
+def _get_access_token() -> tuple[str | None, str | None]:
+  """Returns (token, error). Prefers ADC (the Cloud Run service account); falls back to the gcloud CLI."""
+  import subprocess
+
+  errors = []
+  if google is not None and GoogleAuthRequest is not None:
+    try:
+      creds, _ = google.auth.default(scopes=['https://www.googleapis.com/auth/cloud-platform'])
+      if not creds.valid:
+        creds.refresh(GoogleAuthRequest())
+      token = getattr(creds, 'token', None)
+      if token:
+        return token, None
+      errors.append('ADC returned no token')
+    except Exception as exc:  # pylint: disable=broad-except
+      errors.append(f'ADC: {type(exc).__name__}: {exc}'[:200])
+  else:
+    errors.append('google-auth not installed')
+  try:
+    res = subprocess.run(
+        ['gcloud', 'auth', 'print-access-token'], capture_output=True, text=True, timeout=5.0, check=False
+    )
+    if res.returncode == 0 and res.stdout.strip():
+      return res.stdout.strip(), None
+    errors.append(f'gcloud exit {res.returncode}')
+  except Exception as exc:  # pylint: disable=broad-except
+    errors.append(f'gcloud: {type(exc).__name__}')
+  return None, '; '.join(errors)
+
+
+def _call_vertex_judge(project_id: str, token: str, prompt: str) -> tuple[dict | None, str | None]:
+  """Calls Vertex AI generateContent. Returns (parsed_json, error). Retries once on 429/5xx/timeouts."""
+  import time
+
+  url = (
+      f'https://{JUDGE_LOCATION}-aiplatform.googleapis.com/v1/projects/{project_id}'
+      f'/locations/{JUDGE_LOCATION}/publishers/google/models/{JUDGE_MODEL}:generateContent'
+  )
+  body = json.dumps({
+      'contents': [{'role': 'user', 'parts': [{'text': prompt}]}],
+      'generationConfig': {
+          'temperature': 0.0,
+          'maxOutputTokens': 2048,
+          'responseMimeType': 'application/json',
+          'thinkingConfig': {'thinkingBudget': 0},
+      },
+  }).encode('utf-8')
+  last_error = None
+  for attempt in range(2):
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={
+            'Authorization': f'Bearer {token}',
+            'Content-Type': 'application/json',
+            'x-goog-user-project': project_id,
+        },
+        method='POST',
+    )
+    try:
+      with urllib.request.urlopen(req, timeout=JUDGE_TIMEOUT_S) as resp:
+        resp_data = json.loads(resp.read().decode('utf-8'))
+    except urllib.error.HTTPError as exc:
+      detail = ''
+      try:
+        detail = json.loads(exc.read().decode('utf-8')).get('error', {}).get('status', '')
+      except Exception:  # pylint: disable=broad-except
+        pass
+      last_error = f'Vertex AI HTTP {exc.code} {detail}'.strip()
+      if exc.code in (429, 500, 502, 503, 504) and attempt == 0:
+        time.sleep(1.5)
+        continue
+      return None, last_error
+    except Exception as exc:  # pylint: disable=broad-except
+      last_error = f'Vertex AI {type(exc).__name__}: {exc}'[:200]
+      if attempt == 0:
+        continue
+      return None, last_error
+    candidates = resp_data.get('candidates') or []
+    parts = ((candidates[0].get('content') or {}).get('parts') or []) if candidates else []
+    text = str(parts[0].get('text') or '').strip() if parts else ''
+    if not text:
+      finish = candidates[0].get('finishReason') if candidates else 'NO_CANDIDATES'
+      return None, f'Vertex AI returned no text (finishReason={finish})'
+    try:
+      parsed = json.loads(text)
+    except json.JSONDecodeError:
+      return None, 'Vertex AI response was not valid JSON'
+    if not isinstance(parsed, dict):
+      return None, 'Vertex AI response was not a JSON object'
+    return parsed, None
+  return None, last_error

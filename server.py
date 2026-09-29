@@ -25,6 +25,7 @@ except ImportError:
   fastapi = None
 
 import alpha_evolve_optimizer
+import billing_export
 import logo_asset
 import long_running_agent
 import telemetry
@@ -56,6 +57,9 @@ class VibeLiftRuntimeController:
         model=self.optimizer.active_agent.model,
     )
     self.gcp_telemetry = gcp_telemetry.GoogleCloudTelemetryService()
+    self.billing_export = billing_export.BillingExportReader(
+        self.gcp_telemetry.project_id, self.gcp_telemetry._get_access_token  # pylint: disable=protected-access
+    )
     self.ge_fleet = fleet_service or ge_fleet.get_ge_fleet_service()
 
   def _is_live_gcp(self) -> bool:
@@ -177,6 +181,8 @@ class VibeLiftRuntimeController:
     )
     live_gcp = self._is_live_gcp()
     if live_gcp:
+      # Real invoice data comes only from a Cloud Billing export; otherwise the panel says it is not connected.
+      billing_reconciliation = self.billing_export.get(non_blocking=True)
       # Never show demo personas in live mode: if BigQuery principals have not
       # loaded yet, show an empty table with an explicit loading status.
       live_bq = self.optimizer._live_bq_insights

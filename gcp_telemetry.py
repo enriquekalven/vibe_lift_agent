@@ -773,6 +773,7 @@ class GoogleCloudTelemetryService:
             CAST(MAX(timestamp) AS STRING) AS last_seen
           FROM `{p}.ds_ge_audit_raw.cloudaudit_googleapis_com_data_access`
           WHERE protopayload_auditlog.authenticationInfo.principalEmail IS NOT NULL
+            AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
           GROUP BY 1, 2, 3
           ORDER BY call_count DESC
           LIMIT 500
@@ -1117,29 +1118,30 @@ class GoogleCloudTelemetryService:
           'resource_name': f'adk_tool://{tname}',
           'kind': 'ADK FunctionTool (OTel)',
           'attached_agent': 'IT Service Desk / SRE Triage (RE 27056782136311808)',
-          'calls_24h': total_sre_turns,
+          # Tool definitions are attached to every inference turn; per-tool call counts are not logged.
+          'calls_24h': None,
           'prompt_tokens_m': round(total_sre_in / 1_000_000.0, 4),
-          'cache_hit_pct': 0.0,
-          'context_bloat_pct': 11.2,
-          'optimization_applied': 'Registered in gen_ai_tool_definitions (sre_triage_agent_telemetry)',
-          'monthly_saved_usd': 0,
+          'cache_hit_pct': None,
+          'context_bloat_pct': None,
+          'optimization_applied': f'Declared on {total_sre_turns} recent inference turns (sre_triage_agent_telemetry)',
+          'monthly_saved_usd': None,
       })
       live_decorator_events.append({
           'timestamp': str(sre_turns[0].get('ts') if sre_turns else 'Live BQ'),
           'agent_name': 'sre_triage_root_agent',
           'handler_name': tname,
           'protocol': 'OpenTelemetry gen_ai.client.inference',
-          'model': 'gemini-2.5-flash',
-          'latency_ms': 840.0,
-          'prompt_tokens': int(sre_turns[0].get('input_tokens') or 1016) if sre_turns else 1016,
-          'cached_tokens': 0,
-          'output_tokens': int(sre_turns[0].get('output_tokens') or 244) if sre_turns else 244,
-          'cache_hit_pct': 0.0,
-          'context_bloat_pct': 11.2,
-          'idle_ratio_pct': 4.5,
+          'model': None,
+          'latency_ms': None,
+          'prompt_tokens': int(sre_turns[0].get('input_tokens') or 0) if sre_turns else None,
+          'cached_tokens': None,
+          'output_tokens': int(sre_turns[0].get('output_tokens') or 0) if sre_turns else None,
+          'cache_hit_pct': None,
+          'context_bloat_pct': None,
+          'idle_ratio_pct': None,
           'skill_or_mcp': f'adk_tool://{tname}',
           'user_cohort': 'sre_triage_agent_telemetry (BigQuery)',
-          'status': '200 OK (BigQuery OTel)',
+          'status': 'OTel span (BigQuery)',
       })
 
     # Add real Discovery Engine methods from ds_ge_audit_raw
@@ -1154,28 +1156,28 @@ class GoogleCloudTelemetryService:
           'kind': 'Gemini Enterprise API',
           'attached_agent': 'Gemini Enterprise Assistant (ds_ge_audit_raw)',
           'calls_24h': mcount,
-          'prompt_tokens_m': 0.0,
-          'cache_hit_pct': 77.4,
-          'context_bloat_pct': 8.4,
-          'optimization_applied': 'Observed in ds_ge_audit_raw.cloudaudit_googleapis_com_data_access',
-          'monthly_saved_usd': 0,
+          'prompt_tokens_m': None,
+          'cache_hit_pct': None,
+          'context_bloat_pct': None,
+          'optimization_applied': 'Audit-log call count, last 7 days (ds_ge_audit_raw)',
+          'monthly_saved_usd': None,
       })
       live_decorator_events.append({
           'timestamp': str(ge_audit[0].get('last_seen') if ge_audit else 'Live BQ'),
           'agent_name': 'gemini_enterprise_assistant',
           'handler_name': mname,
           'protocol': 'Discovery Engine v1alpha/v1main RPC',
-          'model': 'gemini-3.5-flash',
-          'latency_ms': 186.6,
-          'prompt_tokens': 0,
-          'cached_tokens': 0,
-          'output_tokens': 0,
-          'cache_hit_pct': 77.4,
-          'context_bloat_pct': 8.4,
-          'idle_ratio_pct': 3.2,
+          'model': None,
+          'latency_ms': None,
+          'prompt_tokens': None,
+          'cached_tokens': None,
+          'output_tokens': None,
+          'cache_hit_pct': None,
+          'context_bloat_pct': None,
+          'idle_ratio_pct': None,
           'skill_or_mcp': f'discoveryengine://{mname} ({mcount} calls)',
           'user_cohort': 'ds_ge_audit_raw (BigQuery)',
-          'status': '200 OK (Audit Verified)',
+          'status': 'Audit log (BigQuery)',
       })
 
     # Add Cloud Run request aggregates from vibelift_analytics.run_googleapis_com_requests_*
@@ -1186,11 +1188,11 @@ class GoogleCloudTelemetryService:
           'kind': 'Cloud Run MCP Server',
           'attached_agent': 'VibeLift Analytics & FinOps (vibe-lift-agent)',
           'calls_24h': total_cr_calls,
-          'prompt_tokens_m': 0.0,
-          'cache_hit_pct': 100.0,
-          'context_bloat_pct': 0.0,
-          'optimization_applied': f'Observed across {len({r.get("revision") for r in cr_reqs})} Cloud Run revisions in vibelift_analytics',
-          'monthly_saved_usd': 0,
+          'prompt_tokens_m': None,
+          'cache_hit_pct': None,
+          'context_bloat_pct': None,
+          'optimization_applied': f'Request log count across {len({r.get("revision") for r in cr_reqs})} Cloud Run revisions (vibelift_analytics)',
+          'monthly_saved_usd': None,
       })
 
     insights: dict[str, object] = {

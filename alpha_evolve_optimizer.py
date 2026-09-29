@@ -805,6 +805,100 @@ def _get_param_val(profile: DemoAgentProfile | None, key: str, default: float) -
   return default
 
 
+def build_live_app_cohorts(
+    users: list[Mapping[str, object]], live_fleet: Mapping[str, object]
+) -> list[dict[str, object]]:
+  """Groups observed principals by Gemini Enterprise app (from audit-log resource names)."""
+  names = {}
+  for eng in (live_fleet.get('engines') or []):
+    if isinstance(eng, Mapping) and eng.get('engine_key'):
+      names[str(eng['engine_key'])] = str(eng.get('display_name') or eng.get('engine_id') or eng['engine_key'])
+  groups: dict[str, dict[str, object]] = {}
+  for u in users:
+    if not isinstance(u, Mapping):
+      continue
+    is_sa = 'SERVICE' in str(u.get('status') or '')
+    for key, count in (u.get('by_engine') or {}).items():
+      g = groups.setdefault(str(key), {'people': 0, 'service_accounts': 0, 'sessions_7d': 0})
+      g['service_accounts' if is_sa else 'people'] += 1
+      g['sessions_7d'] += int(count or 0)
+  out = []
+  for key, g in groups.items():
+    loc = key.split('/', 1)[0] if '/' in key else ''
+    out.append({
+        'cohort': names.get(key, key.split('/', 1)[-1]),
+        'engine_key': key,
+        'primary_agent': {'global': 'Global', 'us': 'US', 'eu': 'EU'}.get(loc, loc or 'unknown'),
+        'people': g['people'],
+        'service_accounts': g['service_accounts'],
+        'sessions_7d': g['sessions_7d'],
+        'source': 'ds_ge_audit_raw (last 7 days)',
+    })
+  return sorted(out, key=lambda c: -int(c['sessions_7d']))
+
+
+def build_live_runaway_alerts(live_fleet: Mapping[str, object]) -> list[dict[str, object]]:
+  """Derives alerts from observed fleet error rates and model cache usage. No fixed thresholds on invented data."""
+  alerts: list[dict[str, object]] = []
+  window = live_fleet.get('window_hours') or 24
+  seen_runtimes = set()
+  for a in (live_fleet.get('agents') or []):
+    if not isinstance(a, Mapping):
+      continue
+    m = a.get('metrics') if isinstance(a.get('metrics'), Mapping) else {}
+    req = int(m.get('requests') or 0)
+    if req < 10:
+      continue
+    import ge_fleet  # pylint: disable=g-import-not-at-top  (avoids an import cycle at module load)
+
+    rt = ge_fleet.runtime_backend_key(a) or str(a.get('agent_id'))
+    if rt in seen_runtimes:
+      continue
+    seen_runtimes.add(rt)
+    e5 = int(m.get('errors_5xx') or 0)
+    e4 = int(m.get('errors_4xx') or 0)
+    name = str(a.get('display_name') or a.get('agent_id') or 'agent')
+    if e5 and e5 / req >= 0.01:
+      alerts.append({
+          'alert_id': f'5XX-{len(alerts) + 1}',
+          'severity': 'HIGH',
+          'agent_name': name,
+          'runaway_pattern': 'Server errors (5xx)',
+          'observed': f'{e5} of {req} requests ({e5 / req * 100:.1f}%) in {window}h',
+          'mitigation_applied': 'Suggested: check the runtime logs for the failing revision.',
+          'status': 'OPEN',
+          'source': 'Cloud Monitoring request_count by response_code_class',
+      })
+    if e4 / req >= 0.2:
+      alerts.append({
+          'alert_id': f'4XX-{len(alerts) + 1}',
+          'severity': 'MEDIUM',
+          'agent_name': name,
+          'runaway_pattern': 'Rejected requests (4xx)',
+          'observed': f'{e4} of {req} requests ({e4 / req * 100:.1f}%) in {window}h',
+          'mitigation_applied': 'Suggested: usually auth or permission failures; check callers and IAM.',
+          'status': 'OPEN',
+          'source': 'Cloud Monitoring request_count by response_code_class',
+      })
+  mu = live_fleet.get('model_usage') if isinstance(live_fleet.get('model_usage'), Mapping) else {}
+  for mdl in (mu.get('models') or []):
+    if not isinstance(mdl, Mapping):
+      continue
+    tin = int(mdl.get('input_tokens') or 0)
+    if tin >= 50_000 and not int(mdl.get('cache_read_tokens') or 0):
+      alerts.append({
+          'alert_id': f'CACHE-{len(alerts) + 1}',
+          'severity': 'LOW',
+          'agent_name': str(mdl.get('model')),
+          'runaway_pattern': 'No prompt cache reads',
+          'observed': f'{tin:,} input tokens, 0 cache reads, est. ${float(mdl.get("est_cost_usd") or 0):.2f} in {window}h',
+          'mitigation_applied': 'Suggested: enable context caching for repeated system prompts.',
+          'status': 'OPEN',
+          'source': 'Vertex AI publisher token_count metrics (project-wide)',
+      })
+  return alerts
+
+
 def build_user_centric_analytics(
     agents: dict[str, DemoAgentProfile] | None = None,
     live_fleet: Mapping[str, object] | None = None,
@@ -1061,45 +1155,44 @@ def build_user_centric_analytics(
     if isinstance(live_skills, list) and live_skills:
       skill_mcp_breakdown = list(live_skills)
     fleet_totals = live_fleet.get('totals') if isinstance(live_fleet, Mapping) and isinstance(live_fleet.get('totals'), Mapping) else {}
-    obs_in = int(live_bq.get('otel_total_prompt_tokens') or fleet_totals.get('input_tokens') or 158101)
-    obs_out = int(live_bq.get('otel_total_output_tokens') or fleet_totals.get('output_tokens') or 10683)
-    obs_cached = int(live_bq.get('otel_total_cached_tokens') or fleet_totals.get('cached_tokens') or 67783)
+    obs_in = int(live_bq.get('otel_total_prompt_tokens') or fleet_totals.get('input_tokens') or 0)
+    obs_out = int(live_bq.get('otel_total_output_tokens') or fleet_totals.get('output_tokens') or 0)
+    obs_cached = int(live_bq.get('otel_total_cached_tokens') or fleet_totals.get('cached_tokens') or 0)
     token_category_breakdown['observed_gcp_prompt_tokens'] = obs_in
     token_category_breakdown['observed_gcp_cached_tokens'] = obs_cached
     token_category_breakdown['observed_gcp_output_tokens'] = obs_out
     token_category_breakdown['observed_gcp_cache_hit_pct'] = round((obs_cached / max(1, obs_in)) * 100.0, 1)
-    runaway_agent_alerts = [
-        {
-            'agent_name': 'IT Service Desk (Reasoning Engine 5389235022676918272)',
-            'agent_id': 'it_service_desk',
-            'telemetry_signal': 'aiplatform.googleapis.com/reasoning_engine/request_latencies & allocation_time',
-            'runaway_pattern': 'Observed Cloud Monitoring P95 latency = 127,232.9 ms (127.2s) & 12,578.6 GiB-hrs memory allocation across 5 Reasoning Engines',
-            'baseline_burn_per_1k_turns': '127.2s P95 wait + 12,578.6 GiB-hr idle pool ($148.00/mo)',
-            'optimized_burn_per_1k_turns': '690ms P95 target + right-sized min-instances ($32.00/mo)',
-            'mitigation_applied': 'Right-size idle Reasoning Engine memory pools (8821150342449201152 & 3461482834043404288) and cap tool timeout',
-            'status': 'LIVE TELEMETRY ALERT (127.2s P95 Observed)',
-        },
-        {
-            'agent_name': 'Enterprise CLI Agent (enterprise-cli-agent-a2a)',
-            'agent_id': 'enterprise_cli_agent_a2a',
-            'telemetry_signal': 'run.googleapis.com/request_count [response_code_class=4xx]',
-            'runaway_pattern': 'Observed 15 HTTP 4xx errors out of 28 requests (53.6% error rate) in Cloud Monitoring 7d window',
-            'baseline_burn_per_1k_turns': '53.6% 4xx retry cascade (2x wasted A2A handoff turns)',
-            'optimized_burn_per_1k_turns': '0.0% 4xx schema failures via strict A2A JSON validation',
-            'mitigation_applied': 'Enforce A2A request schema validation and OAuth audience check on enterprise-cli-agent-a2a',
-            'status': 'LIVE TELEMETRY ALERT (53.6% 4xx Observed)',
-        },
-        {
-            'agent_name': 'Anthropic Claude Opus 5.5 (Vertex Model Garden)',
-            'agent_id': 'vibelift_analytics',
-            'telemetry_signal': 'aiplatform.googleapis.com/publisher/online_serving/token_count [claude-opus-5-5]',
-            'runaway_pattern': 'Observed 44,067 input tokens + 28,284 output tokens with 0 cached tokens (0.0% cache hit rate)',
-            'baseline_burn_per_1k_turns': '0.0% cache hit on Opus 5.5 ($2.78 / 7 calls observed)',
-            'optimized_burn_per_1k_turns': '85%+ cache hit via AnthropicVertex cache_control={"type": "ephemeral"}',
-            'mitigation_applied': 'Enable ephemeral prompt caching blocks on Model Garden Opus 5.5 system instructions',
-            'status': 'LIVE TELEMETRY ALERT (0.0% Opus Cache Hit)',
-        },
-    ]
+    token_category_breakdown['observed_gcp_cache_hit_pct'] = (
+        round((obs_cached / obs_in) * 100.0, 1) if obs_in else None
+    )
+    fleet_for_alerts = live_fleet if isinstance(live_fleet, Mapping) else {}
+    return {
+        'live': True,
+        'total_active_dau': None,
+        'active_people_7d': sum(1 for u in power_users_ldap if 'HUMAN' in str(u.get('status') or '')),
+        'active_service_accounts_7d': sum(1 for u in power_users_ldap if 'SERVICE' in str(u.get('status') or '')),
+        'sessions_7d': sum(int(u.get('sessions_7d') or 0) for u in power_users_ldap),
+        'supported_dau_capacity': None,
+        # Savings need a measured before/after baseline; none exists in telemetry, so nothing is claimed.
+        'baseline_cost_per_1k_turns_usd': None,
+        'optimized_cost_per_1k_turns_usd': None,
+        'avg_cost_reduction_pct': None,
+        'per_user_monthly_baseline_usd': None,
+        'per_user_monthly_optimized_usd': None,
+        'total_monthly_savings_usd': None,
+        'annualized_savings_usd': None,
+        'savings_note': 'Not measured: savings need a before/after baseline, which telemetry does not contain.',
+        'collection_mode': (
+            'LIVE GCP TELEMETRY (project-maui BigQuery ds_ge_audit_raw + sre_triage_agent_telemetry + Cloud Monitoring v3)'
+        ),
+        'security_governance': {},
+        'cohorts_live': True,
+        'cohorts': build_live_app_cohorts(power_users_ldap, fleet_for_alerts),
+        'power_users_ldap': power_users_ldap,
+        'token_category_breakdown': token_category_breakdown,
+        'runaway_agent_alerts': build_live_runaway_alerts(fleet_for_alerts),
+        'skill_mcp_breakdown': skill_mcp_breakdown,
+    }
 
   total_dau = sum(int(c['active_dau']) for c in cohorts)
   total_monthly_savings = sum(int(c['monthly_savings_usd']) for c in cohorts)
@@ -1756,8 +1849,12 @@ class VibeLiftAlphaEvolveOptimizer:
         'BLOCKED DML/DDL injection attempt; enforced read-only SELECT guardrail with 100 MB maximumBytesBilled cap.'
         if blocked_dml
         else (
-            f"Fleet-wide prompt cache locking and context pruning reduced cost per 1k turns by {uc.get('avg_cost_reduction_pct', 88.3)}%, "
-            f"delivering ${uc.get('total_monthly_savings_usd', 46870):,}/mo (${uc.get('annualized_savings_usd', 562440):,}/yr) in net savings."
+            'Simulator result: rows come from the optimizer model, not BigQuery. '
+            'Savings are not measured in live telemetry.'
+            if uc.get('live')
+            else f"Simulator result: prompt cache locking and context pruning reduced cost per 1k turns by "
+            f"{uc.get('avg_cost_reduction_pct')}%, delivering ${uc.get('total_monthly_savings_usd') or 0:,}/mo "
+            f"(${uc.get('annualized_savings_usd') or 0:,}/yr) in simulated savings."
         )
     )
     return {
@@ -1909,7 +2006,7 @@ class VibeLiftAlphaEvolveOptimizer:
             'additional_monthly_cud_savings_usd': 4150,
             'recommendation_note': 'Commit 2 base GSUs under 1-Yr CUD for steady-state IT Service Desk traffic; burst above 35k tok/s via PAYG.',
         },
-        'total_monthly_savings_usd': uc.get('total_monthly_savings_usd', 46870),
+        'total_monthly_savings_usd': uc.get('total_monthly_savings_usd'),
     }
 
   def get_tokenomics_and_cockpit_finops_payload(

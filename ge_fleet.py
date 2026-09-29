@@ -124,6 +124,75 @@ def parse_window_hours(value: Any) -> int | None:
   return hours if 1 <= hours <= 720 else None
 
 
+def trend_bucket_seconds(hours: int) -> int:
+  """Bucket size for the requests-over-time chart (about 24 buckets per window)."""
+  if hours <= 1:
+    return 300
+  if hours <= 6:
+    return 900
+  if hours <= 24:
+    return 3600
+  if hours <= 72:
+    return 3 * 3600
+  return 6 * 3600
+
+
+def build_request_trend(
+    agents: list[dict[str, Any]],
+    results: dict[tuple[str, ...], Any],
+    window_s: int,
+    bucket_s: int,
+    default_project: str | None = None,
+) -> dict[str, Any]:
+  """Aligns per-runtime request series onto one bucket grid, keyed like runtime_backend_key()."""
+  now = int(_utcnow().timestamp())
+  last = now - (now % bucket_s) + bucket_s
+  n = max(1, window_s // bucket_s)
+  grid = [last - bucket_s * (n - 1 - i) for i in range(n)]
+  index = {t: i for i, t in enumerate(grid)}
+  by_runtime: dict[str, dict[str, list[int]]] = {}
+  ok = False
+  for agent in agents:
+    backend = agent.get('backend') or {}
+    kind = backend.get('kind')
+    project = backend.get('project') or default_project
+    if kind == 'cloud_run':
+      series_map = results.get(('run_series', project))
+      rid = backend.get('service')
+    elif kind == 'agent_engine':
+      series_map = results.get(('re_series', project))
+      rid = backend.get('reasoning_engine_id')
+    else:
+      continue
+    if series_map is None or not rid:
+      continue
+    ok = True
+    key = runtime_backend_key(agent)
+    if key in by_runtime or rid not in series_map:
+      continue
+    row = {'requests': [0] * n, 'errors_4xx': [0] * n, 'errors_5xx': [0] * n}
+    for epoch, vals in series_map[rid].items():
+      # Snap each point's end time to the nearest grid bucket end.
+      snapped = epoch + ((bucket_s - epoch % bucket_s) % bucket_s)
+      i = index.get(snapped)
+      if i is None:
+        continue
+      for k in row:
+        row[k][i] += int(vals.get(k) or 0)
+    by_runtime[key] = row
+  if not ok and not any(k[0] in ('run_series', 're_series') for k in results):
+    status = 'not_applicable'
+  else:
+    status = 'ok' if all(results.get(k) is not None for k in results if k[0] in ('run_series', 're_series')) else 'partial'
+  return {
+      'bucket_seconds': bucket_s,
+      'bucket_ends': [_iso(datetime.datetime.fromtimestamp(t, datetime.timezone.utc)) for t in grid],
+      'by_runtime': by_runtime,
+      'status': status,
+      'source': 'Cloud Monitoring request_count (Cloud Run + Agent Engine)',
+  }
+
+
 def parse_bool(value: Any) -> bool:
   """Parses an untrusted boolean flag ('1', 'true', 'yes', 'on' or a real bool)."""
   if isinstance(value, bool):
@@ -588,6 +657,45 @@ class GeminiEnterpriseFleetService:
         out[key]['errors_5xx'] += count
     return out
 
+  def _request_series(
+      self, project: str, metric: str, label: str, ids: list[str], window_s: int, bucket_s: int
+  ) -> dict[str, dict[int, dict[str, int]]]:
+    """Request counts per runtime id per time bucket: {id: {bucket_end_epoch: {requests, errors_4xx, errors_5xx}}}."""
+    end = _utcnow()
+    params = [
+        ('filter', f'metric.type="{metric}" AND resource.label.{label} = {self._one_of(ids)}'),
+        ('interval.startTime', _iso(end - datetime.timedelta(seconds=window_s))),
+        ('interval.endTime', _iso(end)),
+        ('aggregation.alignmentPeriod', f'{bucket_s}s'),
+        ('aggregation.perSeriesAligner', 'ALIGN_SUM'),
+        ('aggregation.crossSeriesReducer', 'REDUCE_SUM'),
+        ('aggregation.groupByFields', f'resource.label.{label}'),
+        ('aggregation.groupByFields', 'metric.label.response_code_class'),
+    ]
+    url = f'{_MONITORING}/projects/{project}/timeSeries?{urllib.parse.urlencode(params)}'
+    out: dict[str, dict[int, dict[str, int]]] = {}
+    for series in self._paged(url, 'timeSeries'):
+      labels = dict(series.get('resource', {}).get('labels', {}))
+      labels.update(series.get('metric', {}).get('labels', {}))
+      key = labels.get(label)
+      if key not in ids:
+        continue
+      code_class = str(labels.get('response_code_class') or '')
+      for pt in series.get('points') or []:
+        t_end = pt.get('interval', {}).get('endTime')
+        if not t_end:
+          continue
+        epoch = int(datetime.datetime.fromisoformat(t_end.replace('Z', '+00:00')).timestamp())
+        val = pt.get('value', {})
+        count = int(round(float(val.get('int64Value', val.get('doubleValue', 0)) or 0)))
+        slot = out.setdefault(key, {}).setdefault(epoch, {'requests': 0, 'errors_4xx': 0, 'errors_5xx': 0})
+        slot['requests'] += count
+        if code_class.startswith('4'):
+          slot['errors_4xx'] += count
+        elif code_class.startswith('5'):
+          slot['errors_5xx'] += count
+    return out
+
   def _latency_by(self, project: str, metric: str, label: str, ids: list[str], window_s: int) -> dict[str, dict[str, float]]:
     out: dict[str, dict[str, float]] = {}
     for pct in ('50', '95'):
@@ -805,6 +913,7 @@ class GeminiEnterpriseFleetService:
         services_by_project[backend.get('project') or self.project_id].add(backend['service'])
 
     re_metric = 'aiplatform.googleapis.com/reasoning_engine'
+    bucket_s = trend_bucket_seconds(hours)
     jobs: dict[tuple[str, ...], Any] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
       for project, ids in engines_by_project.items():
@@ -814,11 +923,13 @@ class GeminiEnterpriseFleetService:
         jobs[('re_cpu', project)] = pool.submit(self._sum_by, project, f'{re_metric}/cpu/allocation_time', 'reasoning_engine_id', id_list, window_s)
         jobs[('re_mem', project)] = pool.submit(self._sum_by, project, f'{re_metric}/memory/allocation_time', 'reasoning_engine_id', id_list, window_s)
         jobs[('re_tokens', project)] = pool.submit(self._genai_usage, project, id_list, window_s)
+        jobs[('re_series', project)] = pool.submit(self._request_series, project, f'{re_metric}/request_count', 'reasoning_engine_id', id_list, window_s, bucket_s)
       for project, services in services_by_project.items():
         svc_list = sorted(services)
         jobs[('run_requests', project)] = pool.submit(self._requests_by, project, 'run.googleapis.com/request_count', 'service_name', svc_list, window_s)
         jobs[('run_latency', project)] = pool.submit(self._latency_by, project, 'run.googleapis.com/request_latencies', 'service_name', svc_list, window_s)
         jobs[('run_billable', project)] = pool.submit(self._sum_by, project, 'run.googleapis.com/container/billable_instance_time', 'service_name', svc_list, window_s)
+        jobs[('run_series', project)] = pool.submit(self._request_series, project, 'run.googleapis.com/request_count', 'service_name', svc_list, window_s, bucket_s)
       for resource, location in engine_meta_jobs.items():
         jobs[('re_meta', resource)] = pool.submit(self._reasoning_engine_meta, resource, location)
       jobs[('model_usage',)] = pool.submit(self._model_usage, window_s)
@@ -832,6 +943,7 @@ class GeminiEnterpriseFleetService:
           'run_latency': 'Cloud Run latency metrics', 'run_billable': 'Cloud Run billable time',
           're_meta': 'Agent Engine metadata', 'model_usage': 'Vertex AI model token metrics',
           'ge_traffic': 'Gemini Enterprise API traffic',
+          're_series': 'Agent Engine request history', 'run_series': 'Cloud Run request history',
       }
       for key, future in jobs.items():
         try:
@@ -898,6 +1010,7 @@ class GeminiEnterpriseFleetService:
         'totals': totals,
         'model_usage': results.get(('model_usage',)),
         'ge_traffic': results.get(('ge_traffic',)),
+        'trend': build_request_trend(agents, results, window_s, bucket_s, self.project_id),
         'token_log_scan': {
             'entries_scanned': sum(r['entries_scanned'] for r in token_results),
             'truncated': any(r['truncated'] for r in token_results),

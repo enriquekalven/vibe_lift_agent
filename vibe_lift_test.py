@@ -431,7 +431,7 @@ class VibeLiftFrameworkTest(unittest.TestCase):
         self.assertIn('_meta', call_open_body['result'])
         self.assertIn('io.modelcontextprotocol/ui', call_open_body['result']['_meta'])
         opened = call_open_body['result']['structuredContent']
-        self.assertEqual(opened['focus_tab'], 0)
+        self.assertEqual(opened['focus_tab'], 6)
         self.assertEqual(opened['state']['ge_fleet']['totals']['agents'], 3)
         self.assertIn('IT Service Desk', call_open_body['result']['content'][0]['text'])
 
@@ -611,7 +611,7 @@ class ProductionAppTest(unittest.TestCase):
 
     opened = self._rpc('tools/call', {'name': 'open_dashboard', 'arguments': {}}, rpc_id=3, session=session).json()['result']
     self.assertFalse(opened['isError'])
-    self.assertEqual(opened['structuredContent']['focus_tab'], 0)
+    self.assertEqual(opened['structuredContent']['focus_tab'], 6)
     self.assertEqual(opened['structuredContent']['state']['ge_fleet']['totals']['agents'], 3)
     self.assertIn('IT Service Desk', opened['content'][0]['text'])
     self.assertEqual(opened['_meta']['ui']['resourceUri'], 'ui://vibelift-analytics/dashboard')

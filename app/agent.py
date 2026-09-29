@@ -184,7 +184,7 @@ def query_ge_agent_fleet(window_hours: int = 24) -> str:
   return json.dumps({"summary": ge_fleet.summarize_fleet(payload), **payload}, indent=2)
 
 
-def open_dashboard(focus_tab: int = 0, initial_agent: str = "it_service_desk") -> str:
+def open_dashboard(focus_tab: int = 6, initial_agent: str = "it_service_desk") -> str:
   """Opens the VibeLift Analytics & FinOps Dashboard with interactive UI widget.
 
   CRITICAL: Always call this tool FIRST whenever the user asks to see, open, or
@@ -192,7 +192,7 @@ def open_dashboard(focus_tab: int = 0, initial_agent: str = "it_service_desk") -
   economics, or AlphaEvolve optimization in the UI.
 
   Args:
-      focus_tab: Tab to open (0 = live Gemini Enterprise agent fleet, 1 = agent parameters, 2 = AlphaEvolve, 3 = User-Centric FinOps, Skill/MCP token breakdown & @vibelift_telemetry decorator stream).
+      focus_tab: Tab to open (6 = Overview, the default; 0 = Agents; 3 = Cost; 4 = Users. Advanced tabs: 1 = Goals & Metrics, 2 = Optimizer & Testing, 5 = Tools & SDK).
       initial_agent: Optional Gemini Enterprise agent identifier to analyze ('it_service_desk', 'vibelift_analytics', 'deep_research').
 
   Returns:

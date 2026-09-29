@@ -281,7 +281,9 @@ class GeFleetCollectionTest(unittest.TestCase):
     self.assertIsNone(payload['totals']['llm_calls'])
     self.assertEqual(payload['totals']['requests'], 45)
     sources = {e['source'] for e in payload['errors']}
-    self.assertEqual(sources, {'Cloud Run request metrics', 'Agent GenAI token logs'})
+    # The request-history query uses the same Cloud Run metric, so it degrades with it.
+    self.assertEqual(sources, {'Cloud Run request metrics', 'Cloud Run request history', 'Agent GenAI token logs'})
+    self.assertNotIn('cloud_run:vibe-lift-agent', payload['trend']['by_runtime'])
 
   def test_inventory_failure_is_reported_not_raised(self):
     service, _ = make_fake_service(fail_on=['discoveryengine.googleapis.com'])
@@ -333,7 +335,8 @@ class GeFleetCollectionTest(unittest.TestCase):
   def test_window_is_clamped_and_applied_to_queries(self):
     service, api = make_fake_service()
     self.assertEqual(service.collect(window_hours=100000)['window_hours'], 720)
-    self.assertEqual(set(api.alignment_periods), {'2592000s'})
+    # Window-level aggregates use the whole window; the trend uses 6h buckets for a 30-day window.
+    self.assertEqual(set(api.alignment_periods), {'2592000s', '21600s'})
     self.assertEqual(service.collect(window_hours=0)['window_hours'], 1)
 
 
