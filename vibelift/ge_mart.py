@@ -229,6 +229,48 @@ def build_recent_sessions_sql(project_id: str, days: int = 30, limit: int = 50) 
   """
 
 
+def build_session_turns_sql(
+    project_id: str,
+    days: int = 30,
+    session_limit: int = 50,
+    turns_per_session: int = 100,
+    limit: int = 2000,
+) -> str:
+  """Turn-by-turn token counts for the sessions listed by build_recent_sessions_sql.
+
+  Uses the same session selection (date window, ORDER BY session_end DESC, LIMIT) so the
+  drilldown covers exactly the sessions shown. Only counts and metadata are selected; prompt
+  and response text never leave BigQuery. Keeps the most recent `turns_per_session` turns of
+  each session and at most `limit` rows overall.
+  """
+  mart = mart_ref(project_id)
+  window = _clamp(days, 1, 400)
+  return f"""
+    WITH recent_sessions AS (
+      SELECT engine_key, session_id
+      FROM `{mart}.fct_sessions`
+      WHERE session_date >= DATE_SUB(CURRENT_DATE(), INTERVAL {window} DAY)
+      ORDER BY session_end DESC
+      LIMIT {_clamp(session_limit, 1, 500)}
+    )
+    SELECT
+      t.engine_key, t.session_id, t.turn_id, t.turn_kind, t.turn_status,
+      CAST(t.event_timestamp AS STRING) AS ts, t.user_email, t.agent_name, t.model_name,
+      t.input_tokens, t.output_tokens, t.cached_input_tokens, t.reasoning_tokens, t.total_tokens,
+      t.llm_calls, t.tool_call_count, t.tool_names
+    FROM `{mart}.fct_turns` AS t
+    JOIN recent_sessions AS r
+      ON t.session_id = r.session_id AND COALESCE(t.engine_key, '') = COALESCE(r.engine_key, '')
+    WHERE t.session_id IS NOT NULL
+      AND t.event_date >= DATE_SUB(CURRENT_DATE(), INTERVAL {window} DAY)
+    QUALIFY ROW_NUMBER() OVER (
+      PARTITION BY t.engine_key, t.session_id ORDER BY t.event_timestamp DESC
+    ) <= {_clamp(turns_per_session, 1, 500)}
+    ORDER BY t.session_id, t.event_timestamp
+    LIMIT {_clamp(limit, 1, 5000)}
+  """
+
+
 # ---------------------------------------------------------------------------------------------
 # Row mappers
 # ---------------------------------------------------------------------------------------------
@@ -373,6 +415,7 @@ def session_from_row(row: Mapping[str, object], project_id: str) -> dict[str, ob
   """Maps a fct_sessions row to a dashboard session dict. Unknown token/call values remain None."""
   return {
       'session_id': str(row.get('session_id') or ''),
+      'session_key': session_key(row.get('engine_key'), row.get('session_id')),
       'engine_key': _text(row.get('engine_key')),
       'session_start': _text(row.get('session_start')),
       'session_end': _text(row.get('session_end')),
@@ -397,4 +440,41 @@ def session_from_row(row: Mapping[str, object], project_id: str) -> dict[str, ob
       'tool_failures': int_or_none(row.get('tool_failures')),
       'source_table': f'{mart_ref(project_id)}.fct_sessions',
   }
+
+
+def session_key(engine_key: object, session_id: object) -> str:
+  """Stable key for a fct_sessions row (the view groups by engine_key and session_id)."""
+  return f"{_text(engine_key) or ''}|{_text(session_id) or ''}"
+
+
+def session_turn_from_row(row: Mapping[str, object]) -> dict[str, object]:
+  """Maps a build_session_turns_sql row to a token-only turn dict (unknown counts stay None)."""
+  return {
+      'turn_id': str(row.get('turn_id') or ''),
+      'ts': _text(row.get('ts')),
+      'turn_kind': _text(row.get('turn_kind')),
+      'turn_status': _text(row.get('turn_status')),
+      'user_email': _text(row.get('user_email')),
+      'agent_name': _text(row.get('agent_name')),
+      'model_name': _text(row.get('model_name')),
+      'input_tokens': int_or_none(row.get('input_tokens')),
+      'output_tokens': int_or_none(row.get('output_tokens')),
+      'cached_input_tokens': int_or_none(row.get('cached_input_tokens')),
+      'reasoning_tokens': int_or_none(row.get('reasoning_tokens')),
+      'total_tokens': int_or_none(row.get('total_tokens')),
+      'llm_calls': int_or_none(row.get('llm_calls')),
+      'tool_calls': int_or_none(row.get('tool_call_count')),
+      'tool_names': _text(row.get('tool_names')),
+  }
+
+
+def group_session_turns(rows: list[Mapping[str, object]]) -> dict[str, list[dict[str, object]]]:
+  """Groups session-turn rows by session_key(), keeping the row order (oldest turn first)."""
+  grouped: dict[str, list[dict[str, object]]] = {}
+  for row in rows:
+    if not _text(row.get('session_id')):
+      continue
+    grouped.setdefault(session_key(row.get('engine_key'), row.get('session_id')), []).append(
+        session_turn_from_row(row))
+  return grouped
 

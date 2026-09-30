@@ -2072,19 +2072,27 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
             <span id="geSessionsBadge" class="badge badge-blue">vibelift_mart.fct_sessions</span>
           </div>
           <div style="font-size:12px;color:var(--text-secondary);">
-            Session-level rollup from <span class="mono">vibelift_mart.fct_turns</span>. Click a session row to pre-fill the CSAT feedback form below.
+            Session-level rollup from <span class="mono">vibelift_mart.fct_turns</span>. Click a user in <strong>Top users</strong> below to see only their sessions; click <strong>▸</strong> on a session to see turn-by-turn input and output tokens. Click a session row to pre-fill the CSAT feedback form below. Token counts only: prompt and response text stay in BigQuery.
           </div>
+        </div>
+        <div id="geSessionsUserFilter" class="kpi-sub" style="display:none;margin:6px 0 10px;gap:10px;align-items:center;flex-wrap:wrap;">
+          <span id="geSessionsUserFilterText" class="mono"></span>
+          <button type="button" id="geSessionsUserFilterClear" class="btn" style="padding:4px 10px;font-size:12px;">Show all users</button>
         </div>
         <div class="table-scroll">
           <table>
             <thead>
               <tr>
+                <th title="Expand for turn-by-turn tokens"></th>
                 <th>Session ID</th>
                 <th>GE App</th>
                 <th>User</th>
                 <th>Primary Agent</th>
                 <th>Turns (Chat / Failed)</th>
                 <th>Duration</th>
+                <th>Input Tok</th>
+                <th>Output Tok</th>
+                <th>Cached Tok</th>
                 <th>Total Tokens</th>
                 <th>Last Activity</th>
               </tr>
@@ -4122,44 +4130,8 @@ async def handle_agent_turn(message_envelope):
           });
         }
 
+        renderGeSessionsTable(uc);
         renderPowerUsersTable(uc.power_users_ldap);
-
-        const sessBadge = document.getElementById('geSessionsBadge');
-        if (sessBadge) {
-          const cnt = Array.isArray(uc.ge_sessions) ? uc.ge_sessions.length : 0;
-          sessBadge.textContent = (uc.ge_mart_dataset || 'vibelift_mart.fct_sessions') + ' (' + cnt + ' sessions)';
-        }
-        const sessBody = document.getElementById('geSessionsBody');
-        if (sessBody) {
-          sessBody.replaceChildren();
-          const sessions = Array.isArray(uc.ge_sessions) ? uc.ge_sessions : [];
-          if (!sessions.length) {
-            emptyRow(sessBody, 8, 'No conversation sessions recorded in vibelift_mart.fct_sessions for this scope.');
-          }
-          sessions.forEach(function(s) {
-            const tr = el('tr', null, [
-              el('td', 'mono', [el('strong', null, [s.session_id || '—'])]),
-              el('td', 'mono', [s.engine_key || '—']),
-              el('td', 'mono', [s.user_email || '—']),
-              el('td', null, [badge(s.agent_name || s.agent_id || 'gemini_enterprise', 'badge-blue')]),
-              el('td', 'mono', [
-                fmtInt(s.turns || 0) + ' (' + fmtInt(s.chat_turns || 0) + ' chat / ' + fmtInt(s.failed_turns || 0) + ' err)'
-              ]),
-              el('td', 'mono', [s.duration_seconds == null ? '—' : s.duration_seconds + 's']),
-              el('td', 'mono', [fmtTokens(s.total_tokens)]),
-              el('td', 'mono', [s.session_end || s.session_start || '—']),
-            ]);
-            tr.style.cursor = 'pointer';
-            tr.title = 'Click to pre-fill CSAT form for session ' + (s.session_id || '');
-            tr.addEventListener('click', function() {
-              const emailIn = document.getElementById('csatEmailInput');
-              const sessIn = document.getElementById('csatSessionInput');
-              if (emailIn && s.user_email && s.user_email !== 'anonymous') emailIn.value = s.user_email;
-              if (sessIn && s.session_id) sessIn.value = s.session_id;
-            });
-            sessBody.appendChild(tr);
-          });
-        }
       }
 
       const decBody = document.getElementById('decoratorEventsBody');
@@ -4198,7 +4170,7 @@ async def handle_agent_turn(message_envelope):
         const sessText = hasLiveBreakdown
           ? fmtInt(u.sessions_7d) + ' (' + fmtInt(u.interactions_7d || 0) + ' turns, ' + fmtInt(u.api_calls_observed || 0) + ' audit)'
           : fmtInt(u.sessions_7d);
-        puBody.appendChild(el('tr', null, [
+        const puRow = el('tr', null, [
           el('td', 'mono', [el('strong', null, [u.user_ldap || ''])]),
           el('td', null, [u.department || '']),
           el('td', 'mono', [u.primary_agent || '']),
@@ -4210,7 +4182,202 @@ async def handle_agent_turn(message_envelope):
           el('td', 'mono', [u.avg_csat == null ? 'no ratings' : u.avg_csat + ' ★']),
           el('td', 'mono', [u.monthly_cost_usd == null ? '—' : money(u.monthly_cost_usd)]),
           el('td', null, [badge(st, stCls)]),
+        ]);
+        const puEmail = u.user_email || '';
+        if (puEmail && geSessionsLastUc && Array.isArray(geSessionsLastUc.ge_sessions)) {
+          const nSess = geSessionsLastUc.ge_sessions.filter(function(s) { return sessionMatchesUser(s, puEmail); }).length;
+          puRow.style.cursor = 'pointer';
+          puRow.title = nSess
+            ? 'Show ' + nSess + ' session(s) for ' + puEmail + ' with turn-by-turn tokens'
+            : 'No sessions for ' + puEmail + ' among the most recent sessions in this scope';
+          puRow.addEventListener('click', function() { setGeSessionUserFilter(puEmail); });
+          if (geSessionUserFilter && sessionMatchesUser({user_email: puEmail}, geSessionUserFilter)) {
+            puRow.style.outline = '2px solid #2563eb';
+          }
+        }
+        puBody.appendChild(puRow);
+      });
+    }
+
+    // Session drilldown state (Users tab). var (not let) so early renders never hit the TDZ.
+    var geSessionUserFilter = null;
+    var geExpandedSessions = {};
+    var geSessionsLastUc = null;
+
+    function geSessionKey(s) {
+      return s.session_key || ((s.engine_key || '') + '|' + (s.session_id || ''));
+    }
+    function sessionMatchesUser(s, filter) {
+      if (!filter) return true;
+      const f = String(filter).toLowerCase();
+      const e = String((s && s.user_email) || '').toLowerCase();
+      if (e === f) return true;
+      return f.indexOf('@') < 0 && e.split('@')[0] === f;
+    }
+    function sumKnown(rows, field) {
+      let seen = false;
+      let total = 0;
+      (rows || []).forEach(function(r) {
+        if (r && r[field] != null) { seen = true; total += Number(r[field]); }
+      });
+      return seen ? total : null;
+    }
+    function setGeSessionUserFilter(email) {
+      geSessionUserFilter = email || null;
+      if (geSessionsLastUc) {
+        renderGeSessionsTable(geSessionsLastUc);
+        renderPowerUsersTable((geSessionsLastUc || {}).power_users_ldap);
+      }
+      const panel = document.getElementById('liveGeSessionsPanel');
+      if (email && panel && typeof panel.scrollIntoView === 'function') {
+        panel.scrollIntoView({behavior: 'smooth', block: 'start'});
+      }
+    }
+    function toggleGeSessionExpanded(key) {
+      geExpandedSessions = geExpandedSessions || {};
+      if (geExpandedSessions[key]) delete geExpandedSessions[key];
+      else geExpandedSessions[key] = true;
+      if (geSessionsLastUc) renderGeSessionsTable(geSessionsLastUc);
+    }
+    function renderGeSessionTurns(s, turns) {
+      const headers = ['#', 'Time', 'Kind', 'Status', 'Model', 'Input Tok', 'Output Tok', 'Cached Tok',
+                       'Reasoning Tok', 'Total Tok', 'LLM Calls', 'Tool Calls'];
+      const head = el('tr', null, headers.map(function(h) { return el('th', null, [h]); }));
+      const body = el('tbody', null, []);
+      turns.forEach(function(t, i) {
+        const status = String(t.turn_status || 'UNKNOWN');
+        body.appendChild(el('tr', null, [
+          el('td', 'mono', [String(i + 1)]),
+          el('td', 'mono', [t.ts || '—']),
+          el('td', null, [badge(t.turn_kind || '—', 'badge-blue')]),
+          el('td', null, [badge(status, supportBadgeClass({status: status}))]),
+          el('td', 'mono', [t.model_name || '—']),
+          el('td', 'mono', [fmtInt(t.input_tokens)]),
+          el('td', 'mono', [fmtInt(t.output_tokens)]),
+          el('td', 'mono', [fmtInt(t.cached_input_tokens)]),
+          el('td', 'mono', [fmtInt(t.reasoning_tokens)]),
+          el('td', 'mono', [fmtInt(t.total_tokens)]),
+          el('td', 'mono', [fmtInt(t.llm_calls)]),
+          el('td', 'mono', [t.tool_names ? fmtInt(t.tool_calls) + ' · ' + t.tool_names : fmtInt(t.tool_calls)]),
         ]));
+      });
+      if (turns.length) {
+        body.appendChild(el('tr', null, [
+          el('td', null, []),
+          el('td', null, [el('strong', null, ['Total (shown turns)'])]),
+          el('td', null, []), el('td', null, []), el('td', null, []),
+          el('td', 'mono', [el('strong', null, [fmtInt(sumKnown(turns, 'input_tokens'))])]),
+          el('td', 'mono', [el('strong', null, [fmtInt(sumKnown(turns, 'output_tokens'))])]),
+          el('td', 'mono', [el('strong', null, [fmtInt(sumKnown(turns, 'cached_input_tokens'))])]),
+          el('td', 'mono', [el('strong', null, [fmtInt(sumKnown(turns, 'reasoning_tokens'))])]),
+          el('td', 'mono', [el('strong', null, [fmtInt(sumKnown(turns, 'total_tokens'))])]),
+          el('td', 'mono', [el('strong', null, [fmtInt(sumKnown(turns, 'llm_calls'))])]),
+          el('td', 'mono', [el('strong', null, [fmtInt(sumKnown(turns, 'tool_calls'))])]),
+        ]));
+      }
+      const total = Number(s.turns || 0);
+      const noTokens = turns.length > 0 && sumKnown(turns, 'input_tokens') == null &&
+        sumKnown(turns, 'output_tokens') == null && sumKnown(turns, 'total_tokens') == null;
+      const noteText = turns.length
+        ? 'Turn-by-turn tokens for session ' + (s.session_id || '') + ': showing ' + turns.length + ' of ' + total +
+          ' turns' + (turns.length < total ? ' (most recent 100 per session)' : '') + '. ' +
+          (noTokens
+            ? 'None of these turns carry token counts: fct_turns gets tokens only from gen_ai inference logs ' +
+              '(v_agentic_operations_curated) matched by trace_id, and Gemini Enterprise assistant activity logs do not include usage.'
+            : '"—" means the log carried no token count for that turn (searches and widget actions usually do not).') +
+          ' Prompt and response text are never loaded.'
+        : 'No turn detail loaded for session ' + (s.session_id || '') +
+          '. The drilldown covers the 50 most recent sessions; it fills in on the next BigQuery poll.';
+      return el('div', null, [
+        el('div', 'kpi-sub', [noteText]),
+        turns.length ? el('div', 'table-scroll', [el('table', null, [el('thead', null, [head]), body])]) : null,
+      ]);
+    }
+    function renderGeSessionsTable(uc) {
+      geSessionsLastUc = uc || null;
+      geExpandedSessions = geExpandedSessions || {};
+      const all = uc && Array.isArray(uc.ge_sessions) ? uc.ge_sessions : [];
+      const turnsBySession = uc && uc.ge_session_turns && typeof uc.ge_session_turns === 'object' ? uc.ge_session_turns : {};
+      const filter = geSessionUserFilter || null;
+      const sessions = filter ? all.filter(function(s) { return sessionMatchesUser(s, filter); }) : all;
+
+      const sessBadge = document.getElementById('geSessionsBadge');
+      if (sessBadge) {
+        sessBadge.textContent = ((uc && uc.ge_mart_dataset) || 'vibelift_mart.fct_sessions') + ' (' +
+          sessions.length + (filter ? ' of ' + all.length : '') + ' sessions)';
+      }
+      const bar = document.getElementById('geSessionsUserFilter');
+      const barText = document.getElementById('geSessionsUserFilterText');
+      if (bar) bar.style.display = filter ? 'flex' : 'none';
+      if (barText) {
+        const nTurns = sumKnown(sessions, 'turns');
+        barText.textContent = filter
+          ? 'User ' + filter + ': ' + sessions.length + (sessions.length === 1 ? ' session · ' : ' sessions · ') +
+            fmtInt(nTurns) + (nTurns === 1 ? ' turn · input ' : ' turns · input ') +
+            fmtTokens(sumKnown(sessions, 'input_tokens')) + ' · output ' + fmtTokens(sumKnown(sessions, 'output_tokens')) +
+            ' · cached ' + fmtTokens(sumKnown(sessions, 'cached_input_tokens')) + ' · total ' +
+            fmtTokens(sumKnown(sessions, 'total_tokens')) + ' tokens'
+          : '';
+      }
+      const clearBtn = document.getElementById('geSessionsUserFilterClear');
+      if (clearBtn && !clearBtn.dataset.bound) {
+        clearBtn.dataset.bound = '1';
+        clearBtn.addEventListener('click', function() { setGeSessionUserFilter(null); });
+      }
+
+      const sessBody = document.getElementById('geSessionsBody');
+      if (!sessBody) return;
+      sessBody.replaceChildren();
+      if (!sessions.length) {
+        emptyRow(sessBody, 12, filter
+          ? 'No sessions for ' + filter + ' among the most recent sessions in this scope.'
+          : 'No conversation sessions recorded in vibelift_mart.fct_sessions for this scope.');
+        return;
+      }
+      sessions.forEach(function(s) {
+        const key = geSessionKey(s);
+        const turns = Array.isArray(turnsBySession[key]) ? turnsBySession[key] : [];
+        const open = !!geExpandedSessions[key];
+        const toggle = el('button', 'btn', [open ? '▾' : '▸']);
+        toggle.type = 'button';
+        toggle.style.padding = '0 8px';
+        toggle.title = (open ? 'Hide' : 'Show') + ' turn-by-turn tokens (' + turns.length + ' turns loaded)';
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        toggle.addEventListener('click', function(ev) {
+          ev.stopPropagation();
+          toggleGeSessionExpanded(key);
+        });
+        const tr = el('tr', null, [
+          el('td', null, [toggle]),
+          el('td', 'mono', [el('strong', null, [s.session_id || '—'])]),
+          el('td', 'mono', [s.engine_key || '—']),
+          el('td', 'mono', [s.user_email || '—']),
+          el('td', null, [badge(s.agent_name || s.agent_id || 'gemini_enterprise', 'badge-blue')]),
+          el('td', 'mono', [
+            fmtInt(s.turns || 0) + ' (' + fmtInt(s.chat_turns || 0) + ' chat / ' + fmtInt(s.failed_turns || 0) + ' err)'
+          ]),
+          el('td', 'mono', [s.duration_seconds == null ? '—' : s.duration_seconds + 's']),
+          el('td', 'mono', [fmtTokens(s.input_tokens)]),
+          el('td', 'mono', [fmtTokens(s.output_tokens)]),
+          el('td', 'mono', [fmtTokens(s.cached_input_tokens)]),
+          el('td', 'mono', [fmtTokens(s.total_tokens)]),
+          el('td', 'mono', [s.session_end || s.session_start || '—']),
+        ]);
+        tr.style.cursor = 'pointer';
+        tr.title = 'Click to pre-fill CSAT form for session ' + (s.session_id || '');
+        tr.addEventListener('click', function() {
+          const emailIn = document.getElementById('csatEmailInput');
+          const sessIn = document.getElementById('csatSessionInput');
+          if (emailIn && s.user_email && s.user_email !== 'anonymous') emailIn.value = s.user_email;
+          if (sessIn && s.session_id) sessIn.value = s.session_id;
+        });
+        sessBody.appendChild(tr);
+        if (open) {
+          const td = el('td', null, [renderGeSessionTurns(s, turns)]);
+          td.colSpan = 12;
+          td.style.background = 'rgba(37, 99, 235, 0.04)';
+          sessBody.appendChild(el('tr', 'session-turns-row', [td]));
+        }
       });
     }
 

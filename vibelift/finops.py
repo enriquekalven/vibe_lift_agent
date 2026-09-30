@@ -317,3 +317,76 @@ def build_live_finops(fleet: Mapping[str, Any] | None) -> dict[str, Any]:
       'skills_and_mcp': fleet.get('skills_and_mcp') or [],
   }
 
+
+SESSION_TOKEN_KEYS = ('input_tokens', 'output_tokens', 'cached_input_tokens', 'reasoning_tokens', 'total_tokens')
+
+
+def _sum_known(values: list[Any]) -> int | None:
+  """Sum of the measured values; None when no value was measured (never treats unknown as 0)."""
+  known = [int(v) for v in values if v is not None]
+  return sum(known) if known else None
+
+
+def build_session_token_drilldown(
+    sessions: list[Mapping[str, Any]] | None,
+    session_turns: Mapping[str, list[Mapping[str, Any]]] | None,
+) -> dict[str, Any]:
+  """Per-user session token rollup plus a per-session turn-by-turn token dictionary.
+
+  `sessions` are fct_sessions rows (ge_mart.session_from_row) and `session_turns` is
+  {session_key: [turn dicts]} (ge_mart.group_session_turns). Only token counts are returned;
+  prompt and response text are never read.
+  """
+  sessions = [s for s in (sessions or []) if isinstance(s, Mapping)]
+  session_turns = session_turns if isinstance(session_turns, Mapping) else {}
+
+  by_session: dict[str, dict[str, Any]] = {}
+  users: dict[str, dict[str, Any]] = {}
+  for s in sessions:
+    key = str(s.get('session_key') or f"{s.get('engine_key') or ''}|{s.get('session_id') or ''}")
+    turns = [dict(t) for t in session_turns.get(key) or [] if isinstance(t, Mapping)]
+    turn_count = int(s.get('turns') or 0)
+    by_session[key] = {
+        'session_id': s.get('session_id'),
+        'engine_key': s.get('engine_key'),
+        'user_email': s.get('user_email'),
+        'agent_name': s.get('agent_name'),
+        'session_start': s.get('session_start'),
+        'session_end': s.get('session_end'),
+        'turns': turn_count,
+        **{k: s.get(k) for k in SESSION_TOKEN_KEYS},
+        'turn_detail': turns,
+        'turn_detail_count': len(turns),
+        # False when the per-session cap (100 most recent turns) or the row limit cut turns off.
+        'turn_detail_complete': len(turns) >= turn_count,
+    }
+    email = str(s.get('user_email') or 'unknown')
+    u = users.setdefault(email, {'user_email': email, 'session_keys': [], '_tok': {k: [] for k in SESSION_TOKEN_KEYS},
+                                 'turns': 0, 'last_activity': None})
+    u['session_keys'].append(key)
+    u['turns'] += turn_count
+    for k in SESSION_TOKEN_KEYS:
+      u['_tok'][k].append(s.get(k))
+    end = s.get('session_end') or s.get('session_start')
+    if end and (u['last_activity'] is None or str(end) > str(u['last_activity'])):
+      u['last_activity'] = end
+
+  user_rows: list[dict[str, Any]] = []
+  for u in users.values():
+    tok = u.pop('_tok')
+    row = {**u, 'sessions': len(u['session_keys'])}
+    row.update({k: _sum_known(tok[k]) for k in SESSION_TOKEN_KEYS})
+    row['avg_total_tokens_per_session'] = (
+        round(row['total_tokens'] / row['sessions']) if row['total_tokens'] is not None and row['sessions'] else None)
+    user_rows.append(row)
+  user_rows.sort(key=lambda r: (r['total_tokens'] is None, -(r['total_tokens'] or 0), r['user_email']))
+
+  return {
+      'source': 'vibelift_mart.fct_sessions + vibelift_mart.fct_turns (token counts only; no prompt text)',
+      'session_count': len(by_session),
+      'user_count': len(user_rows),
+      'totals': {k: _sum_known([s.get(k) for s in sessions]) for k in SESSION_TOKEN_KEYS},
+      'users': user_rows,
+      'sessions': by_session,
+  }
+

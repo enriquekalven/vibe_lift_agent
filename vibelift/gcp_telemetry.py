@@ -717,6 +717,8 @@ class GoogleCloudTelemetryService:
         'ge_daily_totals': ge_mart.build_daily_totals_sql(p, days=eff_days),
         'ge_daily_by_app': ge_mart.build_daily_usage_sql(p, days=eff_days),
         'ge_sessions': ge_mart.build_recent_sessions_sql(p, days=eff_days, limit=50),
+        # Turn-by-turn token counts for exactly the 50 sessions above (no prompt text).
+        'ge_session_turns': ge_mart.build_session_turns_sql(p, days=eff_days, session_limit=50),
         'sre_triage_turns': f"""
           SELECT
             insertId AS event_id,
@@ -781,7 +783,7 @@ class GoogleCloudTelemetryService:
     }
 
     raw_results: dict[str, list[dict[str, object]]] = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
       futs = {k: pool.submit(self._query_bigquery_rest, sql, 7.0) for k, sql in queries.items()}
       for k, fut in futs.items():
         try:
@@ -795,13 +797,15 @@ class GoogleCloudTelemetryService:
     ge_daily = [ge_mart.daily_usage_from_row(r) for r in raw_results.get('ge_daily_totals', [])]
     ge_daily_by_app = [ge_mart.daily_usage_from_row(r) for r in raw_results.get('ge_daily_by_app', [])]
     ge_sessions = [ge_mart.session_from_row(r, p) for r in raw_results.get('ge_sessions', [])]
+    ge_session_turns = ge_mart.group_session_turns(raw_results.get('ge_session_turns', []))
     sre_turns = raw_results.get('sre_triage_turns', [])
     cr_reqs = raw_results.get('cloud_run_requests', [])
     vx_audit = raw_results.get('vertex_and_run_audit', [])
     mart = ge_mart.mart_ref(p)
     curated = ge_mart.curated_ref(p)
 
-    if not any((ge_audit, ge_rollup, ge_recent, ge_daily, ge_daily_by_app, ge_sessions, sre_turns, cr_reqs, vx_audit)):
+    if not any((ge_audit, ge_rollup, ge_recent, ge_daily, ge_daily_by_app, ge_sessions, ge_session_turns,
+                sre_turns, cr_reqs, vx_audit)):
       return self._cached_bq_insights
 
     # 1. Usage logs for Tab 5 (aive_logs): GE turns from the mart plus Agent Engine OTel turns.
@@ -1142,6 +1146,8 @@ class GoogleCloudTelemetryService:
         'ge_daily_by_app': ge_daily_by_app,
         # Real conversation sessions from fct_sessions.
         'ge_sessions': ge_sessions,
+        # {session_key: [turns oldest-first]} for the sessions above; token counts only.
+        'ge_session_turns': ge_session_turns,
         # When fct_turns was last rebuilt (None = unknown); the table is a scheduled snapshot.
         'ge_mart_refreshed_at': ge_mart.mart_refreshed_at(ge_daily),
         'ge_assistant_activity_count': sum(int(d.get('chat_turns') or 0) for d in ge_daily[-7:]),

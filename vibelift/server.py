@@ -202,6 +202,7 @@ class VibeLiftRuntimeController:
       user_centric = dict(user_centric)
       if isinstance(live_bq, dict):
         user_centric['ge_sessions'] = list(live_bq.get('ge_sessions') or [])
+        user_centric['ge_session_turns'] = dict(live_bq.get('ge_session_turns') or {})
         user_centric['ge_mart_refreshed_at'] = live_bq.get('ge_mart_refreshed_at')
         user_centric['ge_mart_dataset'] = live_bq.get('ge_mart_dataset')
       if not (isinstance(live_bq, dict) and live_bq.get('power_users_ldap')):
@@ -352,6 +353,20 @@ class VibeLiftRuntimeController:
         'days': billing_export.join_daily_usage_with_cost(list(bq_insights['ge_daily_totals']), cost),
         'by_app_agent_model': list(bq_insights.get('ge_daily_by_app') or []),
         'sessions': list(bq_insights.get('ge_sessions') or []),
+    }
+
+  def get_user_centric_finops_payload(self, window_hours: int | None = None) -> dict[str, object]:
+    """User-centric FinOps plus per-user session token rollup and per-session turn token drilldown."""
+    state = self.get_state_payload(include_fleet=False, window_hours=window_hours)
+    uc = state.get('user_centric') if isinstance(state.get('user_centric'), Mapping) else {}
+    return {
+        'project_id': self.gcp_telemetry.project_id,
+        'mode': 'LIVE_GCP' if self._is_live_gcp() else 'DEMO',
+        'user_centric': uc,
+        'session_drilldown': live_finops.build_session_token_drilldown(
+            uc.get('ge_sessions') if isinstance(uc.get('ge_sessions'), list) else [],
+            uc.get('ge_session_turns') if isinstance(uc.get('ge_session_turns'), Mapping) else {},
+        ),
     }
 
   def refresh_ge_mart(self) -> dict[str, object]:
@@ -700,6 +715,11 @@ class VibeLiftRequestHandler(http.server.BaseHTTPRequestHandler):
     if path == '/api/gcp_telemetry':
       self._send_json(srv.controller.gcp_telemetry.get_telemetry_summary_payload())
       return
+    if path == '/api/user_centric_finops':
+      self._send_json(srv.controller.get_user_centric_finops_payload(
+          window_hours=ge_fleet.parse_window_hours((query.get('window_hours') or [None])[0]),
+      ))
+      return
     if path == '/api/tokenomics_cockpit':
       self._send_json(srv.controller.recompute_finops({}))
       return
@@ -999,6 +1019,10 @@ def register_api_routes(app: object, controller: VibeLiftRuntimeController) -> N
   @app.get('/api/gcp_telemetry')
   def get_gcp_telemetry_endpoint():
     return controller.gcp_telemetry.get_telemetry_summary_payload()
+
+  @app.get('/api/user_centric_finops')
+  def get_user_centric_finops(window_hours: str | None = None):
+    return controller.get_user_centric_finops_payload(window_hours=ge_fleet.parse_window_hours(window_hours))
 
   @app.post('/api/sync_gcp_telemetry')
   def sync_gcp_telemetry_endpoint(payload: dict = fastapi.Body(default={})):

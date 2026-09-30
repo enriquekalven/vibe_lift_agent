@@ -301,7 +301,7 @@ Operators can filter by Gemini Enterprise app, standalone runtimes, and time win
 | `/api/sync_ge_fleet` | `POST` | Triggers an immediate Gemini Enterprise fleet collection (`window_hours`) |
 | `/api/gcp_telemetry` | `GET` | Live Google Cloud Run service metrics and BigQuery triage log telemetry |
 | `/api/sync_gcp_telemetry` | `POST` | Syncs live Google Cloud Logging turns into the active agent profile |
-| `/api/user_centric_finops` | `GET` | Per-user token efficiency, Context Bloat %, Skill/MCP token breakdown, and `@vibelift_telemetry` stream |
+| `/api/user_centric_finops` | `GET` | User-centric FinOps plus `session_drilldown`: per-user session token rollup (sessions, turns, input/output/cached/reasoning/total tokens) and a per-session turn-by-turn token dictionary from `vibelift_mart.fct_sessions` / `fct_turns` (`?window_hours=168`). Token counts only, no prompt text |
 | `/api/select_optimizer` | `POST` | Switches active optimization platform (`platform_id`: `alpha_evolve`, `opus_critic`, `vertex_vizier`, `hybrid_ensemble`) |
 | `/api/decorator_ingest` | `POST` | Ingests a real-time `@vibelift_telemetry` span from an instrumented function or tool |
 | `/api/select_agent` | `POST` | Switches the active optimization agent profile (`agent_id`) |
