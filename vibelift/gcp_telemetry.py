@@ -18,19 +18,19 @@ from typing import Any
 try:
   from google.cloud import logging as gcp_logging
 except ImportError:
-  gcp_logging = None
+  gcp_logging = None  # type: ignore[assignment]
 
 try:
   from google.cloud import bigquery as gcp_bigquery
 except ImportError:
-  gcp_bigquery = None
+  gcp_bigquery = None  # type: ignore[assignment]
 
 try:
   import google.auth as google_auth
   from google.auth.transport.requests import Request as GoogleAuthRequest
 except ImportError:
-  google_auth = None
-  GoogleAuthRequest = None
+  google_auth = None  # type: ignore[assignment]
+  GoogleAuthRequest = None  # type: ignore[assignment,misc]
 
 from vibelift import ge_mart, telemetry
 
@@ -132,11 +132,11 @@ class GoogleCloudTelemetryService:
     self.region = region or get_current_gcp_region()
     self._logging_client = None
     self._bigquery_client = None
-    self._credentials = None
-    self._cached_services: list[dict[str, object]] | None = None
-    self._cached_support_events: list[dict[str, object]] | None = None
+    self._credentials: Any = None
+    self._cached_services: list[dict[str, Any]] | None = None
+    self._cached_support_events: list[dict[str, Any]] | None = None
     self._cached_live_turns: list[telemetry.TurnUsageLog] | None = None
-    self._cached_bq_insights: dict[str, object] | None = None
+    self._cached_bq_insights: dict[str, Any] | None = None
     self._cached_bq_insights_ts: float = 0.0
     self._cli_token: str | None = None
     self._cli_token_ts: float = 0.0
@@ -203,7 +203,7 @@ class GoogleCloudTelemetryService:
       self,
       sql: str,
       timeout_s: float = 8.0,
-  ) -> list[dict[str, object]]:
+  ) -> list[dict[str, Any]]:
     """Executes a read-only BigQuery SQL query via the BigQuery REST API using ADC."""
     if not self.project_id or self.project_id in (UNCONFIGURED_PROJECT_ID, 'test-project'):
       return []
@@ -233,7 +233,7 @@ class GoogleCloudTelemetryService:
       if not res or 'rows' not in res:
         return []
       fields = [f.get('name', f'col_{i}') for i, f in enumerate(res.get('schema', {}).get('fields', []))]
-      out: list[dict[str, object]] = []
+      out: list[dict[str, Any]] = []
       for row in res.get('rows', []):
         vals = [cell.get('v') for cell in row.get('f', [])]
         out.append(dict(zip(fields, vals, strict=False)))
@@ -246,7 +246,7 @@ class GoogleCloudTelemetryService:
       self,
       force_refresh: bool = False,
       non_blocking: bool = False,
-  ) -> list[dict[str, object]]:
+  ) -> list[dict[str, Any]]:
     """Describes the allowlisted Cloud Run services via the Cloud Run Admin API.
 
     Only services returned by get_monitored_service_names() are reported. When the
@@ -289,9 +289,9 @@ class GoogleCloudTelemetryService:
       ]
 
     token = self._get_access_token()
-    discovered: list[dict[str, object]] = []
+    discovered: list[dict[str, Any]] = []
     for name in get_monitored_service_names():
-      entry: dict[str, object] = {
+      entry: dict[str, Any] = {
           'service_name': name,
           'url': '',
           'region': self.region,
@@ -366,7 +366,7 @@ class GoogleCloudTelemetryService:
       limit: int = 15,
       force_refresh: bool = False,
       non_blocking: bool = False,
-  ) -> list[dict[str, object]]:
+  ) -> list[dict[str, Any]]:
     """Fetches real Gemini Enterprise audit & user activity events from BigQuery."""
     if self._cached_support_events is not None and not force_refresh:
       return self._cached_support_events
@@ -394,7 +394,7 @@ class GoogleCloudTelemetryService:
     self._cached_support_events = events
     return events
 
-  def fetch_bigquery_fleet_summary(self, hours_ago: int = 168) -> dict[str, object] | None:
+  def fetch_bigquery_fleet_summary(self, hours_ago: int = 168) -> dict[str, Any] | None:
     """Per agent/model usage from vibelift_mart.agg_daily_usage (tokens None when not logged).
 
     Spend is not modelled here: billed cost comes only from the Cloud Billing export.
@@ -406,7 +406,7 @@ class GoogleCloudTelemetryService:
     rows = [ge_mart.daily_usage_from_row(r) for r in self._query_bigquery_rest(sql, timeout_s=6.0)]
     if not rows:
       return None
-    groups: dict[tuple[str | None, str | None], dict[str, object]] = {}
+    groups: dict[tuple[str | None, str | None], dict[str, Any]] = {}
     for r in rows:
       g = groups.setdefault((r.get('agent_name'), r.get('model_name')), {
           'agent_id': r.get('agent_name'),
@@ -640,7 +640,7 @@ class GoogleCloudTelemetryService:
     self._cached_live_turns = turns
     return turns
 
-  def refresh_ge_mart_turns(self) -> dict[str, object]:
+  def refresh_ge_mart_turns(self) -> dict[str, Any]:
     """Rebuilds the materialized vibelift_mart.fct_turns table from v_fct_turns via BigQuery REST."""
     if not self.project_id or self.project_id in (UNCONFIGURED_PROJECT_ID, 'test-project'):
       return {'status': 'OFFLINE', 'message': 'No live Google Cloud project configured.'}
@@ -669,7 +669,7 @@ class GoogleCloudTelemetryService:
       force_refresh: bool = False,
       non_blocking: bool = False,
       window_hours: int | None = None,
-  ) -> dict[str, object] | None:
+  ) -> dict[str, Any] | None:
     """Queries real BigQuery telemetry datasets in project-maui for user, session, tool, and turn grounding."""
     import concurrent.futures
     import threading
@@ -782,7 +782,7 @@ class GoogleCloudTelemetryService:
         """,
     }
 
-    raw_results: dict[str, list[dict[str, object]]] = {}
+    raw_results: dict[str, list[dict[str, Any]]] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
       futs = {k: pool.submit(self._query_bigquery_rest, sql, 7.0) for k, sql in queries.items()}
       for k, fut in futs.items():
@@ -810,8 +810,8 @@ class GoogleCloudTelemetryService:
 
     # 1. Usage logs for Tab 5 (aive_logs): GE turns from the mart plus Agent Engine OTel turns.
     # No prompt text, latency or ratings exist in these sources, so none are reported.
-    live_usage_logs: list[dict[str, object]] = [ge_mart.usage_log_from_row(r, p) for r in ge_recent]
-    live_ratings_logs: list[dict[str, object]] = []
+    live_usage_logs: list[dict[str, Any]] = [ge_mart.usage_log_from_row(r, p) for r in ge_recent]
+    live_ratings_logs: list[dict[str, Any]] = []
 
     for idx, row in enumerate(sre_turns[:15]):
       uid = str(row.get('user_id') or '') or None
@@ -985,7 +985,7 @@ class GoogleCloudTelemetryService:
         st['last_seen'] = u['last_ts']
 
 
-    live_power_users: list[dict[str, object]] = []
+    live_power_users: list[dict[str, Any]] = []
     for pr, st in sorted(
         principal_stats.items(),
         key=lambda kv: (kv[1]['is_service_account'], -(kv[1]['interactive_sessions'] + kv[1]['api_calls'])),
@@ -1038,8 +1038,8 @@ class GoogleCloudTelemetryService:
       })
 
     # 3. Build real skill_mcp_breakdown & decorator_events from sre_triage tools, ds_ge_audit_raw, and Cloud Run requests
-    live_skills_mcp: list[dict[str, object]] = []
-    live_decorator_events: list[dict[str, object]] = []
+    live_skills_mcp: list[dict[str, Any]] = []
+    live_decorator_events: list[dict[str, Any]] = []
 
     total_sre_in = sum(int(r.get('input_tokens') or 0) for r in sre_turns)
     total_sre_turns = len(sre_turns)
@@ -1126,7 +1126,7 @@ class GoogleCloudTelemetryService:
           'monthly_saved_usd': None,
       })
 
-    insights: dict[str, object] = {
+    insights: dict[str, Any] = {
         'project_id': p,
         'fetched_at_utc': datetime.datetime.now(datetime.UTC).isoformat(),
         'queried_tables': [
@@ -1176,7 +1176,7 @@ class GoogleCloudTelemetryService:
     self._cached_bq_insights_hours = eff_hours
     return insights
 
-  def get_telemetry_summary_payload(self) -> dict[str, object]:
+  def get_telemetry_summary_payload(self) -> dict[str, Any]:
     """Aggregates project info, deployed services, BigQuery triage, and Cloud Logging turns."""
     services = self.list_cloud_run_agent_services()
     support_events = self.fetch_gemini_enterprise_support_telemetry(limit=10)
@@ -1207,7 +1207,7 @@ class GoogleCloudTelemetryService:
         'timestamp_utc': datetime.datetime.now(datetime.UTC).isoformat(),
     }
 
-  def get_cloud_telemetry_summary(self) -> dict[str, object]:
+  def get_cloud_telemetry_summary(self) -> dict[str, Any]:
     """Alias for get_telemetry_summary_payload."""
     return self.get_telemetry_summary_payload()
 

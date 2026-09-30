@@ -49,7 +49,8 @@ jobs:
 
       - name: Secret & credential hygiene check
         run: |
-          if git grep -nE '(PRIVATE KEY-----|AIza[0-9A-Za-z_-]{35}|ya29\.[0-9A-Za-z_-]+)' -- ':!tests/*' ; then
+          # `-{5}` rather than five literal dashes so this pattern does not match its own workflow file.
+          if git grep -nE '(PRIVATE KEY-{5}|AIza[0-9A-Za-z_-]{35}|ya29\.[0-9A-Za-z_-]+)' -- ':!tests/*' ; then
             echo "ERROR: Potential secret or credential literal detected in repository!"
             exit 1
           fi
@@ -89,18 +90,22 @@ jobs:
           GOOGLE_CLOUD_PROJECT: test-project
         run: |
           python - <<'PY'
-          import vibelift.server as srv
-          from vibelift.mcp_server import handle_mcp_jsonrpc
+          import json
 
+          import vibelift.server as srv
+          from vibelift import mcp_server
+
+          ctrl = srv._global_controller
           for hrs in (1, 6, 24, 168, 720, 2160, 4320, 8760):
-              state = srv.get_state_payload(window_hours=hrs)
+              state = ctrl.get_state_payload(window_hours=hrs)
               assert state["ge_fleet"]["window_hours"] == hrs, f"Expected {hrs}, got {state['ge_fleet']['window_hours']}"
 
-          rpc = handle_mcp_jsonrpc(
+          code, _, body = mcp_server.handle_jsonrpc_sync(
               {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                "params": {"name": "query_ge_agent_fleet", "arguments": {"window_hours": 8760}}},
-              srv.STATE,
           )
-          assert not rpc["result"].get("isError"), rpc
+          rpc = json.loads(body)
+          assert code == 200 and "result" in rpc and not rpc["result"].get("isError"), rpc
+          assert rpc["result"]["structuredContent"]["window_hours"] == 8760, rpc["result"]["structuredContent"].get("window_hours")
           print("Smoke check passed for all 8 date ranges (1h, 6h, 24h, 7d, 1m, 3m, 6m, 1y) and MCP JSON-RPC!")
           PY

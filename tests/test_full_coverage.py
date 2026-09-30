@@ -4,6 +4,7 @@ import asyncio
 import io
 import json
 import os
+import subprocess
 import threading
 import time
 import unittest
@@ -727,6 +728,12 @@ class TestServerAndHttpHandlerFullCoverage(unittest.TestCase):
         t = threading.Thread(target=httpd.serve_forever, daemon=True)
         t.start()
         base = f'http://127.0.0.1:{port}'
+        # Keep the test hermetic: without this, the token helpers shell out to the gcloud CLI
+        # (installed but unauthenticated on CI runners), which can take longer than the client timeout.
+        offline_cli = subprocess.CompletedProcess(args=[], returncode=1, stdout='', stderr='offline')
+        no_cli = mock.patch('subprocess.run', return_value=offline_cli)
+        no_cli.start()
+        self.addCleanup(no_cli.stop)
         try:
             for path in (
                 '/.well-known/agent-card.json',
@@ -735,11 +742,11 @@ class TestServerAndHttpHandlerFullCoverage(unittest.TestCase):
                 '/api/validate_telemetry?run_llm_judge=false',
                 '/api/sme_eval?fresh=true',
             ):
-                with urllib.request.urlopen(f'{base}{path}', timeout=5) as resp:
+                with urllib.request.urlopen(f'{base}{path}', timeout=30) as resp:
                     self.assertEqual(resp.status, 200)
 
             with self.assertRaises(urllib.error.HTTPError) as ctx:
-                urllib.request.urlopen(f'{base}/nonexistent', timeout=5)
+                urllib.request.urlopen(f'{base}/nonexistent', timeout=30)
             self.assertEqual(ctx.exception.code, 404)
 
             post_routes = [
@@ -765,7 +772,7 @@ class TestServerAndHttpHandlerFullCoverage(unittest.TestCase):
                     headers={'Content-Type': 'application/json'},
                     method='POST',
                 )
-                with urllib.request.urlopen(req, timeout=5) as resp:
+                with urllib.request.urlopen(req, timeout=30) as resp:
                     self.assertEqual(resp.status, 200)
         finally:
             httpd.shutdown()

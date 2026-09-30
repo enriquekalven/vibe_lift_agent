@@ -12,7 +12,8 @@ payload carries None, never a default.
 
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 CURATED_DATASET_ENV = 'VIBELIFT_GE_CURATED_DATASET'
 MART_DATASET_ENV = 'VIBELIFT_GE_MART_DATASET'
@@ -50,7 +51,7 @@ def _check_project(project_id: str) -> None:
 
 def _clamp(value: object, low: int, high: int) -> int:
   try:
-    n = int(value)  # type: ignore[arg-type]
+    n = int(value)  # type: ignore[call-overload]
   except (TypeError, ValueError):
     n = low
   return max(low, min(n, high))
@@ -299,7 +300,7 @@ def _text(value: object) -> str | None:
   return s or None
 
 
-def support_event_from_row(row: Mapping[str, object], project_id: str) -> dict[str, object]:
+def support_event_from_row(row: Mapping[str, Any], project_id: str) -> dict[str, Any]:
   """Maps a fct_turns row to the dashboard's support-event dict (same keys as before)."""
   source_table = f'{mart_ref(project_id)}.fct_turns'
   turn_id = str(row.get('turn_id') or '')
@@ -352,7 +353,7 @@ def support_event_from_row(row: Mapping[str, object], project_id: str) -> dict[s
   }
 
 
-def usage_log_from_row(row: Mapping[str, object], project_id: str) -> dict[str, object]:
+def usage_log_from_row(row: Mapping[str, Any], project_id: str) -> dict[str, Any]:
   """Maps a fct_turns row to an aive usage-log dict. No prompt text, no invented latency or rating."""
   source_table = f'{mart_ref(project_id)}.fct_turns'
   turn_id = str(row.get('turn_id') or '')
@@ -390,14 +391,14 @@ def usage_log_from_row(row: Mapping[str, object], project_id: str) -> dict[str, 
   }
 
 
-def mart_refreshed_at(rows: list[Mapping[str, object]]) -> str | None:
+def mart_refreshed_at(rows: Sequence[Mapping[str, Any]]) -> str | None:
   """Latest fct_turns rebuild time seen in the rows (None when unknown, e.g. no rows)."""
   stamps = [str(r['refreshed_at']) for r in rows if r.get('refreshed_at')]
   return max(stamps) if stamps else None
 
 
-def daily_usage_from_row(row: Mapping[str, object]) -> dict[str, object]:
-  out: dict[str, object] = {'day': str(row.get('day') or '')}
+def daily_usage_from_row(row: Mapping[str, Any]) -> dict[str, Any]:
+  out: dict[str, Any] = {'day': str(row.get('day') or '')}
   for key in ('engine_key', 'agent_name', 'model_name', 'refreshed_at'):
     if key in row:
       out[key] = _text(row.get(key))
@@ -411,7 +412,7 @@ def daily_usage_from_row(row: Mapping[str, object]) -> dict[str, object]:
   return out
 
 
-def session_from_row(row: Mapping[str, object], project_id: str) -> dict[str, object]:
+def session_from_row(row: Mapping[str, Any], project_id: str) -> dict[str, Any]:
   """Maps a fct_sessions row to a dashboard session dict. Unknown token/call values remain None."""
   return {
       'session_id': str(row.get('session_id') or ''),
@@ -447,7 +448,7 @@ def session_key(engine_key: object, session_id: object) -> str:
   return f"{_text(engine_key) or ''}|{_text(session_id) or ''}"
 
 
-def session_turn_from_row(row: Mapping[str, object]) -> dict[str, object]:
+def session_turn_from_row(row: Mapping[str, Any]) -> dict[str, Any]:
   """Maps a build_session_turns_sql row to a token-only turn dict (unknown counts stay None)."""
   return {
       'turn_id': str(row.get('turn_id') or ''),
@@ -468,9 +469,9 @@ def session_turn_from_row(row: Mapping[str, object]) -> dict[str, object]:
   }
 
 
-def group_session_turns(rows: list[Mapping[str, object]]) -> dict[str, list[dict[str, object]]]:
+def group_session_turns(rows: Sequence[Mapping[str, Any]]) -> dict[str, list[dict[str, Any]]]:
   """Groups session-turn rows by session_key(), keeping the row order (oldest turn first)."""
-  grouped: dict[str, list[dict[str, object]]] = {}
+  grouped: dict[str, list[dict[str, Any]]] = {}
   for row in rows:
     if not _text(row.get('session_id')):
       continue

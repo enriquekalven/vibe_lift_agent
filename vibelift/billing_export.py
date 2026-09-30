@@ -17,6 +17,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,7 @@ def build_billing_sql(table: str, project_id: str, window_days: int = WINDOW_DAY
   """
 
 
-def summarize_rows(rows: list[dict[str, object]], table: str, window_days: int = WINDOW_DAYS) -> dict[str, object]:
+def summarize_rows(rows: list[dict[str, Any]], table: str, window_days: int = WINDOW_DAYS) -> dict[str, Any]:
   """Turns BigQuery rows into the dashboard's billing payload."""
 
   def _f(v: object) -> float:
@@ -75,7 +76,7 @@ def summarize_rows(rows: list[dict[str, object]], table: str, window_days: int =
     except (TypeError, ValueError):
       return 0.0
 
-  ledger = []
+  ledger: list[dict[str, Any]] = []
   for r in rows:
     gross = _f(r.get('gross_usd'))
     credits = _f(r.get('credits_usd'))  # negative in the export
@@ -119,7 +120,7 @@ def summarize_rows(rows: list[dict[str, object]], table: str, window_days: int =
   }
 
 
-def not_connected_payload(message: str | None = None, status: str = 'NOT_CONNECTED', table: str | None = None) -> dict[str, object]:
+def not_connected_payload(message: str | None = None, status: str = 'NOT_CONNECTED', table: str | None = None) -> dict[str, Any]:
   return {
       'status': status,
       'source': 'Cloud Billing export (BigQuery)',
@@ -141,15 +142,15 @@ class BillingExportReader:
   def __init__(self, project_id: str, token_provider: Callable[[], str | None]):
     self.project_id = project_id
     self._token_provider = token_provider
-    self._cache: dict[str, object] | None = None
+    self._cache: dict[str, Any] | None = None
     self._cache_ts = 0.0
     self._lock = threading.Lock()
     self._inflight = False
-    self._daily_cache: dict[str, object] | None = None
+    self._daily_cache: dict[str, Any] | None = None
     self._daily_cache_ts = 0.0
     self._daily_inflight = False
 
-  def get(self, non_blocking: bool = False) -> dict[str, object]:
+  def get(self, non_blocking: bool = False) -> dict[str, Any]:
     table = configured_table()
     if not table:
       return not_connected_payload()
@@ -166,7 +167,7 @@ class BillingExportReader:
     self._refresh(table)
     return self._cache or not_connected_payload(status='ERROR', table=table)
 
-  def get_daily_ai_costs(self, non_blocking: bool = False, window_days: int = WINDOW_DAYS) -> dict[str, object]:
+  def get_daily_ai_costs(self, non_blocking: bool = False, window_days: int = WINDOW_DAYS) -> dict[str, Any]:
     """Per-day billed AI spend for this project (see summarize_daily_cost_rows)."""
     table = configured_table()
     if not table:
@@ -209,13 +210,13 @@ class BillingExportReader:
       self._daily_cache_ts = time.monotonic()
       self._daily_inflight = False
 
-  def _query(self, table: str) -> dict[str, object]:
+  def _query(self, table: str) -> dict[str, Any]:
     rows, error = self._run(build_billing_sql(table, self.project_id))
     if error:
       return not_connected_payload(error, status='ERROR', table=table)
     return summarize_rows(rows, table)
 
-  def _run(self, sql: str) -> tuple[list[dict[str, object]], str | None]:
+  def _run(self, sql: str) -> tuple[list[dict[str, Any]], str | None]:
     """Runs a query over REST. Returns (rows, None) or ([], error message)."""
     token = self._token_provider()
     if not token:
@@ -288,7 +289,7 @@ def build_daily_cost_sql(table: str, project_id: str, window_days: int = WINDOW_
 
 
 def daily_cost_not_connected(message: str | None = None, status: str = 'NOT_CONNECTED',
-                             table: str | None = None) -> dict[str, object]:
+                             table: str | None = None) -> dict[str, Any]:
   return {
       'status': status,
       'source': 'Cloud Billing export (BigQuery)',
@@ -300,10 +301,10 @@ def daily_cost_not_connected(message: str | None = None, status: str = 'NOT_CONN
   }
 
 
-def summarize_daily_cost_rows(rows: list[dict[str, object]], table: str,
-                              window_days: int = WINDOW_DAYS) -> dict[str, object]:
+def summarize_daily_cost_rows(rows: list[dict[str, Any]], table: str,
+                              window_days: int = WINDOW_DAYS) -> dict[str, Any]:
   """Collapses per-day, per-service rows into per-day AI and total net spend."""
-  by_day: dict[str, dict[str, object]] = {}
+  by_day: dict[str, dict[str, Any]] = {}
   currency = None
   for r in rows:
     day = str(r.get('day') or '')
@@ -335,8 +336,8 @@ def summarize_daily_cost_rows(rows: list[dict[str, object]], table: str,
   }
 
 
-def join_daily_usage_with_cost(daily_usage: list[dict[str, object]],
-                               daily_cost: dict[str, object]) -> list[dict[str, object]]:
+def join_daily_usage_with_cost(daily_usage: list[dict[str, Any]],
+                               daily_cost: dict[str, Any]) -> list[dict[str, Any]]:
   """Joins per-day usage (from the GE mart) with per-day billed AI spend.
 
   Cost is project-level AI spend (every AI service in the project, not only Gemini Enterprise).

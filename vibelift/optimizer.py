@@ -3,15 +3,18 @@
 import ast
 import dataclasses
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from typing import Any
+
+from vibelift.jsonutil import as_list, as_mapping
 
 
 def scan_python_code_for_finops_findings(
     source_code: str,
     filename: str = 'agent.py',
-) -> list[dict[str, object]]:
+) -> list[dict[str, Any]]:
   """Parses Python source with `ast` to detect FIN-01..FIN-05 FinOps anti-patterns (AgentOps Cockpit)."""
-  findings: list[dict[str, object]] = []
+  findings: list[dict[str, Any]] = []
   try:
     tree = ast.parse(source_code or '')
   except SyntaxError:
@@ -93,7 +96,7 @@ class OptimizationParameter:
   weight_pct: int
   status: str
 
-  def to_dict(self) -> dict[str, object]:
+  def to_dict(self) -> dict[str, Any]:
     """Serializes parameter state for the UI."""
     if self.baseline_value != 0:
       raw_delta = (
@@ -130,7 +133,7 @@ class TimeSeriesPoint:
   error_rate_pct: float
   event_marker: str
 
-  def to_dict(self) -> dict[str, object]:
+  def to_dict(self) -> dict[str, Any]:
     """Serializes time-series snapshot to dict."""
     return {
         'timestamp_label': self.timestamp_label,
@@ -158,7 +161,7 @@ class AlphaEvolveActionRecord:
   diff_snippet: str
   status: str
 
-  def to_dict(self) -> dict[str, object]:
+  def to_dict(self) -> dict[str, Any]:
     """Serializes action record to dict."""
     return {
         'generation': self.generation,
@@ -187,7 +190,7 @@ class DemoAgentProfile:
   timeline: list[TimeSeriesPoint]
   actions: list[AlphaEvolveActionRecord]
 
-  def to_dict(self) -> dict[str, object]:
+  def to_dict(self) -> dict[str, Any]:
     """Serializes full agent optimization profile."""
     return {
         'agent_id': self.agent_id,
@@ -806,14 +809,14 @@ def _get_param_val(profile: DemoAgentProfile | None, key: str, default: float) -
 
 
 def build_live_app_cohorts(
-    users: list[Mapping[str, object]], live_fleet: Mapping[str, object]
-) -> list[dict[str, object]]:
+    users: Sequence[Mapping[str, Any]], live_fleet: Mapping[str, Any]
+) -> list[dict[str, Any]]:
   """Groups observed principals by Gemini Enterprise app (from audit-log resource names)."""
   names = {}
   for eng in (live_fleet.get('engines') or []):
     if isinstance(eng, Mapping) and eng.get('engine_key'):
       names[str(eng['engine_key'])] = str(eng.get('display_name') or eng.get('engine_id') or eng['engine_key'])
-  groups: dict[str, dict[str, object]] = {}
+  groups: dict[str, dict[str, Any]] = {}
   for u in users:
     if not isinstance(u, Mapping):
       continue
@@ -837,15 +840,15 @@ def build_live_app_cohorts(
   return sorted(out, key=lambda c: -int(c['sessions_7d']))
 
 
-def build_live_runaway_alerts(live_fleet: Mapping[str, object]) -> list[dict[str, object]]:
+def build_live_runaway_alerts(live_fleet: Mapping[str, Any]) -> list[dict[str, Any]]:
   """Derives alerts from observed fleet error rates and model cache usage. No fixed thresholds on invented data."""
-  alerts: list[dict[str, object]] = []
+  alerts: list[dict[str, Any]] = []
   window = live_fleet.get('window_hours') or 24
   seen_runtimes = set()
   for a in (live_fleet.get('agents') or []):
     if not isinstance(a, Mapping):
       continue
-    m = a.get('metrics') if isinstance(a.get('metrics'), Mapping) else {}
+    m = as_mapping(a.get('metrics'))
     req = int(m.get('requests') or 0)
     if req < 10:
       continue
@@ -882,7 +885,7 @@ def build_live_runaway_alerts(live_fleet: Mapping[str, object]) -> list[dict[str
           'status': 'OPEN',
           'source': 'Cloud Monitoring request_count by response_code_class',
       })
-  mu = live_fleet.get('model_usage') if isinstance(live_fleet.get('model_usage'), Mapping) else {}
+  mu = as_mapping(live_fleet.get('model_usage'))
   for mdl in (mu.get('models') or []):
     if not isinstance(mdl, Mapping):
       continue
@@ -903,9 +906,9 @@ def build_live_runaway_alerts(live_fleet: Mapping[str, object]) -> list[dict[str
 
 def build_user_centric_analytics(
     agents: dict[str, DemoAgentProfile] | None = None,
-    live_fleet: Mapping[str, object] | None = None,
-    live_bq: Mapping[str, object] | None = None,
-) -> dict[str, object]:
+    live_fleet: Mapping[str, Any] | None = None,
+    live_bq: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
   """Builds the User-Centric Token Spending, Savings, Skill/MCP & Governance view (Sep 22 Sync)."""
   it_agent = agents.get('it_service_desk') if agents else None
   vl_agent = agents.get('vibelift_analytics') if agents else None
@@ -927,7 +930,7 @@ def build_user_centric_analytics(
   vl_savings = int(vl_agent.monthly_savings_usd) if vl_agent else 22400
   dr_savings = int(dr_agent.monthly_savings_usd) if dr_agent else 9650
 
-  cohorts = [
+  cohorts: list[dict[str, Any]] = [
       {
           'cohort': 'Enterprise IT Support & Helpdesk Analysts',
           'primary_agent': 'IT Service Desk',
@@ -1015,7 +1018,7 @@ def build_user_centric_analytics(
       },
   ]
 
-  power_users_ldap = [
+  power_users_ldap: list[dict[str, Any]] = [
       {
           'user_ldap': 'enriq',
           'user_email': 'enriq@google.com',
@@ -1103,7 +1106,7 @@ def build_user_centric_analytics(
       },
   ]
 
-  token_category_breakdown = {
+  token_category_breakdown: dict[str, Any] = {
       'foreground_prompt_tokens_m': 184.2,
       'cached_prefix_tokens_m': 166.8,
       'foreground_output_tokens_m': 19.4,
@@ -1156,9 +1159,10 @@ def build_user_centric_analytics(
     live_skills = live_bq.get('skills_mcp')
     if isinstance(live_skills, list) and live_skills:
       skill_mcp_breakdown = list(live_skills)
-    fleet_totals = live_fleet.get('totals') if isinstance(live_fleet, Mapping) and isinstance(live_fleet.get('totals'), Mapping) else {}
+    fleet_totals = as_mapping(live_fleet.get('totals')) if isinstance(live_fleet, Mapping) else {}
     # Take prompt, output and cached tokens from ONE source so the cache-hit ratio never divides one
     # source's cached count by another source's prompt count (and categories are never mixed).
+    token_src: dict[str, Any]
     if live_bq.get('otel_total_prompt_tokens') is not None:
       token_src = {'in': live_bq.get('otel_total_prompt_tokens'), 'out': live_bq.get('otel_total_output_tokens'),
                    'cached': live_bq.get('otel_total_cached_tokens')}
@@ -1237,12 +1241,12 @@ def build_user_centric_analytics(
 
 
 def build_otel_5_layer_catalog(
-    live_fleet: Mapping[str, object] | None = None,
-    live_bq: Mapping[str, object] | None = None,
-) -> dict[str, object]:
+    live_fleet: Mapping[str, Any] | None = None,
+    live_bq: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
   """Builds Russell Myers' 5-Layer Standardized Parameter Catalog (26 OTel/ADK/A2A/A2UI metrics) + Watch-Outs."""
   del live_bq
-  layers = [
+  layers: list[dict[str, Any]] = [
       {
           'layer_id': 'layer_1_infra',
           'layer_number': 1,
@@ -1666,15 +1670,15 @@ class VibeLiftAlphaEvolveOptimizer:
     self._agents: dict[str, DemoAgentProfile] = _build_default_agents()
     self.selected_agent_id: str = 'it_service_desk'
     self.selected_optimizer_platform: str = 'alpha_evolve'
-    self._live_fleet_payload: dict[str, object] | None = None
-    self._live_bq_insights: dict[str, object] | None = None
+    self._live_fleet_payload: dict[str, Any] | None = None
+    self._live_bq_insights: dict[str, Any] | None = None
 
   @property
   def active_agent(self) -> DemoAgentProfile:
     """Returns the currently selected DemoAgentProfile."""
     return self._agents[self.selected_agent_id]
 
-  def get_user_centric_payload(self) -> dict[str, object]:
+  def get_user_centric_payload(self) -> dict[str, Any]:
     """Returns user-centric FinOps analytics synced with the live agent profiles."""
     return build_user_centric_analytics(
         self._agents,
@@ -1682,14 +1686,14 @@ class VibeLiftAlphaEvolveOptimizer:
         live_bq=self._live_bq_insights,
     )
 
-  def get_otel_catalog_payload(self) -> dict[str, object]:
+  def get_otel_catalog_payload(self) -> dict[str, Any]:
     """Returns the 5-layer OTel/ADK/A2A/A2UI parameter catalog, watch-out alarms, and TCO summary."""
     return build_otel_5_layer_catalog(
         live_fleet=self._live_fleet_payload,
         live_bq=self._live_bq_insights,
     )
 
-  def execute_nl2sql_telemetry_query(self, question: str) -> dict[str, object]:
+  def execute_nl2sql_telemetry_query(self, question: str) -> dict[str, Any]:
     """Translates a natural-language telemetry/FinOps question into BigQuery SQL and live results."""
     q_clean = (question or '').strip()
     q_lower = q_clean.lower()
@@ -1725,7 +1729,7 @@ class VibeLiftAlphaEvolveOptimizer:
           'GROUP BY agent_name, task_type\n'
           'ORDER BY avg_thinking_tokens DESC;'
       )
-      alerts = uc.get('runaway_agent_alerts') if isinstance(uc.get('runaway_agent_alerts'), list) else []
+      alerts = as_list(uc.get('runaway_agent_alerts'))
       rows = [
           {
               'agent_name': a['agent_name'],
@@ -1813,7 +1817,7 @@ class VibeLiftAlphaEvolveOptimizer:
           'ORDER BY interactions_7d DESC\n'
           'LIMIT 10;'
       )
-      users = uc.get('power_users_ldap') if isinstance(uc.get('power_users_ldap'), list) else []
+      users = as_list(uc.get('power_users_ldap'))
       rows = [
           {
               'user_ldap': u.get('user_ldap', '—'),
@@ -1865,7 +1869,7 @@ class VibeLiftAlphaEvolveOptimizer:
           'ORDER BY layer_number ASC, weight_pct DESC;'
       )
       catalog = self.get_otel_catalog_payload()
-      layers = catalog.get('layers') if isinstance(catalog.get('layers'), list) else []
+      layers = as_list(catalog.get('layers'))
       rows = []
       for layer in layers:
         for p in (layer.get('parameters') or [])[:2]:
@@ -1939,7 +1943,7 @@ class VibeLiftAlphaEvolveOptimizer:
         'executive_summary': summary_msg,
     }
 
-  def get_finops_billing_reconciliation_payload(self) -> dict[str, object]:
+  def get_finops_billing_reconciliation_payload(self) -> dict[str, Any]:
     """Builds Dual-Ledger Cloud Billing SKU Reconciliation, North-Star Unit Economics, and GSU/CUD Advisor."""
     uc = self.get_user_centric_payload()
     active = self.active_agent
@@ -2083,8 +2087,8 @@ class VibeLiftAlphaEvolveOptimizer:
 
   def get_tokenomics_and_cockpit_finops_payload(
       self,
-      assumptions: Mapping[str, object] | None = None,
-  ) -> dict[str, object]:
+      assumptions: Mapping[str, Any] | None = None,
+  ) -> dict[str, Any]:
     """Builds the Tokenomics (Decks 1 & 2) + AgentOps Cockpit FinOps payload.
 
     Implements:
@@ -2134,7 +2138,7 @@ class VibeLiftAlphaEvolveOptimizer:
     else:
       hitl_ticket_cost_usd = 12.50
     task_scale = (monthly_tasks / 129500.0) if 'monthly_tasks' in raw else 1.0
-    cpo_specs = [
+    cpo_specs: list[dict[str, Any]] = [
         {
             'agent_id': 'it_service_desk',
             'display_name': 'IT Service Desk',
@@ -2235,7 +2239,7 @@ class VibeLiftAlphaEvolveOptimizer:
     # 2. Token-to-Spend Drift Reconciliation across 5 Drift Drivers (Deck 2 Page 29)
     # Reconciles naive single-turn token estimate vs unoptimized billed spend, and shows post-remediation drift
     expected_naive_token_spend_usd = 420.00
-    drift_drivers = [
+    drift_drivers: list[dict[str, Any]] = [
         {
             'driver_id': 'D1',
             'name': 'Agentic Loop & Sub-Agent Delegation Overhead',
@@ -2716,7 +2720,7 @@ class VibeLiftAlphaEvolveOptimizer:
 
     # 8. AgentOps Cockpit Static/Runtime FinOps Code Audit (FIN-01..FIN-05), Step-by-Step Waterfall & @cost_guard
     # Ported from /Users/enriq/Documents/git/agent-ops-cockpit/src/agent_ops_cockpit/ops/auditors/finops.py & finops_roi.py
-    cockpit_findings = [
+    cockpit_findings: list[dict[str, Any]] = [
         {
             'rule_id': 'FIN-01',
             'title': 'Sequential LLM Inference Loop in Batch Path',
@@ -2828,7 +2832,7 @@ class VibeLiftAlphaEvolveOptimizer:
       running_cost = next_cost
 
     # @cost_guard(budget_limit_usd) Pre-Flight Turn Enforcer & Cross-Pillar OPEX_IMPACT_MAP
-    preflight_simulations = [
+    preflight_simulations: list[dict[str, Any]] = [
         {
             'call_id': 'TURN-PF-101',
             'agent_and_handler': 'it_service_desk.resolve_vpn_ticket',
@@ -3018,9 +3022,9 @@ class VibeLiftAlphaEvolveOptimizer:
         },
     }
 
-  def get_sme_persona_playbooks(self) -> dict[str, object]:
+  def get_sme_persona_playbooks(self) -> dict[str, Any]:
     """Returns role-tailored SME persona lenses, navigation targets, KPIs, and usability scores."""
-    personas = [
+    personas: list[dict[str, Any]] = [
         {
             'persona_id': 'finops_lead',
             'role_title': 'FinOps Lead / Cloud Economist',
@@ -3177,7 +3181,7 @@ class VibeLiftAlphaEvolveOptimizer:
       thinking_budget_tok: int = 1024,
       history_window_turns: int = 2,
       traffic_canary_pct: int = 10,
-  ) -> dict[str, object]:
+  ) -> dict[str, Any]:
     """Simulates a What-If FinOps & Latency configuration before Cloud Run Canary deployment."""
     active = self.active_agent
     clean_model = (model_tier or active.model or 'gemini-2.5-flash').strip()
@@ -3265,7 +3269,7 @@ class VibeLiftAlphaEvolveOptimizer:
       self.selected_optimizer_platform = clean
     return OPTIMIZER_PLATFORMS[self.selected_optimizer_platform]
 
-  def get_optimizer_platforms_payload(self) -> dict[str, object]:
+  def get_optimizer_platforms_payload(self) -> dict[str, Any]:
     """Returns the active optimization platform and all supported platforms."""
     return {
         'active_platform_id': self.selected_optimizer_platform,
@@ -3291,8 +3295,8 @@ class VibeLiftAlphaEvolveOptimizer:
 
   def sync_from_ge_fleet(
       self,
-      fleet_payload: dict[str, object] | None,
-      bq_insights: dict[str, object] | None = None,
+      fleet_payload: dict[str, Any] | None,
+      bq_insights: dict[str, Any] | None = None,
   ) -> None:
     """Synchronizes the selectable optimization catalog with live agents from Gemini Enterprise."""
     if not isinstance(fleet_payload, dict):
@@ -3313,8 +3317,9 @@ class VibeLiftAlphaEvolveOptimizer:
       if not display_name and not raw_id:
         continue
       slug = _slugify_agent_name(display_name, raw_id)
-      backend = raw_agent.get('backend') if isinstance(raw_agent.get('backend'), dict) else {}
-      models = backend.get('models') if isinstance(backend.get('models'), list) else []
+      raw_backend = raw_agent.get('backend')
+      backend = raw_backend if isinstance(raw_backend, dict) else {}
+      models = as_list(backend.get('models'))
       live_model = str(models[0]) if models else ''
       type_label = str(raw_agent.get('type_label') or raw_agent.get('type') or 'Gemini Enterprise Agent')
       desc = str(raw_agent.get('description') or type_label)[:90]
@@ -3377,11 +3382,11 @@ class VibeLiftAlphaEvolveOptimizer:
             ],
         )
 
-  def get_all_agents_dict(self) -> dict[str, dict[str, object]]:
+  def get_all_agents_dict(self) -> dict[str, dict[str, Any]]:
     """Returns full serialized profiles keyed by agent_id so embedded UI can switch agents locally."""
     return {agent_id: profile.to_dict() for agent_id, profile in self._agents.items()}
 
-  def list_agents_summary(self) -> list[dict[str, object]]:
+  def list_agents_summary(self) -> list[dict[str, Any]]:
     """Returns summary metadata for all available Gemini Enterprise agents in dropdown."""
     return [
         {

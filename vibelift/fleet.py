@@ -30,14 +30,15 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Mapping
 from typing import Any
 
 try:
   import google.auth as google_auth
   from google.auth.transport.requests import Request as GoogleAuthRequest
 except ImportError:  # pragma: no cover - google-auth ships with the Cloud client libraries.
-  google_auth = None
-  GoogleAuthRequest = None
+  google_auth = None  # type: ignore[assignment]
+  GoogleAuthRequest = None  # type: ignore[assignment,misc]
 
 from vibelift import gcp_telemetry, telemetry
 
@@ -183,7 +184,7 @@ def trend_bucket_seconds(hours: int) -> int:
 
 def build_request_trend(
     agents: list[dict[str, Any]],
-    results: dict[tuple[str, ...], Any],
+    results: dict[tuple[Any, ...], Any],
     window_s: int,
     bucket_s: int,
     default_project: str | None = None,
@@ -248,7 +249,7 @@ def parse_bool(value: Any) -> bool:
   return str(value or '').strip().lower() in ('1', 'true', 'yes', 'on')
 
 
-def runtime_backend_key(agent: dict[str, Any]) -> str:
+def runtime_backend_key(agent: Mapping[str, Any]) -> str:
   """Returns a key identifying the runtime serving an agent (shared runtimes share a key)."""
   backend = agent.get('backend') or {}
   kind = str(backend.get('kind') or 'unknown')
@@ -696,7 +697,8 @@ def _de_base(location: str = 'global') -> str:
 
 def classify_agent(engine_id: str, assistant_id: str, raw: dict[str, Any]) -> dict[str, Any]:
   """Normalizes a Discovery Engine Agent resource into the fleet schema (no telemetry yet)."""
-  kind, backend = 'UNKNOWN', {'kind': 'unknown'}
+  kind = 'UNKNOWN'
+  backend: dict[str, Any] = {'kind': 'unknown'}
   if 'adkAgentDefinition' in raw:
     kind = 'ADK'
     resource = ((raw['adkAgentDefinition'].get('provisionedReasoningEngine') or {}).get('reasoningEngine') or '')
@@ -771,7 +773,7 @@ class _GoogleApi:
 
   def __init__(self, quota_project: str):
     self._quota_project = quota_project
-    self._credentials = None
+    self._credentials: Any = None
     self._is_user_credentials = False
     self._cli_token: str | None = None
     self._cli_token_ts: float = 0.0
@@ -891,7 +893,7 @@ class GeminiEnterpriseFleetService:
       return not force_refresh or entry['cache_age_seconds'] < self.min_refresh_interval_s
 
     cached = self._fresh_cache(hours)
-    if usable(cached):
+    if cached is not None and usable(cached):
       return cached
 
     if allow_stale and not force_refresh:
@@ -1583,7 +1585,7 @@ class GeminiEnterpriseFleetService:
       bucket(labels.get('model_user_id') or 'unknown')['invocations'] += round(value)
 
     cards = self._rate_cards()
-    totals = {'input_tokens': 0, 'output_tokens': 0, 'cache_read_tokens': 0, 'cache_write_tokens': 0,
+    totals: dict[str, Any] = {'input_tokens': 0, 'output_tokens': 0, 'cache_read_tokens': 0, 'cache_write_tokens': 0,
               'invocations': 0, 'est_cost_usd': 0.0, 'models_without_rate_card': []}
     rows = []
     for row in sorted(models.values(), key=lambda r: -(r['input_tokens'] + r['output_tokens'])):
@@ -1806,9 +1808,9 @@ class GeminiEnterpriseFleetService:
             1 for a in agents if a['registration']['status'] in ('BACKEND_NOT_FOUND', 'NO_BACKEND')),
         'unverified_registrations': sum(1 for a in agents if a['registration']['status'] == 'UNVERIFIED'),
     }
-    for key in ('requests', 'errors_4xx', 'errors_5xx', 'llm_calls', 'input_tokens', 'output_tokens', 'cached_tokens', 'conversations'):
-      values = [a['metrics'][key] for a in unique_runtime_agents if a['metrics'].get(key) is not None]
-      totals[key] = sum(values) if values else None
+    for metric_key in ('requests', 'errors_4xx', 'errors_5xx', 'llm_calls', 'input_tokens', 'output_tokens', 'cached_tokens', 'conversations'):
+      values = [a['metrics'][metric_key] for a in unique_runtime_agents if a['metrics'].get(metric_key) is not None]
+      totals[metric_key] = sum(values) if values else None
     for fkey in ('vcpu_hours', 'memory_gib_hours', 'billable_instance_hours'):
       fvals = [float(a['metrics'][fkey]) for a in unique_runtime_agents if a['metrics'].get(fkey) is not None]
       totals[fkey] = round(sum(fvals), 4) if fvals else None

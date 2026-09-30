@@ -13,13 +13,16 @@ import os
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
+from typing import Any
+
+from vibelift.jsonutil import as_list, as_mapping
 
 try:
   import google.auth
   from google.auth.transport.requests import Request as GoogleAuthRequest
 except ImportError:
-  google = None
-  GoogleAuthRequest = None
+  google = None  # type: ignore[assignment]
+  GoogleAuthRequest = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
 
@@ -28,30 +31,30 @@ logger = logging.getLogger(__name__)
 BANNED_MOCK_GCS_PREFIX_IN_LIVE_MODE = 'gs://project-maui-aive-assets/'
 
 
-def _is_live_gcp_mode(state: Mapping[str, object], ge_fleet: Mapping[str, object] | None = None) -> bool:
+def _is_live_gcp_mode(state: Mapping[str, Any], ge_fleet: Mapping[str, Any] | None = None) -> bool:
   """Returns True when the dashboard is running against a live GCP project (not unit-test fake)."""
   fleet_proj = str((ge_fleet or {}).get('project_id') or '').strip()
   state_proj = str(state.get('gcp_project') or '').strip()
   proj = fleet_proj or state_proj
   if not proj or proj in ('test-project', 'UNCONFIGURED-PROJECT'):
     return False
-  uc = state.get('user_centric') if isinstance(state.get('user_centric'), Mapping) else {}
+  uc = as_mapping(state.get('user_centric'))
   mode = str(uc.get('collection_mode') or '')
   return 'LIVE GCP TELEMETRY' in mode
 
 
 def validate_dashboard_state(
-    state: Mapping[str, object],
-    ge_fleet_payload: Mapping[str, object] | None = None,
-    bq_insights: Mapping[str, object] | None = None,
+    state: Mapping[str, Any],
+    ge_fleet_payload: Mapping[str, Any] | None = None,
+    bq_insights: Mapping[str, Any] | None = None,
     run_llm_judge: bool = False,
-) -> dict[str, object]:
+) -> dict[str, Any]:
   """Audits all 6 tabs of `/api/state` for telemetry grounding, math integrity, and zero hallucination."""
   now_iso = datetime.datetime.now(datetime.UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
-  fleet = ge_fleet_payload or (state.get('ge_fleet') if isinstance(state.get('ge_fleet'), Mapping) else {}) or {}
+  fleet = ge_fleet_payload or (as_mapping(state.get('ge_fleet'))) or {}
   live_mode = _is_live_gcp_mode(state, fleet)
 
-  checks: list[dict[str, object]] = []
+  checks: list[dict[str, Any]] = []
   flagged_unverified_fields: list[dict[str, str]] = []
 
   def _add_check(
@@ -86,8 +89,8 @@ def validate_dashboard_state(
       })
 
   # --- TAB 1: Gemini Enterprise Agent Fleet ---
-  fleet_agents = fleet.get('agents') if isinstance(fleet.get('agents'), list) else []
-  fleet_totals = fleet.get('totals') if isinstance(fleet.get('totals'), Mapping) else {}
+  fleet_agents = as_list(fleet.get('agents'))
+  fleet_totals = as_mapping(fleet.get('totals'))
   reported_agent_count = int(fleet_totals.get('agents') or 0)
   tab1_count_match = (reported_agent_count == len(fleet_agents)) and len(fleet_agents) > 0
   _add_check(
@@ -124,8 +127,8 @@ def validate_dashboard_state(
   )
 
   # --- TAB 2: Goals & Metrics ---
-  active_agent = state.get('active_agent') if isinstance(state.get('active_agent'), Mapping) else {}
-  params = active_agent.get('parameters') if isinstance(active_agent.get('parameters'), list) else []
+  active_agent = as_mapping(state.get('active_agent'))
+  params = as_list(active_agent.get('parameters'))
   param_math_ok = True
   for p in params:
     if not isinstance(p, Mapping):
@@ -148,11 +151,11 @@ def validate_dashboard_state(
   )
 
   # --- TAB 3: Testing & History ---
-  turns = state.get('turns') if isinstance(state.get('turns'), list) else []
+  turns = as_list(state.get('turns'))
   summary = (
       state.get('turn_summary')
       if isinstance(state.get('turn_summary'), Mapping)
-      else (state.get('summary') if isinstance(state.get('summary'), Mapping) else {})
+      else (as_mapping(state.get('summary')))
   )
   summary_turns = int((summary or {}).get('total_turns') or 0)
   _add_check(
@@ -168,7 +171,7 @@ def validate_dashboard_state(
   if live_mode:
     _add_live_finops_checks(state, fleet, fleet_agents, fleet_totals, _add_check)
   else:
-    what_if = state.get('what_if_default') if isinstance(state.get('what_if_default'), Mapping) else {}
+    what_if = as_mapping(state.get('what_if_default'))
     _add_check(
         check_id='TAB3-WHAT-IF-CANARY-SIMULATOR',
         tab='Tab 3: Testing & History',
@@ -180,8 +183,8 @@ def validate_dashboard_state(
     )
 
     # --- TAB 4: Cost & Billing ---
-    tc = state.get('tokenomics_cockpit') if isinstance(state.get('tokenomics_cockpit'), Mapping) else {}
-    drift = tc.get('drift') if isinstance(tc.get('drift'), Mapping) else {}
+    tc = as_mapping(state.get('tokenomics_cockpit'))
+    drift = as_mapping(tc.get('drift'))
     exp_spend = float(drift.get('expected_naive_token_spend_usd') or 0.0)
     rem_drift = float(drift.get('remediated_drift_total_usd') or 0.0)
     unattr = float(drift.get('unattributed_usd') or 0.0)
@@ -197,7 +200,7 @@ def validate_dashboard_state(
         evidence=f'Expected (${exp_spend:.2f}) + Drift (${rem_drift:.2f}) + Unattributed (${unattr:.2f}) == Reconciled (${actual_inv:.2f}).',
     )
 
-    caching = tc.get('caching') if isinstance(tc.get('caching'), Mapping) else {}
+    caching = as_mapping(tc.get('caching'))
     flash_n = float(caching.get('flash_break_even_calls_per_hr') or 0.0)
     pro_n = float(caching.get('pro_break_even_calls_per_hr') or 0.0)
     _add_check(
@@ -211,8 +214,8 @@ def validate_dashboard_state(
     )
 
   # --- TAB 5: Users & Feedback ---
-  uc = state.get('user_centric') if isinstance(state.get('user_centric'), Mapping) else {}
-  power_users = uc.get('power_users_ldap') if isinstance(uc.get('power_users_ldap'), list) else []
+  uc = as_mapping(state.get('user_centric'))
+  power_users = as_list(uc.get('power_users_ldap'))
   user_ldaps = [str(u.get('user_ldap') or '') for u in power_users if isinstance(u, Mapping)]
   has_defined_csat_and_cost = all(
       isinstance(u, Mapping) and (u.get('avg_csat') is not None or u.get('csat_rating') is not None) and u.get('monthly_cost_usd') is not None
@@ -257,8 +260,8 @@ def validate_dashboard_state(
         evidence=f'Verified {len(user_ldaps)} user records with complete avg_csat and monthly_cost_usd fields.',
     )
 
-  aive_logs = state.get('aive_logs') if isinstance(state.get('aive_logs'), Mapping) else {}
-  usage_logs = aive_logs.get('usage_logs') if isinstance(aive_logs.get('usage_logs'), list) else []
+  aive_logs = as_mapping(state.get('aive_logs'))
+  usage_logs = as_list(aive_logs.get('usage_logs'))
   if live_mode:
     fake_uris = []
     for row in usage_logs:
@@ -291,8 +294,8 @@ def validate_dashboard_state(
     )
 
   # --- TAB 6: Tools & SDK ---
-  otel = state.get('otel_catalog') if isinstance(state.get('otel_catalog'), Mapping) else {}
-  layers = otel.get('layers') if isinstance(otel.get('layers'), list) else []
+  otel = as_mapping(state.get('otel_catalog'))
+  layers = as_list(otel.get('layers'))
   total_otel_metrics = sum(
       len(layer.get('metrics') or layer.get('parameters') or [])
       for layer in layers
@@ -309,10 +312,11 @@ def validate_dashboard_state(
       evidence=f'Verified 5 layers and {total_otel_metrics}/26 standardized OTel metrics with layer.metrics populated.',
   )
 
+  cloud_run_services = state.get('cloud_run_services')
   services = (
-      state.get('cloud_run_services')
-      if isinstance(state.get('cloud_run_services'), list)
-      else (state.get('gcp_services') if isinstance(state.get('gcp_services'), list) else [])
+      cloud_run_services
+      if isinstance(cloud_run_services, list)
+      else as_list(state.get('gcp_services'))
   )
   _add_check(
       check_id='TAB6-CLOUD-RUN-SERVICES-SYNC',
@@ -329,7 +333,7 @@ def validate_dashboard_state(
   deterministic_score = round((passed_count / total_checks) * 100.0)
   overall_verdict = 'VERIFIED_GROUNDED' if not flagged_unverified_fields else 'FLAGGED_ISSUES'
 
-  llm_judge_report: dict[str, object]
+  llm_judge_report: dict[str, Any]
   if run_llm_judge:
     llm_judge_report = run_llm_as_judge_audit(
         state=state,
@@ -401,9 +405,9 @@ def _add_live_finops_checks(state, fleet, fleet_agents, fleet_totals, add_check)
   """Live mode: token economics, spend change and registrations must reconcile with raw telemetry."""
   lf = fleet.get('live_finops') if isinstance(fleet.get('live_finops'), Mapping) else None
   if lf is None:
-    lf = state.get('live_finops') if isinstance(state.get('live_finops'), Mapping) else {}
-  usage = fleet.get('model_usage') if isinstance(fleet.get('model_usage'), Mapping) else {}
-  ut = usage.get('totals') if isinstance(usage.get('totals'), Mapping) else {}
+    lf = as_mapping(state.get('live_finops'))
+  usage = as_mapping(fleet.get('model_usage'))
+  ut = as_mapping(usage.get('totals'))
 
   sim_absent = state.get('what_if_default') is None and state.get('tokenomics_cockpit') is None
   add_check(
@@ -418,8 +422,8 @@ def _add_live_finops_checks(state, fleet, fleet_agents, fleet_totals, add_check)
                 f'FLAGGED: simulator payload present={not sim_absent}, live_finops present={bool(lf)}.'),
   )
 
-  te = lf.get('token_economics') if isinstance(lf.get('token_economics'), Mapping) else {}
-  tt = te.get('totals') if isinstance(te.get('totals'), Mapping) else {}
+  te = as_mapping(lf.get('token_economics'))
+  tt = as_mapping(te.get('totals'))
   pairs = (('calls', 'invocations'), ('input_tokens', 'input_tokens'), ('output_tokens', 'output_tokens'))
   mism = [f'{a}={tt.get(a)} vs {b}={ut.get(b)}' for a, b in pairs if int(tt.get(a) or 0) != int(ut.get(b) or 0)]
   if abs(float(tt.get('est_cost_usd') or 0) - float(ut.get('est_cost_usd') or 0)) > 0.005:
@@ -441,7 +445,7 @@ def _add_live_finops_checks(state, fleet, fleet_agents, fleet_totals, add_check)
                 f"FLAGGED: status={te.get('status')}; " + '; '.join(mism)),
   )
 
-  sd = lf.get('spend_drift') if isinstance(lf.get('spend_drift'), Mapping) else {}
+  sd = as_mapping(lf.get('spend_drift'))
   if sd.get('status') == 'LIVE':
     drv = sum(float(d.get('change_usd') or 0) for d in sd.get('drivers') or [] if isinstance(d, Mapping))
     change = float(sd.get('change_usd') or 0)
@@ -497,7 +501,7 @@ def _add_live_finops_checks(state, fleet, fleet_agents, fleet_totals, add_check)
 
   gdu = state.get('ge_daily_usage') if isinstance(state.get('ge_daily_usage'), Mapping) else None
   if gdu is not None:
-    days = gdu.get('days') if isinstance(gdu.get('days'), list) else []
+    days = as_list(gdu.get('days'))
     b_status = str(gdu.get('billing_status') or '')
     invented_cost = (
         b_status != 'LIVE'
@@ -523,16 +527,16 @@ def _add_live_finops_checks(state, fleet, fleet_agents, fleet_totals, add_check)
 
 
 def run_llm_as_judge_audit(
-    state: Mapping[str, object],
-    deterministic_checks: list[dict[str, object]],
-    bq_insights: Mapping[str, object] | None = None,
-) -> dict[str, object]:
+    state: Mapping[str, Any],
+    deterministic_checks: list[dict[str, Any]],
+    bq_insights: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
   """Calls Vertex AI Gemini as an independent LLM-as-a-Judge auditor, with a rule-based fallback."""
 
   project_id = str(state.get('gcp_project') or os.environ.get('GOOGLE_CLOUD_PROJECT') or 'project-maui')
-  fleet = state.get('ge_fleet') if isinstance(state.get('ge_fleet'), Mapping) else {}
-  uc = state.get('user_centric') if isinstance(state.get('user_centric'), Mapping) else {}
-  aive = state.get('aive_logs') if isinstance(state.get('aive_logs'), Mapping) else {}
+  fleet = as_mapping(state.get('ge_fleet'))
+  uc = as_mapping(state.get('user_centric'))
+  aive = as_mapping(state.get('aive_logs'))
 
   audit_digest = {
       'gcp_project': project_id,

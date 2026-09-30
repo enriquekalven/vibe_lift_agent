@@ -2,6 +2,7 @@
 
 import datetime
 from collections.abc import Sequence
+from typing import Any
 
 from vibelift import optimizer as alpha_evolve_optimizer
 from vibelift import telemetry
@@ -49,7 +50,7 @@ class LongRunningVibeLiftAgent:
     self.model = model or optimizer.active_agent.model
     self.max_turns = max_turns
     self._turns: list[telemetry.TurnUsageLog] = []
-    self._step_descriptions: list[dict[str, object]] = []
+    self._step_descriptions: list[dict[str, Any]] = []
     self.reset_with_seed_turns()
 
   @property
@@ -58,7 +59,7 @@ class LongRunningVibeLiftAgent:
     return list(self._turns)
 
   @property
-  def step_descriptions(self) -> list[dict[str, object]]:
+  def step_descriptions(self) -> list[dict[str, Any]]:
     """Returns human-readable trajectory steps."""
     return list(self._step_descriptions)
 

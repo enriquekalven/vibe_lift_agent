@@ -174,7 +174,7 @@ class TurnUsageLog:
         round(savings, 6),
     )
 
-  def to_dict(self) -> dict[str, object]:
+  def to_dict(self) -> dict[str, Any]:
     """Serializes the turn log with billing attribution to a dictionary."""
     naive_usd, actual_usd, saved_usd = self.compute_costs()
     return {
@@ -310,7 +310,7 @@ class DecoratorTelemetryEvent:
   user_cohort: str
   status: str
 
-  def to_dict(self) -> dict[str, object]:
+  def to_dict(self) -> dict[str, Any]:
     """Serializes the decorator telemetry event for the dashboard."""
     prompt_tok = max(0, int(self.prompt_tokens))
     cached_tok = max(0, min(prompt_tok, int(self.cached_tokens)))
@@ -392,17 +392,17 @@ _SEED_DECORATOR_EVENTS: tuple[DecoratorTelemetryEvent, ...] = (
 _DECORATOR_LOCK = threading.Lock()
 _DECORATOR_EVENTS: list[DecoratorTelemetryEvent] = list(_SEED_DECORATOR_EVENTS)
 _RUNTIME_DECORATOR_EVENTS: list[DecoratorTelemetryEvent] = []
-_LIVE_GCP_DECORATOR_EVENTS: list[dict[str, object]] | None = None
+_LIVE_GCP_DECORATOR_EVENTS: list[dict[str, Any]] | None = None
 
 
-def set_live_decorator_events(events: Sequence[Mapping[str, object]] | None) -> None:
+def set_live_decorator_events(events: Sequence[Mapping[str, Any]] | None) -> None:
   """Sets live GCP telemetry events (BigQuery / Cloud Logging) to replace seed decorator rows."""
   global _LIVE_GCP_DECORATOR_EVENTS
   with _DECORATOR_LOCK:
     _LIVE_GCP_DECORATOR_EVENTS = [dict(e) for e in events] if events is not None else None
 
 
-def record_decorator_event(event: DecoratorTelemetryEvent) -> dict[str, object]:
+def record_decorator_event(event: DecoratorTelemetryEvent) -> dict[str, Any]:
   """Appends a real-time decorator telemetry event to the in-memory stream."""
   with _DECORATOR_LOCK:
     _RUNTIME_DECORATOR_EVENTS.insert(0, event)
@@ -412,7 +412,7 @@ def record_decorator_event(event: DecoratorTelemetryEvent) -> dict[str, object]:
   return event.to_dict()
 
 
-def get_recent_decorator_events() -> list[dict[str, object]]:
+def get_recent_decorator_events() -> list[dict[str, Any]]:
   """Returns recent real-time @vibelift_telemetry decorator events."""
   with _DECORATOR_LOCK:
     if _LIVE_GCP_DECORATOR_EVENTS is not None:
@@ -435,7 +435,8 @@ def _extract_result_metrics(result: Any) -> tuple[int, int, int, float, float]:
   prompt_tok, cached_tok, out_tok = 16400, 14920, 280
   bloat_pct, idle_pct = 14.0, 7.5
   if isinstance(result, Mapping):
-    usage = result.get('usage_metadata') if isinstance(result.get('usage_metadata'), Mapping) else result
+    metadata = result.get('usage_metadata')
+    usage = metadata if isinstance(metadata, Mapping) else result
     if 'prompt_tokens' in usage or 'prompt_token_count' in usage:
       try:
         prompt_tok = max(0, int(usage.get('prompt_tokens', usage.get('prompt_token_count', prompt_tok))))
@@ -566,7 +567,7 @@ def vibelift_telemetry(
 
 _AIVE_LOGS_LOCK = threading.Lock()
 
-_SEED_AIVE_USAGE_LOGS: list[dict[str, object]] = [
+_SEED_AIVE_USAGE_LOGS: list[dict[str, Any]] = [
     {
         'event_id': 'evt-9f81c204-aive',
         'timestamp': '2026-09-28T22:15:00Z',
@@ -669,8 +670,8 @@ _SEED_AIVE_USAGE_LOGS: list[dict[str, object]] = [
     },
 ]
 
-_AIVE_USAGE_LOGS: list[dict[str, object]] = [dict(x) for x in _SEED_AIVE_USAGE_LOGS]
-_SEED_AIVE_RATINGS_LOGS: list[dict[str, object]] = [
+_AIVE_USAGE_LOGS: list[dict[str, Any]] = [dict(x) for x in _SEED_AIVE_USAGE_LOGS]
+_SEED_AIVE_RATINGS_LOGS: list[dict[str, Any]] = [
     {
         'rating_id': 'rat-101',
         'timestamp': '2026-09-28T22:16:00Z',
@@ -702,16 +703,16 @@ _SEED_AIVE_RATINGS_LOGS: list[dict[str, object]] = [
         'feedback_text': 'Deep research synthesis strong; keep thinking token budget capped at 2,048 to preserve <750ms P95.',
     },
 ]
-_AIVE_RATINGS_LOGS: list[dict[str, object]] = [dict(x) for x in _SEED_AIVE_RATINGS_LOGS]
-_RUNTIME_AIVE_USAGE_LOGS: list[dict[str, object]] = []
-_RUNTIME_AIVE_RATINGS_LOGS: list[dict[str, object]] = []
-_LIVE_GCP_AIVE_USAGE_LOGS: list[dict[str, object]] | None = None
-_LIVE_GCP_AIVE_RATINGS_LOGS: list[dict[str, object]] | None = None
+_AIVE_RATINGS_LOGS: list[dict[str, Any]] = [dict(x) for x in _SEED_AIVE_RATINGS_LOGS]
+_RUNTIME_AIVE_USAGE_LOGS: list[dict[str, Any]] = []
+_RUNTIME_AIVE_RATINGS_LOGS: list[dict[str, Any]] = []
+_LIVE_GCP_AIVE_USAGE_LOGS: list[dict[str, Any]] | None = None
+_LIVE_GCP_AIVE_RATINGS_LOGS: list[dict[str, Any]] | None = None
 
 
 def set_live_aive_logs(
-    usage_logs: Sequence[Mapping[str, object]] | None,
-    ratings_logs: Sequence[Mapping[str, object]] | None,
+    usage_logs: Sequence[Mapping[str, Any]] | None,
+    ratings_logs: Sequence[Mapping[str, Any]] | None,
 ) -> None:
   """Replaces seed aive_logs with live GCP BigQuery telemetry in live mode."""
   global _LIVE_GCP_AIVE_USAGE_LOGS, _LIVE_GCP_AIVE_RATINGS_LOGS
@@ -736,7 +737,7 @@ def log_agent_generation_event(
     thinking_tokens: int = 0,
     background_tokens: int = 0,
     agent_name: str = 'it_service_desk',
-) -> dict[str, object]:
+) -> dict[str, Any]:
   """Streams an agent generation event to `aive_logs.agent_usage_log` and real-time decorator stream."""
   clean_email = (user_email or 'unknown@google.com').strip()
   user_ldap = clean_email.split('@')[0] if '@' in clean_email else (clean_email or 'unknown')
@@ -745,7 +746,7 @@ def log_agent_generation_event(
   think_tok = max(0, int(thinking_tokens or round(tok_total * 0.08)))
   bg_tok = max(0, int(background_tokens or round(tok_total * 0.11)))
 
-  row: dict[str, object] = {
+  row: dict[str, Any] = {
       'event_id': f'evt-{uuid.uuid4().hex[:8]}-aive',
       'timestamp': now_iso,
       'session_id': str(session_id or 'unknown_session'),
@@ -808,12 +809,12 @@ def log_csat_rating(
     user_email: str,
     rating: int,
     feedback_text: str = '',
-) -> dict[str, object]:
+) -> dict[str, Any]:
   """Records a user CSAT rating into `aive_logs.ratings_log`."""
   clean_email = (user_email or 'unknown@google.com').strip()
   user_ldap = clean_email.split('@')[0] if '@' in clean_email else clean_email
   clamped_rating = max(1, min(5, int(rating)))
-  entry: dict[str, object] = {
+  entry: dict[str, Any] = {
       'rating_id': f'rat-{uuid.uuid4().hex[:6]}',
       'timestamp': datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
       'session_id': str(session_id or 'unknown_session'),
@@ -838,7 +839,7 @@ def log_csat_rating(
   return entry
 
 
-def get_recent_aive_logs(live_only: bool = False) -> dict[str, list[dict[str, object]]]:
+def get_recent_aive_logs(live_only: bool = False) -> dict[str, list[dict[str, Any]]]:
   """Returns recent `aive_logs` (`agent_usage_log` and `ratings_log`) records.
 
   Args:

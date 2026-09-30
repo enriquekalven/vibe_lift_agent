@@ -19,8 +19,11 @@ import re
 import threading
 import uuid
 from collections.abc import Mapping, Sequence
+from typing import Any
 
-RUBRIC_DIMENSIONS: tuple[dict[str, object], ...] = (
+from vibelift.jsonutil import as_list, as_mapping
+
+RUBRIC_DIMENSIONS: tuple[dict[str, Any], ...] = (
     {
         'dimension_id': 'time_to_insight',
         'label': '1. Time-to-Insight',
@@ -53,7 +56,7 @@ RUBRIC_DIMENSIONS: tuple[dict[str, object], ...] = (
     },
 )
 
-PERSONA_SPECS: tuple[dict[str, object], ...] = (
+PERSONA_SPECS: tuple[dict[str, Any], ...] = (
     {
         'persona_id': 'finops_lead',
         'role_title': 'FinOps Lead / Cloud Economist',
@@ -198,13 +201,13 @@ class SmeEvaluationStore:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._ratings: list[dict[str, object]] = []
+        self._ratings: list[dict[str, Any]] = []
 
     def clear(self) -> None:
         with self._lock:
             self._ratings.clear()
 
-    def list_ratings(self, persona_id: str | None = None) -> list[dict[str, object]]:
+    def list_ratings(self, persona_id: str | None = None) -> list[dict[str, Any]]:
         with self._lock:
             rows = list(self._ratings)
         if persona_id:
@@ -213,14 +216,14 @@ class SmeEvaluationStore:
 
     def submit_rating(
         self,
-        persona_id: str | Mapping[str, object] = 'finops_lead',
+        persona_id: str | Mapping[str, Any] = 'finops_lead',
         reviewer_ldap: str = 'anonymous_sme',
         overall_rating: int = 5,
         verdict: str = 'APPROVED',
         task_completed: bool = True,
         dimension_ratings: Mapping[str, int] | None = None,
         notes: str = '',
-    ) -> dict[str, object]:
+    ) -> dict[str, Any]:
         """Validates and records an SME persona rating (accepts a dict payload or explicit arguments)."""
         if isinstance(persona_id, Mapping):
             raw = persona_id
@@ -267,7 +270,7 @@ class SmeEvaluationStore:
                         pass
 
         now_ts = datetime.datetime.now(datetime.UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
-        entry: dict[str, object] = {
+        entry: dict[str, Any] = {
             'eval_id': f'sme-{uuid.uuid4().hex[:8]}',
             'timestamp': now_ts,
             'submitted_at': now_ts,
@@ -300,17 +303,18 @@ def _extract_html_ids(rendered_html: str) -> set[str]:
 
 
 def evaluate_persona_rubric(
-    state: Mapping[str, object],
-    ge_fleet_payload: Mapping[str, object] | None = None,
+    state: Mapping[str, Any],
+    ge_fleet_payload: Mapping[str, Any] | None = None,
     rendered_html: str | None = None,
     store: SmeEvaluationStore | None = None,
-) -> dict[str, object]:
+) -> dict[str, Any]:
     """Runs the 30-check (6 personas x 5 dimensions) deterministic evaluation rubric."""
     now_iso = datetime.datetime.now(datetime.UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
-    fleet = ge_fleet_payload or (state.get('ge_fleet') if isinstance(state.get('ge_fleet'), Mapping) else {}) or {}
+    fleet = ge_fleet_payload or (as_mapping(state.get('ge_fleet'))) or {}
     live_mode = bool(state.get('live_data'))
-    val = state.get('telemetry_validation') if isinstance(state.get('telemetry_validation'), Mapping) else {}
-    val_checks = val.get('checks') if isinstance(val.get('checks'), Sequence) else []
+    val = as_mapping(state.get('telemetry_validation'))
+    raw_val_checks = val.get('checks')
+    val_checks = raw_val_checks if isinstance(raw_val_checks, Sequence) else []
     failed_check_ids = {
         str(c.get('check_id'))
         for c in val_checks
@@ -321,8 +325,8 @@ def evaluate_persona_rubric(
     sme_store = store or _GLOBAL_SME_STORE
     all_ratings = sme_store.list_ratings()
 
-    persona_reports: list[dict[str, object]] = []
-    all_checks: list[dict[str, object]] = []
+    persona_reports: list[dict[str, Any]] = []
+    all_checks: list[dict[str, Any]] = []
 
     for spec in PERSONA_SPECS:
         pid = str(spec['persona_id'])
@@ -393,7 +397,7 @@ def evaluate_persona_rubric(
         else None
     )
 
-    dim_averages: list[dict[str, object]] = []
+    dim_averages: list[dict[str, Any]] = []
     for d in RUBRIC_DIMENSIONS:
         did = str(d['dimension_id'])
         d_checks = [c for c in all_checks if c['dimension_id'] == did]
@@ -439,7 +443,7 @@ def _make_dim_check(
     passed: bool,
     evidence: str,
     max_points: int = 20,
-) -> dict[str, object]:
+) -> dict[str, Any]:
     return {
         'check_id': check_id,
         'persona_id': persona_id,
@@ -455,16 +459,16 @@ def _make_dim_check(
 
 def _evaluate_single_persona(
     pid: str,
-    spec: Mapping[str, object],
-    state: Mapping[str, object],
-    fleet: Mapping[str, object],
+    spec: Mapping[str, Any],
+    state: Mapping[str, Any],
+    fleet: Mapping[str, Any],
     live_mode: bool,
     failed_validator_ids: set[str],
     html_checked: bool,
     missing_dom: list[str],
-) -> list[dict[str, object]]:
+) -> list[dict[str, Any]]:
     """Evaluates the 5 rubric dimensions for a single persona."""
-    val = state.get('telemetry_validation') if isinstance(state.get('telemetry_validation'), Mapping) else {}
+    val = as_mapping(state.get('telemetry_validation'))
     dom_ok = not missing_dom
     dom_ev = (
         f"Verified all {len(spec.get('required_dom_ids') or ())} target DOM containers in rendered HTML."
@@ -479,12 +483,12 @@ def _evaluate_single_persona(
     if pid == 'finops_lead':
         gdu = state.get('ge_daily_usage') if isinstance(state.get('ge_daily_usage'), Mapping) else None
         tc = state.get('tokenomics_cockpit') if isinstance(state.get('tokenomics_cockpit'), Mapping) else None
-        br = state.get('billing_reconciliation') if isinstance(state.get('billing_reconciliation'), Mapping) else {}
+        br = as_mapping(state.get('billing_reconciliation'))
         lf = (fleet.get('live_finops') or state.get('live_finops')) if live_mode else None
 
         if live_mode:
-            days = (gdu or {}).get('days') if isinstance((gdu or {}).get('days'), list) else []
-            by_app = (gdu or {}).get('by_app_agent_model') if isinstance((gdu or {}).get('by_app_agent_model'), list) else []
+            days = as_list((gdu or {}).get('days'))
+            by_app = as_list((gdu or {}).get('by_app_agent_model'))
             d1_ok = bool(gdu and len(days) > 0 and isinstance(lf, Mapping))
             d1_ev = f"Live ge_daily_usage loaded ({len(days)} daily rows, {len(by_app)} app/agent/model rows, refreshed_at={gdu.get('refreshed_at') if gdu else None})."
             d2_ok = bool((gdu or {}).get('refresh_cli') and br.get('status') in ('LIVE', 'NOT_CONNECTED', 'ERROR'))
@@ -494,7 +498,7 @@ def _evaluate_single_persona(
             d5_ok = ('LIVE-NO-SIMULATOR-PAYLOADS' not in failed_validator_ids) and state.get('tokenomics_cockpit') is None
             d5_ev = 'Simulator payloads suppressed in live mode; unconfigured billing export cleanly reports None.'
         else:
-            cpo = (tc or {}).get('cpo') if isinstance((tc or {}).get('cpo'), Mapping) else {}
+            cpo = as_mapping((tc or {}).get('cpo'))
             d1_ok = bool(cpo and cpo.get('agents'))
             d1_ev = f"Simulator FinOps ledger loaded with {len(cpo.get('agents') or [])} agent CpO models."
             d2_ok = bool((tc or {}).get('caching') and br)
@@ -513,11 +517,11 @@ def _evaluate_single_persona(
         ]
 
     if pid == 'sre_platform':
-        agents = fleet.get('agents') if isinstance(fleet.get('agents'), list) else []
-        svcs = state.get('cloud_run_services') if isinstance(state.get('cloud_run_services'), list) else []
-        sup = state.get('gemini_enterprise_support_events') if isinstance(state.get('gemini_enterprise_support_events'), list) else []
-        otel = state.get('otel_catalog') if isinstance(state.get('otel_catalog'), Mapping) else {}
-        alarms = otel.get('watch_out_alarms') if isinstance(otel.get('watch_out_alarms'), list) else []
+        agents = as_list(fleet.get('agents'))
+        svcs = as_list(state.get('cloud_run_services'))
+        sup = as_list(state.get('gemini_enterprise_support_events'))
+        otel = as_mapping(state.get('otel_catalog'))
+        alarms = as_list(otel.get('watch_out_alarms'))
 
         d1_ok = len(svcs) > 0 and (len(agents) > 0 or not live_mode)
         d1_ev = f'Observed {len(svcs)} Cloud Run services, {len(agents)} GE fleet agents, and {len(sup)} support events.'
@@ -537,11 +541,11 @@ def _evaluate_single_persona(
         ]
 
     if pid == 'ai_engineer':
-        active = state.get('active_agent') if isinstance(state.get('active_agent'), Mapping) else {}
-        params = active.get('parameters') if isinstance(active.get('parameters'), list) else []
-        turns = state.get('turns') if isinstance(state.get('turns'), list) else []
-        otel = state.get('otel_catalog') if isinstance(state.get('otel_catalog'), Mapping) else {}
-        layers = otel.get('layers') if isinstance(otel.get('layers'), list) else []
+        active = as_mapping(state.get('active_agent'))
+        params = as_list(active.get('parameters'))
+        turns = as_list(state.get('turns'))
+        otel = as_mapping(state.get('otel_catalog'))
+        layers = as_list(otel.get('layers'))
 
         d1_ok = len(params) >= 4 and len(turns) > 0 and len(layers) == 5
         d1_ev = f'{len(params)} optimization parameters, {len(turns)} turn records, and {len(layers)} OTel layers loaded.'
@@ -561,12 +565,12 @@ def _evaluate_single_persona(
         ]
 
     if pid == 'product_quality':
-        uc = state.get('user_centric') if isinstance(state.get('user_centric'), Mapping) else {}
-        pu = uc.get('power_users_ldap') if isinstance(uc.get('power_users_ldap'), list) else []
-        cohorts = uc.get('cohorts') if isinstance(uc.get('cohorts'), list) else []
-        sessions = uc.get('ge_sessions') if isinstance(uc.get('ge_sessions'), list) else []
-        aive = state.get('aive_logs') if isinstance(state.get('aive_logs'), Mapping) else {}
-        usage_logs = aive.get('usage_logs') if isinstance(aive.get('usage_logs'), list) else []
+        uc = as_mapping(state.get('user_centric'))
+        pu = as_list(uc.get('power_users_ldap'))
+        cohorts = as_list(uc.get('cohorts'))
+        sessions = as_list(uc.get('ge_sessions'))
+        aive = as_mapping(state.get('aive_logs'))
+        usage_logs = as_list(aive.get('usage_logs'))
 
         d1_ok = len(pu) > 0 and len(cohorts) > 0 and (len(sessions) > 0 or not live_mode)
         d1_ev = f'{len(pu)} power users, {len(cohorts)} app cohorts, {len(sessions)} GE sessions, and {len(usage_logs)} usage logs.'
@@ -589,11 +593,11 @@ def _evaluate_single_persona(
         ]
 
     if pid == 'security_governance':
-        nl = state.get('nl2sql_default') if isinstance(state.get('nl2sql_default'), Mapping) else {}
-        audit = nl.get('sql_safety_audit') if isinstance(nl.get('sql_safety_audit'), Mapping) else {}
-        allowed_ds = audit.get('allowed_datasets') if isinstance(audit.get('allowed_datasets'), list) else []
-        aive = state.get('aive_logs') if isinstance(state.get('aive_logs'), Mapping) else {}
-        usage_logs = aive.get('usage_logs') if isinstance(aive.get('usage_logs'), list) else []
+        nl = as_mapping(state.get('nl2sql_default'))
+        audit = as_mapping(nl.get('sql_safety_audit'))
+        allowed_ds = as_list(audit.get('allowed_datasets'))
+        aive = as_mapping(state.get('aive_logs'))
+        usage_logs = as_list(aive.get('usage_logs'))
 
         d1_ok = bool(nl.get('generated_sql')) and bool(val.get('overall_status'))
         d1_ev = f"NL2SQL Copilot and Telemetry Validator active (status={val.get('overall_status')})."
@@ -617,9 +621,9 @@ def _evaluate_single_persona(
         ]
 
     # cfo_exec
-    uc = state.get('user_centric') if isinstance(state.get('user_centric'), Mapping) else {}
-    br = state.get('billing_reconciliation') if isinstance(state.get('billing_reconciliation'), Mapping) else {}
-    engines = fleet.get('engines') if isinstance(fleet.get('engines'), list) else []
+    uc = as_mapping(state.get('user_centric'))
+    br = as_mapping(state.get('billing_reconciliation'))
+    engines = as_list(fleet.get('engines'))
 
     d1_ok = bool(uc) and bool(br) and (len(engines) > 0 or not live_mode)
     d1_ev = f'Executive Overview populated ({len(engines)} GE engines, billing status={br.get("status", "SIMULATOR")}).'

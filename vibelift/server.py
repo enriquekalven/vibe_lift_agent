@@ -9,20 +9,23 @@ import socket
 import sys
 import urllib.parse
 from collections.abc import Mapping, Sequence
+from typing import Any
+
+from vibelift.jsonutil import as_list, as_mapping
 
 try:
   from absl import app as absl_app
   from absl import flags
 except ImportError:
-  absl_app = None
-  flags = None
+  absl_app = None  # type: ignore[assignment]
+  flags = None  # type: ignore[assignment]
 
 try:
   import fastapi
   from fastapi.middleware.cors import CORSMiddleware
   from fastapi.responses import HTMLResponse, JSONResponse, Response
 except ImportError:
-  fastapi = None
+  fastapi = None  # type: ignore[assignment]
 
 from vibelift import billing_export, gcp_telemetry, long_running_agent, mcp_server, sme_eval, telemetry
 from vibelift import finops as live_finops
@@ -39,6 +42,12 @@ logging.basicConfig(level=logging.INFO)
 import threading
 
 
+def _first_query_value(query: Mapping[str, list[str]], name: str) -> str | None:
+  """Returns the first value of a parsed query-string parameter, or None when it is absent."""
+  values = query.get(name)
+  return values[0] if values else None
+
+
 class VibeLiftRuntimeController:
   """Coordinates the selectable Gemini Enterprise agents, AlphaEvolve optimizer, GCP telemetry, and GE fleet."""
 
@@ -46,7 +55,7 @@ class VibeLiftRuntimeController:
     """Initializes the optimizer, long-running agent, GCP telemetry client, and fleet service."""
     self._lock = threading.Lock()
     self._warmer_started = False
-    self._last_fleet_payload: dict[str, object] | None = None
+    self._last_fleet_payload: dict[str, Any] | None = None
     self.optimizer = alpha_evolve_optimizer.VibeLiftAlphaEvolveOptimizer()
     self.agent = long_running_agent.LongRunningVibeLiftAgent(
         self.optimizer,
@@ -92,7 +101,7 @@ class VibeLiftRuntimeController:
       force_refresh: bool = False,
       allow_stale: bool = False,
       max_wait_s: float | None = None,
-  ) -> dict[str, object]:
+  ) -> dict[str, Any]:
     """Returns the live Gemini Enterprise agent fleet (inventory joined with real telemetry)."""
     try:
       fleet = self.ge_fleet.collect(
@@ -131,7 +140,7 @@ class VibeLiftRuntimeController:
       include_fleet: bool = True,
       window_hours: int | None = None,
       fast_mcp: bool = False,
-  ) -> dict[str, object]:
+  ) -> dict[str, Any]:
     """Builds the JSON payload for the dashboard (optimization tabs plus, optionally, the live GE fleet)."""
     fleet_payload = None
     if include_fleet:
@@ -172,9 +181,9 @@ class VibeLiftRuntimeController:
       user_centric = self.optimizer.get_user_centric_payload()
       otel_catalog = self.optimizer.get_otel_catalog_payload()
       billing_reconciliation = self.optimizer.get_finops_billing_reconciliation_payload()
-      tokenomics_cockpit = self.optimizer.get_tokenomics_and_cockpit_finops_payload()
+      tokenomics_cockpit: dict[str, Any] | None = self.optimizer.get_tokenomics_and_cockpit_finops_payload()
       persona_playbooks = self.optimizer.get_sme_persona_playbooks()
-      what_if_default = self.optimizer.simulate_what_if_scenario()
+      what_if_default: dict[str, Any] | None = self.optimizer.simulate_what_if_scenario()
       nl2sql_default = self.optimizer.execute_nl2sql_telemetry_query(
           'Compare cost per 1k turns and prompt cache savings across agents'
       )
@@ -245,7 +254,7 @@ class VibeLiftRuntimeController:
       ]
 
     turn_summary_dict = dict(telemetry.summarize_log_stream(turns))
-    payload: dict[str, object] = {
+    payload: dict[str, Any] = {
         'agent_name': self.agent.agent_name,
         'model': self.agent.model,
         'gcp_project': self.gcp_telemetry.project_id,
@@ -296,7 +305,7 @@ class VibeLiftRuntimeController:
     )
     return payload
 
-  def get_sme_evaluation(self, run_fresh: bool = False) -> dict[str, object]:
+  def get_sme_evaluation(self, run_fresh: bool = False) -> dict[str, Any]:
     """Returns the 6-persona SME evaluation scorecard (automated rubric + human SME ratings)."""
     state = self.get_state_payload(include_fleet=True, fast_mcp=False)
     fleet = state.get('ge_fleet') if isinstance(state.get('ge_fleet'), Mapping) else self._last_fleet_payload
@@ -306,7 +315,7 @@ class VibeLiftRuntimeController:
         rendered_html=ui_template.render_dashboard_html(),
     )
 
-  def submit_sme_rating(self, body: Mapping[str, object] | None = None) -> dict[str, object]:
+  def submit_sme_rating(self, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Records a human SME evaluation rating for a persona and returns updated state."""
     entry = sme_eval.get_sme_evaluation_store().submit_rating(body or {})
     state = self.get_state_payload(include_fleet=False)
@@ -317,7 +326,7 @@ class VibeLiftRuntimeController:
         'state': state,
     }
 
-  def validate_telemetry(self, run_llm_judge: bool = True) -> dict[str, object]:
+  def validate_telemetry(self, run_llm_judge: bool = True) -> dict[str, Any]:
     """Runs the deterministic + optional Vertex AI LLM-as-a-Judge telemetry grounding validator."""
     state = self.get_state_payload(include_fleet=True, fast_mcp=False)
     bq_insights = self.gcp_telemetry.fetch_live_bigquery_project_insights(non_blocking=True) if self._is_live_gcp() else None
@@ -333,7 +342,7 @@ class VibeLiftRuntimeController:
     getter = getattr(self.ge_fleet, 'rate_cards', None)
     return getter() if callable(getter) else {}
 
-  def _ge_daily_usage(self, bq_insights: object) -> dict[str, object] | None:
+  def _ge_daily_usage(self, bq_insights: object) -> dict[str, Any] | None:
     """Per-day GE usage (vibelift_mart.fct_turns) joined with billed AI spend (billing export)."""
     if not isinstance(bq_insights, Mapping) or not isinstance(bq_insights.get('ge_daily_totals'), list):
       return None
@@ -355,33 +364,33 @@ class VibeLiftRuntimeController:
         'sessions': list(bq_insights.get('ge_sessions') or []),
     }
 
-  def get_user_centric_finops_payload(self, window_hours: int | None = None) -> dict[str, object]:
+  def get_user_centric_finops_payload(self, window_hours: int | None = None) -> dict[str, Any]:
     """User-centric FinOps plus per-user session token rollup and per-session turn token drilldown."""
     state = self.get_state_payload(include_fleet=False, window_hours=window_hours)
-    uc = state.get('user_centric') if isinstance(state.get('user_centric'), Mapping) else {}
+    uc = as_mapping(state.get('user_centric'))
     return {
         'project_id': self.gcp_telemetry.project_id,
         'mode': 'LIVE_GCP' if self._is_live_gcp() else 'DEMO',
         'user_centric': uc,
         'session_drilldown': live_finops.build_session_token_drilldown(
-            uc.get('ge_sessions') if isinstance(uc.get('ge_sessions'), list) else [],
-            uc.get('ge_session_turns') if isinstance(uc.get('ge_session_turns'), Mapping) else {},
+            as_list(uc.get('ge_sessions')),
+            as_mapping(uc.get('ge_session_turns')),
         ),
     }
 
-  def refresh_ge_mart(self) -> dict[str, object]:
+  def refresh_ge_mart(self) -> dict[str, Any]:
     """Rebuilds vibelift_mart.fct_turns from v_fct_turns and returns the refreshed state."""
     result = self.gcp_telemetry.refresh_ge_mart_turns()
     if self._is_live_gcp():
       self.gcp_telemetry.fetch_live_bigquery_project_insights(force_refresh=True, non_blocking=False)
     return {'refresh': result, 'state': self.get_state_payload(include_fleet=False)}
 
-  def _live_finops(self, fleet: Mapping[str, object] | None) -> dict[str, object]:
+  def _live_finops(self, fleet: Mapping[str, Any] | None) -> dict[str, Any]:
     payload = live_finops.build_live_finops(fleet)
     payload['rate_card_models'] = sorted(self._rate_cards())
     return payload
 
-  def what_if_live(self, body: Mapping[str, object] | None = None) -> dict[str, object]:
+  def what_if_live(self, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Projection from observed model usage (model switch or cache share); never uses example inputs."""
     raw = body or {}
     fleet = self.get_fleet_payload(
@@ -398,7 +407,7 @@ class VibeLiftRuntimeController:
     except (TypeError, ValueError):
       return {'status': 'ERROR', 'error': 'Invalid numeric input.'}
 
-  def recompute_finops(self, body: Mapping[str, object] | None = None) -> dict[str, object]:
+  def recompute_finops(self, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Recomputes the deterministic Tokenomics & AgentOps Cockpit FinOps payload for given assumptions."""
     if self._is_live_gcp():
       return {
@@ -409,12 +418,12 @@ class VibeLiftRuntimeController:
     with self._lock:
       return self.optimizer.get_tokenomics_and_cockpit_finops_payload(body)
 
-  def query_nl2sql(self, question: str) -> dict[str, object]:
+  def query_nl2sql(self, question: str) -> dict[str, Any]:
     """Executes an interactive NL2SQL telemetry query and returns SQL + rows + executive summary."""
     with self._lock:
       return self.optimizer.execute_nl2sql_telemetry_query(question)
 
-  def simulate_what_if(self, body: Mapping[str, object] | None = None) -> dict[str, object]:
+  def simulate_what_if(self, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Runs an interactive What-If FinOps & Canary scenario on the currently selected agent."""
     if self._is_live_gcp():
       return {
@@ -444,7 +453,7 @@ class VibeLiftRuntimeController:
           traffic_canary_pct=traffic_canary_pct,
       )
 
-  def submit_csat_rating(self, body: Mapping[str, object] | None = None) -> dict[str, object]:
+  def submit_csat_rating(self, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Records a Voice-of-Customer CSAT rating into `aive_logs.ratings_log` and returns updated state."""
     raw = body or {}
     try:
@@ -460,7 +469,7 @@ class VibeLiftRuntimeController:
     )
     return self.get_state_payload(include_fleet=False)
 
-  def ingest_aive_log(self, body: Mapping[str, object] | None = None) -> dict[str, object]:
+  def ingest_aive_log(self, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Ingests a @with_analytics_logging event into `aive_logs` and the real-time decorator stream."""
     raw = body or {}
     active = self.optimizer.active_agent
@@ -484,7 +493,7 @@ class VibeLiftRuntimeController:
     )
     return self.get_state_payload(include_fleet=False)
 
-  def sync_gcp_telemetry(self, window_hours: int | None = None) -> dict[str, object]:
+  def sync_gcp_telemetry(self, window_hours: int | None = None) -> dict[str, Any]:
     """Fetches live Cloud Logging turns from GCP and ingests them into the active runtime."""
     live_turns = self.gcp_telemetry.fetch_live_cloud_turns(hours_ago=window_hours or 48, max_results=15)
     with self._lock:
@@ -492,7 +501,7 @@ class VibeLiftRuntimeController:
         self.agent.ingest_gcp_cloud_turns(live_turns)
     return self.get_state_payload(include_fleet=False, window_hours=window_hours)
 
-  def select_agent(self, agent_id: str) -> dict[str, object]:
+  def select_agent(self, agent_id: str) -> dict[str, Any]:
     """Switches the active agent being analyzed and optimized."""
     with self._lock:
       self.optimizer.select_agent(agent_id)
@@ -503,13 +512,13 @@ class VibeLiftRuntimeController:
       )
     return self.get_state_payload(include_fleet=False)
 
-  def select_optimizer(self, platform_id: str) -> dict[str, object]:
+  def select_optimizer(self, platform_id: str) -> dict[str, Any]:
     """Switches the active optimization platform (AlphaEvolve, Opus Critic, Vizier, or Hybrid)."""
     with self._lock:
       self.optimizer.select_optimizer_platform(platform_id)
     return self.get_state_payload(include_fleet=False)
 
-  def ingest_decorator_event(self, body: Mapping[str, object] | None = None) -> dict[str, object]:
+  def ingest_decorator_event(self, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Records a real-time @vibelift_telemetry decorator event from an agent message-passing hook."""
     import time
     raw = body or {}
@@ -562,7 +571,7 @@ class VibeLiftRuntimeController:
       baseline_val: float,
       target_val: float,
       weight_pct: int,
-  ) -> dict[str, object]:
+  ) -> dict[str, Any]:
     """Adds a custom user-defined parameter to the currently selected agent."""
     with self._lock:
       self.optimizer.add_user_parameter(
@@ -575,26 +584,26 @@ class VibeLiftRuntimeController:
       )
     return self.get_state_payload(include_fleet=False)
 
-  def inject_anomaly(self) -> dict[str, object]:
+  def inject_anomaly(self) -> dict[str, Any]:
     """Simulates a production log anomaly (cache bust + latency/cost spike)."""
     with self._lock:
       self.optimizer.inject_anomaly()
     return self.get_state_payload(include_fleet=False)
 
-  def step_turn(self) -> dict[str, object]:
+  def step_turn(self) -> dict[str, Any]:
     """Executes one long-running agent turn and returns updated state."""
     with self._lock:
       self.agent.step_turn()
     return self.get_state_payload(include_fleet=False)
 
-  def evolve_generation(self) -> dict[str, object]:
+  def evolve_generation(self) -> dict[str, Any]:
     """Runs the next AlphaEvolve Pareto generation and steps the agent."""
     with self._lock:
       self.optimizer.run_next_generation()
       self.agent.step_turn()
     return self.get_state_payload(include_fleet=False)
 
-  def reset(self) -> dict[str, object]:
+  def reset(self) -> dict[str, Any]:
     """Resets the optimizer and agent trajectory to the initial seed state."""
     with self._lock:
       current_id = self.optimizer.active_agent.agent_id
@@ -650,7 +659,7 @@ class VibeLiftHttpServer(http.server.ThreadingHTTPServer):
 class VibeLiftRequestHandler(http.server.BaseHTTPRequestHandler):
   """Handles HTML UI and JSON API requests for VibeLift Analytics Platform."""
 
-  def _read_json_body(self) -> dict[str, object]:
+  def _read_json_body(self) -> dict[str, Any]:
     """Reads and parses optional JSON request body."""
     length_str = self.headers.get('Content-Length', '0')
     length = int(length_str) if length_str.isdigit() else 0
@@ -682,7 +691,7 @@ class VibeLiftRequestHandler(http.server.BaseHTTPRequestHandler):
       return
     if path == '/api/ge_fleet':
       self._send_json(srv.controller.get_fleet_payload(
-          window_hours=ge_fleet.parse_window_hours((query.get('window_hours') or [None])[0]),
+          window_hours=ge_fleet.parse_window_hours(_first_query_value(query, 'window_hours')),
           force_refresh=ge_fleet.parse_bool((query.get('force_refresh') or [''])[0]),
       ))
       return
@@ -709,7 +718,7 @@ class VibeLiftRequestHandler(http.server.BaseHTTPRequestHandler):
       return
     if path == '/api/state':
       self._send_json(srv.controller.get_state_payload(
-          window_hours=ge_fleet.parse_window_hours((query.get('window_hours') or [None])[0]),
+          window_hours=ge_fleet.parse_window_hours(_first_query_value(query, 'window_hours')),
       ))
       return
     if path == '/api/gcp_telemetry':
@@ -717,7 +726,7 @@ class VibeLiftRequestHandler(http.server.BaseHTTPRequestHandler):
       return
     if path == '/api/user_centric_finops':
       self._send_json(srv.controller.get_user_centric_finops_payload(
-          window_hours=ge_fleet.parse_window_hours((query.get('window_hours') or [None])[0]),
+          window_hours=ge_fleet.parse_window_hours(_first_query_value(query, 'window_hours')),
       ))
       return
     if path == '/api/tokenomics_cockpit':
@@ -852,7 +861,7 @@ class VibeLiftRequestHandler(http.server.BaseHTTPRequestHandler):
     """Routes HTTP access logs through standard logger."""
     logger.info('VibeLift HTTP: ' + fmt, *args)
 
-  def _send_json(self, payload: Mapping[str, object] | dict[str, object]) -> None:
+  def _send_json(self, payload: Mapping[str, Any] | dict[str, Any]) -> None:
     """Serializes payload as JSON and writes HTTP 200 response."""
     body = json.dumps(payload).encode('utf-8')
     self.send_response(200)
@@ -893,7 +902,7 @@ def base_url_from_headers(headers: object, default_scheme: str = 'https') -> str
   return f"{proto if proto in ('http', 'https') else default_scheme}://{host}"
 
 
-def build_agent_card(request_base_url: str | None = None) -> dict[str, object]:
+def build_agent_card(request_base_url: str | None = None) -> dict[str, Any]:
   """A2A agent card served at /.well-known/agent-card.json and /a2a/app/.well-known/agent-card.json.
 
   The advertised URL is VIBELIFT_PUBLIC_URL when set, otherwise the URL the request arrived on,
@@ -961,7 +970,7 @@ def build_agent_card(request_base_url: str | None = None) -> dict[str, object]:
   }
 
 
-def register_api_routes(app: object, controller: VibeLiftRuntimeController) -> None:
+def register_api_routes(app: Any, controller: VibeLiftRuntimeController) -> None:
   """Registers the dashboard UI, agent card, and JSON API routes on a FastAPI app.
 
   Handlers are plain ``def`` so FastAPI runs the blocking Google Cloud calls in its threadpool.
