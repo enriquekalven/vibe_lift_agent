@@ -10,17 +10,14 @@ Enables Gemini Enterprise and AI clients to connect to VibeLift as a BYO MCP App
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping, Sequence
 import json
 import logging
 import os
-import sys
 import uuid
 from typing import Any
 
 from starlette.responses import JSONResponse, Response
 
-from vibelift import gcp_telemetry
 from vibelift import fleet as ge_fleet
 from vibelift import telemetry
 from vibelift.ui import template as ui_template
@@ -220,12 +217,15 @@ async def _tool_open_dashboard(session_key: str, args: dict[str, Any]) -> dict[s
 async def _tool_query_ge_agent_fleet(session_key: str, args: dict[str, Any]) -> dict[str, Any]:
   """Lists every agent on the Gemini Enterprise app with live, aggregated telemetry."""
   ctrl = _get_controller()
+  window_hours = ge_fleet.parse_window_hours(args.get('window_hours'))
+  force_refresh = ge_fleet.parse_bool(args.get('force_refresh'))
+  wait_s = 8.0 if (window_hours is not None or force_refresh) else 0.45
   fleet = await asyncio.to_thread(
       ctrl.get_fleet_payload,
-      ge_fleet.parse_window_hours(args.get('window_hours')),
-      ge_fleet.parse_bool(args.get('force_refresh')),
+      window_hours,
+      force_refresh,
       True,
-      0.45,
+      wait_s,
   )
   return {
       'content': [{'type': 'text', 'text': ge_fleet.summarize_fleet(fleet)}],
@@ -261,7 +261,7 @@ async def _tool_calculate_cache_economics(session_key: str, args: dict[str, Any]
   cached_tok = int(args.get('cached_content_token_count') or 0)
   output_tok = int(args.get('output_token_count') or 500)
 
-  card = telemetry.RATE_CARDS.get(model, telemetry.RATE_CARDS['gemini-2.5-flash'])
+  telemetry.RATE_CARDS.get(model, telemetry.RATE_CARDS['gemini-2.5-flash'])
   uncached_tok = max(0, prompt_tok - cached_tok)
 
   log_entry = telemetry.TurnUsageLog(
@@ -380,7 +380,7 @@ _TOOLS: list[dict[str, Any]] = [
                 },
                 'window_hours': {
                     'type': 'integer',
-                    'description': 'Telemetry window for the live fleet in hours (1-720, default 24).',
+                    'description': 'Telemetry window for the live fleet in hours (1-8760, default 24; e.g. 1, 6, 24, 168, 720, 2160, 4320, 8760).',
                 },
             },
         },
@@ -423,7 +423,7 @@ _TOOLS: list[dict[str, Any]] = [
             'properties': {
                 'window_hours': {
                     'type': 'integer',
-                    'description': 'Telemetry window in hours (1-720, default 24; e.g. 1, 6, 24, 168).',
+                    'description': 'Telemetry window in hours (1-8760, default 24; e.g. 1, 6, 24, 168, 720, 2160, 4320, 8760).',
                 },
                 'force_refresh': {
                     'type': 'boolean',

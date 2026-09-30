@@ -1,9 +1,9 @@
 """Multi-agent profiles, user parameters, time-series & AlphaEvolve actions."""
 
 import ast
-from collections.abc import Mapping
 import dataclasses
 import re
+from collections.abc import Mapping
 
 
 def scan_python_code_for_finops_findings(
@@ -849,7 +849,9 @@ def build_live_runaway_alerts(live_fleet: Mapping[str, object]) -> list[dict[str
     req = int(m.get('requests') or 0)
     if req < 10:
       continue
-    from vibelift import fleet as ge_fleet  # pylint: disable=g-import-not-at-top  (avoids an import cycle at module load)
+    from vibelift import (
+      fleet as ge_fleet,  # pylint: disable=g-import-not-at-top  (avoids an import cycle at module load)
+    )
 
     rt = ge_fleet.runtime_backend_key(a) or str(a.get('agent_id'))
     if rt in seen_runtimes:
@@ -1161,7 +1163,6 @@ def build_user_centric_analytics(
     token_category_breakdown['observed_gcp_prompt_tokens'] = obs_in
     token_category_breakdown['observed_gcp_cached_tokens'] = obs_cached
     token_category_breakdown['observed_gcp_output_tokens'] = obs_out
-    token_category_breakdown['observed_gcp_cache_hit_pct'] = round((obs_cached / max(1, obs_in)) * 100.0, 1)
     token_category_breakdown['observed_gcp_cache_hit_pct'] = (
         round((obs_cached / obs_in) * 100.0, 1) if obs_in else None
     )
@@ -1183,7 +1184,7 @@ def build_user_centric_analytics(
         'annualized_savings_usd': None,
         'savings_note': 'Not measured: savings need a before/after baseline, which telemetry does not contain.',
         'collection_mode': (
-            'LIVE GCP TELEMETRY (project-maui BigQuery ds_ge_audit_raw + sre_triage_agent_telemetry + Cloud Monitoring v3)'
+            'LIVE GCP TELEMETRY (project-maui BigQuery vibelift_mart + ds_ge_curated_staging + sre_triage_agent_telemetry + Cloud Monitoring v3)'
         ),
         'security_governance': {},
         'cohorts_live': True,
@@ -1208,7 +1209,7 @@ def build_user_centric_analytics(
       'total_monthly_savings_usd': total_monthly_savings,
       'annualized_savings_usd': total_monthly_savings * 12,
       'collection_mode': (
-          'LIVE GCP TELEMETRY (project-maui BigQuery ds_ge_audit_raw + sre_triage_agent_telemetry + Cloud Monitoring v3)'
+          'LIVE GCP TELEMETRY (project-maui BigQuery vibelift_mart + ds_ge_curated_staging + sre_triage_agent_telemetry + Cloud Monitoring v3)'
           if (isinstance(live_bq, Mapping) and live_bq.get('power_users_ldap'))
           else '@vibelift_telemetry & @with_analytics_logging (Real-Time + BigQuery aive_logs, <10ms lag)'
       ),
@@ -1640,7 +1641,7 @@ def build_otel_5_layer_catalog(
   }
 
   return {
-      'total_standardized_parameters': sum(len(l['parameters']) for l in layers),
+      'total_standardized_parameters': sum(len(layer['parameters']) for layer in layers),
       'layers': layers,
       'watch_out_alarms': watch_out_alarms,
       'architecture_tco': architecture_tco,
@@ -1690,6 +1691,8 @@ class VibeLiftAlphaEvolveOptimizer:
         'blocked_dml_attempt': blocked_dml,
         'max_bytes_billed_cap': 104857600,
         'allowed_datasets': [
+            'project-maui.vibelift_mart',
+            'project-maui.ds_ge_curated_staging',
             'project-maui.ds_ge_audit_raw',
             'project-maui.sre_triage_agent_telemetry',
             'project-maui.vibelift_analytics',
@@ -1736,29 +1739,88 @@ class VibeLiftAlphaEvolveOptimizer:
           ),
       }
 
+    if any(w in q_lower for w in ('session', 'mart', 'fct_turns', 'fct_sessions', 'daily usage')) and not blocked_dml:
+      sql = (
+          'SELECT\n'
+          '  engine_key,\n'
+          '  session_id,\n'
+          '  user_email,\n'
+          '  turns,\n'
+          '  chat_turns,\n'
+          '  failed_turns,\n'
+          '  duration_seconds,\n'
+          '  total_tokens,\n'
+          '  CAST(session_end AS STRING) AS session_end\n'
+          'FROM `project-maui.vibelift_mart.fct_sessions`\n'
+          'WHERE session_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)\n'
+          'ORDER BY session_end DESC\n'
+          'LIMIT 25;'
+      )
+      live_bq = self._live_bq_insights if isinstance(self._live_bq_insights, dict) else {}
+      sessions = list(live_bq.get('ge_sessions') or [])
+      rows = [
+          {
+              'session_id': str(s.get('session_id') or '—'),
+              'engine_key': str(s.get('engine_key') or '—'),
+              'user_email': str(s.get('user_email') or '—'),
+              'turns': s.get('turns', 0),
+              'chat_turns': s.get('chat_turns', 0),
+              'failed_turns': s.get('failed_turns', 0),
+              'duration_seconds': f"{s.get('duration_seconds')}s" if s.get('duration_seconds') is not None else '—',
+              'total_tokens': s.get('total_tokens') if s.get('total_tokens') is not None else '—',
+              'session_end': str(s.get('session_end') or '—'),
+          }
+          for s in sessions
+      ]
+      return {
+          'question': q_clean or 'Show Gemini Enterprise conversation sessions from vibelift_mart.fct_sessions',
+          'intent': 'GE_MART_SESSIONS_AND_DAILY',
+          'generated_sql': sql,
+          'sql_safety_audit': safety_audit,
+          'columns': [
+              'session_id', 'engine_key', 'user_email', 'turns', 'chat_turns',
+              'failed_turns', 'duration_seconds', 'total_tokens', 'session_end',
+          ],
+          'rows': rows,
+          'executive_summary': (
+              f'Queried {len(rows)} real conversation sessions from project-maui.vibelift_mart.fct_sessions '
+              '(built over ds_ge_curated_staging views with zero synthetic single-search session inflation).'
+          ),
+      }
+
     if any(w in q_lower for w in ('ldap', 'power user', 'user', 'department', 'who', 'csat')) and not blocked_dml:
       sql = (
           'SELECT\n'
-          '  protopayload_auditlog.authenticationInfo.principalEmail AS user_email,\n'
-          '  protopayload_auditlog.methodName AS top_task_type,\n'
-          '  COUNT(*) AS sessions_7d\n'
-          'FROM `project-maui.ds_ge_audit_raw.cloudaudit_googleapis_com_data_access`\n'
-          'GROUP BY user_email, top_task_type\n'
-          'ORDER BY sessions_7d DESC\n'
+          '  user_email,\n'
+          '  engine_key,\n'
+          '  COUNT(1) AS interactions_7d,\n'
+          '  COUNT(DISTINCT session_id) AS sessions_7d,\n'
+          '  SUM(total_tokens) AS total_tokens\n'
+          'FROM `project-maui.vibelift_mart.fct_turns`\n'
+          'WHERE event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)\n'
+          '  AND user_email IS NOT NULL\n'
+          'GROUP BY user_email, engine_key\n'
+          'ORDER BY interactions_7d DESC\n'
           'LIMIT 10;'
       )
       users = uc.get('power_users_ldap') if isinstance(uc.get('power_users_ldap'), list) else []
       rows = [
           {
-              'user_ldap': u['user_ldap'],
-              'department': u['department'],
-              'primary_agent': u['primary_agent'],
-              'top_task_type': u['top_task_type'],
-              'sessions_7d': u['sessions_7d'],
-              'total_tokens_m': f"{u['total_tokens_m']}M",
-              'cache_hit_pct': f"{u['cache_hit_pct']}%",
-              'csat_rating': f"{u.get('avg_csat', u.get('csat_rating', 5.0))} ★",
-              'monthly_savings_usd': f"${u['monthly_savings_usd']:,}/mo",
+              'user_ldap': u.get('user_ldap', '—'),
+              'department': u.get('department', '—'),
+              'primary_agent': u.get('primary_agent', '—'),
+              'top_task_type': u.get('top_task_type') or u.get('status') or '—',
+              'sessions_7d': u.get('sessions_7d', 0),
+              'total_tokens_m': f"{u['total_tokens_m']}M" if u.get('total_tokens_m') is not None else '—',
+              'cache_hit_pct': f"{u['cache_hit_pct']}%" if u.get('cache_hit_pct') is not None else '—',
+              'csat_rating': (
+                  f"{u.get('avg_csat', u.get('csat_rating'))} ★"
+                  if (u.get('avg_csat') is not None or u.get('csat_rating') is not None)
+                  else '—'
+              ),
+              'monthly_savings_usd': (
+                  f"${u['monthly_savings_usd']:,}/mo" if u.get('monthly_savings_usd') is not None else '—'
+              ),
           }
           for u in users
       ]
@@ -2075,7 +2137,7 @@ class VibeLiftAlphaEvolveOptimizer:
             'c_infra_per_turn_usd': 0.0005,
             'escalation_rate_baseline_pct': 18.4,
             'escalation_rate_optimized_pct': 3.6,
-            'sessions_per_mo': max(100, int(round(84000 * task_scale))),
+            'sessions_per_mo': max(100, round(84000 * task_scale)),
         },
         {
             'agent_id': 'vibelift_analytics',
@@ -2089,7 +2151,7 @@ class VibeLiftAlphaEvolveOptimizer:
             'c_infra_per_turn_usd': 0.0004,
             'escalation_rate_baseline_pct': 12.0,
             'escalation_rate_optimized_pct': 1.8,
-            'sessions_per_mo': max(100, int(round(31000 * task_scale))),
+            'sessions_per_mo': max(100, round(31000 * task_scale)),
         },
         {
             'agent_id': 'deep_research',
@@ -2103,7 +2165,7 @@ class VibeLiftAlphaEvolveOptimizer:
             'c_infra_per_turn_usd': 0.0011,
             'escalation_rate_baseline_pct': 22.0,
             'escalation_rate_optimized_pct': 4.2,
-            'sessions_per_mo': max(100, int(round(14500 * task_scale))),
+            'sessions_per_mo': max(100, round(14500 * task_scale)),
         },
     ]
     cpo_agents = []
@@ -2259,7 +2321,7 @@ class VibeLiftAlphaEvolveOptimizer:
     # 4. 4 Metering Categories, Consumption Lanes & Commercial Seat Risk Model (Decks 1, 2, 3)
     # Seat-based commercial risk model (Deck 1 Slides 22-26 & 50-53):
     # Gemini Enterprise Standard = $30/user/mo with 1,500 prompts/day pooled across org
-    power_users_count = max(1, int(round(ge_seats * (power_user_ratio_pct / 100.0))))
+    power_users_count = max(1, round(ge_seats * (power_user_ratio_pct / 100.0)))
     standard_users_count = max(0, ge_seats - power_users_count)
     ge_pooled_monthly_usd = round(ge_seats * 30.0 * (1.0 - fsp_discount_pct / 100.0), 2)
     # Under raw PAYGO API, power users burn ~$651/mo on Flash API (or $3,762/mo on Frontier API)
@@ -3136,7 +3198,7 @@ class VibeLiftAlphaEvolveOptimizer:
     proj_acc = round(min(99.4, max(90.0, cur_acc + acc_delta)), 1)
     proj_cache = round(min(98.2, cur_cache + (3.2 if win_turns <= 6 else 0.8)), 1)
     proj_session_cost = round((proj_cost / 1000.0) * 3.0, 4)
-    proj_monthly_savings = int(round(active.monthly_savings_usd * (1.0 + max(0.05, (cur_cost - proj_cost) / max(1.0, cur_cost) * 0.45))))
+    proj_monthly_savings = round(active.monthly_savings_usd * (1.0 + max(0.05, (cur_cost - proj_cost) / max(1.0, cur_cost) * 0.45)))
     guardrail_passed = proj_acc >= 95.0 and proj_lat <= 850.0
 
     gen_num = (active.timeline[-1].generation if active.timeline else 14) + 1

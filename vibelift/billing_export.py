@@ -8,7 +8,6 @@ The export table is configured with `VIBELIFT_BILLING_EXPORT_TABLE`
 result says so explicitly (`NOT_CONNECTED` / `ERROR`); no numbers are invented.
 """
 
-from collections.abc import Callable
 import json
 import logging
 import os
@@ -17,6 +16,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +145,9 @@ class BillingExportReader:
     self._cache_ts = 0.0
     self._lock = threading.Lock()
     self._inflight = False
+    self._daily_cache: dict[str, object] | None = None
+    self._daily_cache_ts = 0.0
+    self._daily_inflight = False
 
   def get(self, non_blocking: bool = False) -> dict[str, object]:
     table = configured_table()
@@ -163,6 +166,23 @@ class BillingExportReader:
     self._refresh(table)
     return self._cache or not_connected_payload(status='ERROR', table=table)
 
+  def get_daily_ai_costs(self, non_blocking: bool = False, window_days: int = WINDOW_DAYS) -> dict[str, object]:
+    """Per-day billed AI spend for this project (see summarize_daily_cost_rows)."""
+    table = configured_table()
+    if not table:
+      return daily_cost_not_connected()
+    now = time.monotonic()
+    with self._lock:
+      if self._daily_cache is not None and (now - self._daily_cache_ts) < CACHE_TTL_S:
+        return self._daily_cache
+      if non_blocking:
+        if not self._daily_inflight:
+          self._daily_inflight = True
+          threading.Thread(target=self._refresh_daily, args=(table, window_days), daemon=True).start()
+        return self._daily_cache or daily_cost_not_connected('Loading billing export…', status='LOADING', table=table)
+    self._refresh_daily(table, window_days)
+    return self._daily_cache or daily_cost_not_connected(status='ERROR', table=table)
+
   def _refresh(self, table: str) -> None:
     try:
       result = self._query(table)
@@ -174,11 +194,32 @@ class BillingExportReader:
       self._cache_ts = time.monotonic()
       self._inflight = False
 
+  def _refresh_daily(self, table: str, window_days: int) -> None:
+    try:
+      rows, error = self._run(build_daily_cost_sql(table, self.project_id, window_days))
+      if error:
+        result = daily_cost_not_connected(error, status='ERROR', table=table)
+      else:
+        result = summarize_daily_cost_rows(rows, table, window_days)
+    except Exception as exc:  # pylint: disable=broad-except
+      logger.warning('Billing export daily cost query failed: %s', exc)
+      result = daily_cost_not_connected(f'Billing export query failed: {exc}'[:300], status='ERROR', table=table)
+    with self._lock:
+      self._daily_cache = result
+      self._daily_cache_ts = time.monotonic()
+      self._daily_inflight = False
+
   def _query(self, table: str) -> dict[str, object]:
-    sql = build_billing_sql(table, self.project_id)
+    rows, error = self._run(build_billing_sql(table, self.project_id))
+    if error:
+      return not_connected_payload(error, status='ERROR', table=table)
+    return summarize_rows(rows, table)
+
+  def _run(self, sql: str) -> tuple[list[dict[str, object]], str | None]:
+    """Runs a query over REST. Returns (rows, None) or ([], error message)."""
     token = self._token_provider()
     if not token:
-      return not_connected_payload('No Google Cloud credentials available.', status='ERROR', table=table)
+      return [], 'No Google Cloud credentials available.'
     req = urllib.request.Request(
         f'https://bigquery.googleapis.com/bigquery/v2/projects/{self.project_id}/queries',
         data=json.dumps({
@@ -204,9 +245,132 @@ class BillingExportReader:
         detail = json.loads(exc.read().decode('utf-8')).get('error', {}).get('message', '')
       except Exception:  # pylint: disable=broad-except
         pass
-      return not_connected_payload(f'BigQuery HTTP {exc.code}: {detail}'[:300], status='ERROR', table=table)
+      return [], f'BigQuery HTTP {exc.code}: {detail}'[:300]
     if not res.get('jobComplete', True):
-      return not_connected_payload('Billing export query did not finish in time.', status='ERROR', table=table)
+      return [], 'Billing export query did not finish in time.'
     fields = [f.get('name') for f in res.get('schema', {}).get('fields', [])]
-    rows = [dict(zip(fields, [c.get('v') for c in row.get('f', [])])) for row in res.get('rows', [])]
-    return summarize_rows(rows, table)
+    return [dict(zip(fields, [c.get('v') for c in row.get('f', [])], strict=False)) for row in res.get('rows', [])], None
+
+
+# ---------------------------------------------------------------------------------------------
+# Daily AI spend, joined to the GE mart's daily usage (vibelift_mart.agg_daily_usage / fct_turns)
+# ---------------------------------------------------------------------------------------------
+
+# Billing services counted as AI spend. Project-level only: the export has no per-agent split,
+# so cost is never allocated to individual agents or users.
+AI_SERVICE_RE = re.compile(
+    r'(vertex ai|gemini|discovery engine|agentspace|agent builder|generative language|agent platform)',
+    re.IGNORECASE,
+)
+
+
+def build_daily_cost_sql(table: str, project_id: str, window_days: int = WINDOW_DAYS) -> str:
+  """Per-day, per-service billed cost. Inputs are validated because they are interpolated."""
+  if not _TABLE_RE.match(table):
+    raise ValueError(f'Invalid billing export table name: {table!r}')
+  if not _PROJECT_RE.match(project_id):
+    raise ValueError(f'Invalid project id: {project_id!r}')
+  days = max(1, min(int(window_days), 400))
+  return f"""
+    SELECT
+      CAST(DATE(usage_start_time) AS STRING) AS day,
+      service.description AS service,
+      ROUND(SUM(cost), 6) AS gross_usd,
+      ROUND(SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)), 6) AS credits_usd,
+      ANY_VALUE(currency) AS currency
+    FROM `{table}`
+    WHERE project.id = '{project_id}'
+      AND usage_start_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {days} DAY)
+    GROUP BY day, service
+    HAVING gross_usd != 0 OR credits_usd != 0
+    ORDER BY day
+  """
+
+
+def daily_cost_not_connected(message: str | None = None, status: str = 'NOT_CONNECTED',
+                             table: str | None = None) -> dict[str, object]:
+  return {
+      'status': status,
+      'source': 'Cloud Billing export (BigQuery)',
+      'billing_export_table': table,
+      'days': [],
+      'last_billed_day': None,
+      'currency': None,
+      'message': message or HOW_TO_CONNECT,
+  }
+
+
+def summarize_daily_cost_rows(rows: list[dict[str, object]], table: str,
+                              window_days: int = WINDOW_DAYS) -> dict[str, object]:
+  """Collapses per-day, per-service rows into per-day AI and total net spend."""
+  by_day: dict[str, dict[str, object]] = {}
+  currency = None
+  for r in rows:
+    day = str(r.get('day') or '')
+    if not day:
+      continue
+    try:
+      net = float(r.get('gross_usd') or 0.0) + float(r.get('credits_usd') or 0.0)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+      continue
+    service = str(r.get('service') or '')
+    currency = currency or r.get('currency')
+    d = by_day.setdefault(day, {'day': day, 'ai_net_usd': 0.0, 'all_net_usd': 0.0, 'ai_services': []})
+    d['all_net_usd'] = round(float(d['all_net_usd']) + net, 6)  # type: ignore[arg-type]
+    if AI_SERVICE_RE.search(service):
+      d['ai_net_usd'] = round(float(d['ai_net_usd']) + net, 6)  # type: ignore[arg-type]
+      if service not in d['ai_services']:  # type: ignore[operator]
+        d['ai_services'].append(service)  # type: ignore[union-attr]
+  days = [by_day[k] for k in sorted(by_day)]
+  return {
+      'status': 'LIVE',
+      'source': 'Cloud Billing export (BigQuery)',
+      'billing_export_table': table,
+      'window_days': window_days,
+      'days': days,
+      'last_billed_day': days[-1]['day'] if days else None,
+      'currency': currency or 'USD',
+      'message': f'{len(days)} billed days in the last {window_days} days.' if days else
+                 f'No billed usage for this project in the last {window_days} days.',
+  }
+
+
+def join_daily_usage_with_cost(daily_usage: list[dict[str, object]],
+                               daily_cost: dict[str, object]) -> list[dict[str, object]]:
+  """Joins per-day usage (from the GE mart) with per-day billed AI spend.
+
+  Cost is project-level AI spend (every AI service in the project, not only Gemini Enterprise).
+  It is None when billing is not connected, for days after the last exported billing day (the
+  export lags by up to a day), and for days before the first exported day (the export may not
+  have existed yet). Unit costs are None when their denominator is unknown or 0.
+  """
+  live = daily_cost.get('status') == 'LIVE'
+  cost_by_day = {str(d.get('day')): d for d in (daily_cost.get('days') or []) if isinstance(d, dict)}
+  last_billed = daily_cost.get('last_billed_day')
+  first_billed = min(cost_by_day) if cost_by_day else None
+  out = []
+  for u in daily_usage:
+    day = str(u.get('day') or '')
+    ai_net: float | None = None
+    if live and day:
+      if day in cost_by_day:
+        ai_net = float(cost_by_day[day].get('ai_net_usd') or 0.0)  # type: ignore[arg-type]
+      elif first_billed and last_billed and str(first_billed) <= day <= str(last_billed):
+        ai_net = 0.0  # exported day with no AI charges
+    interactions = u.get('interactions')
+    tokens = u.get('total_tokens')
+    per_1k_turns = None
+    if ai_net is not None and isinstance(interactions, int) and interactions > 0:
+      per_1k_turns = round(ai_net / interactions * 1000.0, 4)
+    per_1m_tokens = None
+    if ai_net is not None and isinstance(tokens, int) and tokens > 0:
+      per_1m_tokens = round(ai_net / tokens * 1_000_000.0, 4)
+    row = dict(u)
+    row.update({
+        'ai_net_usd': round(ai_net, 4) if ai_net is not None else None,
+        'usd_per_1k_turns': per_1k_turns,
+        'usd_per_1m_tokens': per_1m_tokens,
+        'cost_scope': 'project_ai_services' if live else None,
+    })
+    out.append(row)
+  return out

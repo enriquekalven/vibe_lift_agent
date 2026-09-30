@@ -6,19 +6,15 @@ import re
 import threading
 import tomllib
 import unittest
-from unittest import mock
 import urllib.error
 import urllib.request
+from unittest import mock
 
-from vibelift import optimizer as alpha_evolve_optimizer
-from vibelift import long_running_agent
-from vibelift import server
-from vibelift import telemetry
-from vibelift import gcp_telemetry
-from vibelift import fleet as ge_fleet
-from tests import test_fleet as ge_fleet_test
-from vibelift import mcp_server
 from app import agent as adk_agent_module
+from tests import test_fleet as ge_fleet_test
+from vibelift import fleet as ge_fleet
+from vibelift import gcp_telemetry, long_running_agent, mcp_server, server, telemetry
+from vibelift import optimizer as alpha_evolve_optimizer
 
 _FAKE_FLEET, _FAKE_FLEET_API = ge_fleet_test.make_fake_service()
 
@@ -467,7 +463,7 @@ class VibeLiftFrameworkTest(unittest.TestCase):
       httpd.server_close()
 
   def test_mcp_server_sync_dispatch_coverage(self) -> None:
-    code, headers, body_str = mcp_server.handle_jsonrpc_sync({
+    code, _headers, body_str = mcp_server.handle_jsonrpc_sync({
         'jsonrpc': '2.0',
         'id': 'test-1',
         'method': 'initialize',
@@ -576,6 +572,7 @@ class ProductionAppTest(unittest.TestCase):
   @classmethod
   def setUpClass(cls) -> None:
     from fastapi.testclient import TestClient
+
     from app import fast_api_app
     cls.client = TestClient(fast_api_app.app)
 
@@ -834,9 +831,10 @@ class DeploymentHardeningTest(unittest.TestCase):
     self.assertIn('deep_research', payload['state']['all_agents'])
 
   def test_dashboard_javascript_syntax_is_valid_and_pip_configured(self) -> None:
+    import shutil
     import subprocess
     import tempfile
-    import shutil
+
     from vibelift.ui import template as ui_template
 
     state = server._global_controller.get_state_payload(fast_mcp=True)
@@ -868,6 +866,7 @@ class DeploymentHardeningTest(unittest.TestCase):
 
   def test_weekly_sync_enhancements_decorator_optimizer_and_user_centric_finops(self) -> None:
     from fastapi.testclient import TestClient
+
     from app import fast_api_app
 
     @telemetry.vibelift_telemetry(
@@ -928,6 +927,7 @@ class DeploymentHardeningTest(unittest.TestCase):
 
   def test_sme_one_pane_control_plane_endpoints_and_ui_panels(self) -> None:
     from fastapi.testclient import TestClient
+
     from app import fast_api_app
     from vibelift.ui import template as ui_template
 
@@ -1033,6 +1033,7 @@ class DeploymentHardeningTest(unittest.TestCase):
 
   def test_tokenomics_2026_and_cockpit_finops_ledger_and_recompute(self) -> None:
     from fastapi.testclient import TestClient
+
     from app import fast_api_app
 
     client = TestClient(fast_api_app.app)
@@ -1075,7 +1076,7 @@ class DeploymentHardeningTest(unittest.TestCase):
       mc = tc['metering_and_consumption']
       self.assertEqual(len(mc['categories']), 4)
       self.assertEqual(len(mc['routing_lanes']), 6)
-      pre_ga_lanes = [l['lane_name'] for l in mc['routing_lanes'] if '†' in l['lane_name']]
+      pre_ga_lanes = [lane['lane_name'] for lane in mc['routing_lanes'] if '†' in lane['lane_name']]
       self.assertGreaterEqual(len(pre_ga_lanes), 2)
       self.assertEqual(len(mc['model_portfolio_tiers']), 4)
 
@@ -1226,6 +1227,7 @@ def handle_request(client, filings, retriever):
 
   def test_recompute_finops_dynamic_hitl_monthly_tasks_and_provenance_reconciliation(self) -> None:
     from fastapi.testclient import TestClient
+
     from app import fast_api_app
 
     client = TestClient(fast_api_app.app)
@@ -1260,6 +1262,7 @@ def handle_request(client, filings, retriever):
 
   def test_sme_persona_playbooks_and_nl2sql_dml_guardrail_and_step_turn_reset(self) -> None:
     from fastapi.testclient import TestClient
+
     from app import fast_api_app
 
     client = TestClient(fast_api_app.app)
@@ -1305,6 +1308,7 @@ def handle_request(client, filings, retriever):
 
   def test_ux_refinement_six_tabs_calm_palette_and_plain_english_readability(self) -> None:
     import pathlib
+
     from vibelift.ui import template as ui_template
 
     state = server._global_controller.get_state_payload(fast_mcp=True)
@@ -1370,6 +1374,7 @@ def handle_request(client, filings, retriever):
 
   def test_telemetry_grounding_validator_and_live_gcp_no_fake_users(self) -> None:
     from fastapi.testclient import TestClient
+
     from app import fast_api_app
 
     client = TestClient(fast_api_app.app)

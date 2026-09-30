@@ -1,5 +1,6 @@
-from collections.abc import Mapping
 import json
+from collections.abc import Mapping
+
 from vibelift.ui import logo_asset
 
 # pylint: disable=line-too-long
@@ -569,6 +570,10 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         <option value="6">Last 6 hours</option>
         <option value="24" selected>Last 24 hours</option>
         <option value="168">Last 7 days</option>
+        <option value="720">Last 1 month</option>
+        <option value="2160">Last 3 months</option>
+        <option value="4320">Last 6 months</option>
+        <option value="8760">Last 1 year</option>
       </select>
     </div>
     <div class="action-bar">
@@ -640,14 +645,93 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="kpi-grid" id="northStarUnitEconKpis" style="margin-bottom:10px;"></div>
 
       <details class="role-disclosure" id="roleGuideDisclosure">
-        <summary>Role Guide &amp; 7-Step Workflow (Click to choose your role: FinOps, SRE, AI Engineer, Product, Security, or Support)</summary>
+        <summary>Role Guide, 7-Step Workflow &amp; SME Persona Evaluation Scorecard (FinOps, SRE, AI Engineer, Product, Security, Executive)</summary>
         <div style="margin-top:10px;">
           <div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;margin-bottom:6px;">
             Choose Your Role (Shows key metrics and daily actions for your team):
           </div>
           <div id="smePersonaLensBar" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;"></div>
           <div id="smePersonaPlaybookCard" class="action-box" style="margin-bottom:10px;"></div>
-          <div id="workflowStepsRibbon" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;"></div>
+          <div id="workflowStepsRibbon" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;margin-bottom:12px;"></div>
+
+          <div id="smeEvalScorecardPanel" style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+              <div>
+                <div style="font-size:12.5px;font-weight:700;color:var(--text-primary);">
+                  SME Multi-Persona Evaluation &amp; Rating Scorecard (6 Personas &times; 5 Rubric Dimensions = 30 Checks)
+                </div>
+                <div style="font-size:11.5px;color:var(--text-secondary);">
+                  Deterministic compliance rubric (Time-to-Insight, Actionability, Data Trust, Ergonomics, Guardrails) paired with live SME reviewer ratings.
+                </div>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <span id="smeEvalSummaryBadge" class="badge badge-green">Evaluating 30/30 Checks...</span>
+                <button id="smeEvalRunBtn" class="btn" style="padding:4px 10px;font-size:11.5px;" onclick="runSmePersonaAudit()">Re-run 30-Check Persona Audit</button>
+              </div>
+            </div>
+
+            <div class="table-wrap" style="margin-bottom:12px;">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Persona &amp; Primary Tab</th>
+                    <th>Critical User Journey (CUJ) Tested</th>
+                    <th>5-Dimension Rubric Breakdown (20 pts each)</th>
+                    <th class="right">Automated Score</th>
+                    <th class="right">Human SME Rating</th>
+                  </tr>
+                </thead>
+                <tbody id="smeEvalMatrixBody"></tbody>
+              </table>
+            </div>
+
+            <div style="background:#ffffff;border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:10px;">
+              <div style="font-size:11.5px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">
+                Submit SME Persona Evaluation &amp; Sign-Off Rating (Stored in Live Session Ledger)
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                <select id="smeEvalPersonaSelect" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;">
+                  <option value="finops_lead">FinOps &amp; Cloud Economics Lead</option>
+                  <option value="sre_platform">SRE &amp; Agent Platform Engineer</option>
+                  <option value="ai_engineer">AI / Prompt &amp; ADK Agent Engineer</option>
+                  <option value="product_quality">Product Manager &amp; VoC Quality Lead</option>
+                  <option value="security_governance">Security, Governance &amp; Data Privacy Auditor</option>
+                  <option value="cfo_exec">VP Engineering / Executive Sponsor</option>
+                </select>
+                <input id="smeEvalReviewerInput" type="text" placeholder="SME Reviewer (e.g. ldap@google.com)" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;min-width:190px;" />
+                <select id="smeEvalRatingSelect" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;">
+                  <option value="5">5 / 5 &mdash; Exceeds Expectations</option>
+                  <option value="4">4 / 5 &mdash; Meets Expectations</option>
+                  <option value="3">3 / 5 &mdash; Acceptable with Minor Gaps</option>
+                  <option value="2">2 / 5 &mdash; Friction / Missing Metric</option>
+                  <option value="1">1 / 5 &mdash; Blocks Workflow</option>
+                </select>
+                <select id="smeEvalVerdictSelect" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;">
+                  <option value="APPROVED">APPROVED</option>
+                  <option value="APPROVED_WITH_NOTES">APPROVED_WITH_NOTES</option>
+                  <option value="NEEDS_WORK">NEEDS_WORK</option>
+                </select>
+                <input id="smeEvalNotesInput" type="text" placeholder="Evaluation notes / CUJ feedback..." style="flex:1;min-width:200px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;" />
+                <button id="smeEvalSubmitBtn" class="btn btn-primary" style="padding:6px 12px;font-size:12px;" onclick="submitSmePersonaRating()">Submit SME Rating</button>
+              </div>
+            </div>
+
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Timestamp</th>
+                    <th>SME Reviewer</th>
+                    <th>Persona Evaluated</th>
+                    <th class="right">Rating</th>
+                    <th>Verdict</th>
+                    <th>Evaluation Notes</th>
+                  </tr>
+                </thead>
+                <tbody id="smeEvalRatingsBody"></tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </details>
 
@@ -882,10 +966,10 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="panel-header">
           <div class="panel-title">
             <span>Cloud Run Services &amp; Support Ticket Stream</span>
-            <span class="badge badge-blue">Live Cloud Run Services &bull; BigQuery <span class="mono">vw_l1_l2_unified_triage_logs</span></span>
+            <span class="badge badge-blue">Live Cloud Run Services &bull; BigQuery <span class="mono">vibelift_mart.fct_turns</span></span>
           </div>
           <div style="font-size:12px;color:var(--text-secondary);">
-            Shows running Cloud Run agent versions (<span class="mono">gcp_services</span>) next to recent L1/L2 support tickets (<span class="mono">gemini_enterprise_support_events</span>).
+            Shows running Cloud Run agent versions (<span class="mono">gcp_services</span>) next to recent turn &amp; audit events from <span class="mono">vibelift_mart.fct_turns</span> (<span class="mono">gemini_enterprise_support_events</span>).
           </div>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:14px;">
@@ -1257,6 +1341,61 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           </table>
         </div>
         <div id="liveTeGe"></div>
+      </div>
+
+      <div class="panel live-only" id="liveGeMartDailyPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Daily usage &amp; billed AI cost (<span class="mono">vibelift_mart.agg_daily_usage</span>)</span>
+            <span id="geMartRefreshedBadge" class="badge badge-blue">vibelift_mart</span>
+            <span id="geMartBillingBadge" class="badge badge-yellow">Billing export</span>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <span id="geMartScopeNote" style="font-size:12px;color:var(--text-secondary);"></span>
+            <button id="geMartRefreshBtn" class="btn" onclick="refreshGeMartNow()" title="Rebuild vibelift_mart.fct_turns from v_fct_turns">Refresh Mart</button>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Day</th>
+                <th>Turns</th>
+                <th>Chat Turns</th>
+                <th>Failed</th>
+                <th>Sessions</th>
+                <th>Active Users</th>
+                <th>Input Tok</th>
+                <th>Output Tok</th>
+                <th>Thinking Tok</th>
+                <th>Cached Tok</th>
+                <th>Billed AI Net</th>
+                <th>$ / 1k Turns</th>
+                <th>$ / 1M Tok</th>
+              </tr>
+            </thead>
+            <tbody id="geMartDailyBody"></tbody>
+          </table>
+        </div>
+        <div class="live-sub" style="margin-top:12px;">By app / agent / model (<span class="mono">vibelift_mart.agg_daily_usage</span>)</div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Day</th>
+                <th>GE App</th>
+                <th>Agent</th>
+                <th>Model</th>
+                <th>Turns</th>
+                <th>Failed</th>
+                <th>Sessions</th>
+                <th>Users</th>
+                <th>Total Tokens</th>
+              </tr>
+            </thead>
+            <tbody id="geMartByAppBody"></tbody>
+          </table>
+        </div>
       </div>
 
       <div class="panel live-only" id="liveSpendDriftPanel">
@@ -1751,6 +1890,35 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
 
+      <div class="panel live-only" id="liveGeSessionsPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Conversation sessions (<span class="mono">vibelift_mart.fct_sessions</span>)</span>
+            <span id="geSessionsBadge" class="badge badge-blue">vibelift_mart.fct_sessions</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Session-level rollup from <span class="mono">vibelift_mart.fct_turns</span>. Click a session row to pre-fill the CSAT feedback form below.
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Session ID</th>
+                <th>GE App</th>
+                <th>User</th>
+                <th>Primary Agent</th>
+                <th>Turns (Chat / Failed)</th>
+                <th>Duration</th>
+                <th>Total Tokens</th>
+                <th>Last Activity</th>
+              </tr>
+            </thead>
+            <tbody id="geSessionsBody"></tbody>
+          </table>
+        </div>
+      </div>
+
       <div class="panel">
         <div class="panel-header">
           <div class="panel-title">
@@ -2103,6 +2271,7 @@ async def handle_agent_turn(message_envelope):
         });
         if (state.live_finops && !liveFinopsFromFleet) renderLiveFinops(state.live_finops);
       }
+      if (state.ge_daily_usage) renderGeMartDaily(state.ge_daily_usage);
       if (state.all_agents && typeof state.all_agents === 'object') {
         Object.keys(state.all_agents).forEach(function(k) {
           allAgentsCache[k] = state.all_agents[k];
@@ -2706,8 +2875,179 @@ async def handle_agent_turn(message_envelope):
 
     function selectSmePersona(personaId) {
       activeSmePersonaId = personaId;
+      const sel = document.getElementById('smeEvalPersonaSelect');
+      if (sel) sel.value = personaId;
       if (currentState) {
         renderSmePersonaSelector(currentState.persona_playbooks);
+      }
+    }
+
+    function renderSmeEvaluation(ev) {
+      if (!ev) return;
+      const panel = document.getElementById('smeEvalScorecardPanel');
+      if (panel) panel.style.display = 'block';
+      const badge = document.getElementById('smeEvalSummaryBadge');
+      if (badge) {
+        const passed = ev.passed_checks ?? 0;
+        const total = ev.total_checks ?? 30;
+        const score = ev.composite_automated_score_100 ?? 0;
+        const smeAvg = (ev.sme_overall_avg_rating_5 !== null && ev.sme_overall_avg_rating_5 !== undefined)
+          ? (ev.sme_overall_avg_rating_5 + '/5 SME (' + (ev.sme_total_ratings_submitted || 0) + ')')
+          : '0 SME ratings';
+        badge.className = (ev.overall_compliance_status === 'COMPLIANT') ? 'badge badge-green' : 'badge badge-yellow';
+        badge.textContent = (ev.overall_compliance_status || 'EVALUATED') + ' • ' + score + '/100 (' + passed + '/' + total + ' checks) • ' + smeAvg;
+      }
+
+      const matrixBody = document.getElementById('smeEvalMatrixBody');
+      if (matrixBody && Array.isArray(ev.personas)) {
+        matrixBody.replaceChildren();
+        ev.personas.forEach(function(p) {
+          const tr = document.createElement('tr');
+          const tdRole = document.createElement('td');
+          const roleTitle = el('div', null, [el('strong', null, [p.role_title || p.persona_id])]);
+          const tabJumpBtn = el('button', 'btn', ['Open ' + (p.primary_tab_name || 'Tab')]);
+          tabJumpBtn.style.padding = '2px 7px';
+          tabJumpBtn.style.fontSize = '11px';
+          tabJumpBtn.style.marginTop = '4px';
+          tabJumpBtn.onclick = function() {
+            selectSmePersona(p.persona_id);
+            if (typeof p.primary_tab_index === 'number') {
+              switchTab(p.primary_tab_index);
+            }
+          };
+          tdRole.appendChild(roleTitle);
+          tdRole.appendChild(tabJumpBtn);
+
+          const tdCuj = document.createElement('td');
+          tdCuj.style.fontSize = '11.5px';
+          tdCuj.textContent = p.cuj_task || '';
+
+          const tdDims = document.createElement('td');
+          const dimWrap = el('div', null, []);
+          dimWrap.style.display = 'flex';
+          dimWrap.style.gap = '4px';
+          dimWrap.style.flexWrap = 'wrap';
+          (p.dimensions || []).forEach(function(d) {
+            const pill = el('span', d.passed ? 'badge badge-green' : 'badge badge-red', [
+              (d.dimension_label || d.dimension_id) + ': ' + d.points_awarded + '/' + d.points_possible
+            ]);
+            pill.title = d.evidence || '';
+            dimWrap.appendChild(pill);
+          });
+          tdDims.appendChild(dimWrap);
+
+          const tdScore = document.createElement('td');
+          tdScore.className = 'right mono';
+          const statusCls = (p.compliance_status === 'COMPLIANT') ? 'badge badge-green' : 'badge badge-yellow';
+          tdScore.appendChild(el('span', statusCls, [(p.automated_score_100 ?? 0) + '/100 ' + (p.compliance_status || '')]));
+
+          const tdSme = document.createElement('td');
+          tdSme.className = 'right mono';
+          if (p.avg_sme_rating_5 !== null && p.avg_sme_rating_5 !== undefined) {
+            tdSme.textContent = p.avg_sme_rating_5 + ' / 5 (' + (p.sme_rating_count || 0) + ') • ' + (p.latest_sme_verdict || 'APPROVED');
+          } else {
+            tdSme.textContent = 'Unrated (0)';
+          }
+
+          tr.appendChild(tdRole);
+          tr.appendChild(tdCuj);
+          tr.appendChild(tdDims);
+          tr.appendChild(tdScore);
+          tr.appendChild(tdSme);
+          matrixBody.appendChild(tr);
+        });
+      }
+
+      const ratingsBody = document.getElementById('smeEvalRatingsBody');
+      if (ratingsBody) {
+        ratingsBody.replaceChildren();
+        const ratings = Array.isArray(ev.recent_sme_ratings) ? ev.recent_sme_ratings : [];
+        if (ratings.length === 0) {
+          const tr = document.createElement('tr');
+          const td = document.createElement('td');
+          td.colSpan = 6;
+          td.style.color = 'var(--text-secondary)';
+          td.textContent = 'No human SME ratings recorded in this session yet. Select a persona above, test its workflow tab, and submit a rating.';
+          tr.appendChild(td);
+          ratingsBody.appendChild(tr);
+        } else {
+          ratings.forEach(function(r) {
+            const tr = document.createElement('tr');
+            const tdTs = el('td', 'mono', [r.submitted_at || '']);
+            const tdRev = el('td', 'mono', [r.reviewer || '']);
+            const tdRole = el('td', null, [r.role_title || r.persona_id || '']);
+            const tdRate = el('td', 'right mono', [(r.overall_rating || 5) + ' / 5']);
+            const tdVerd = el('td', null, [el('span', r.verdict === 'NEEDS_WORK' ? 'badge badge-red' : 'badge badge-green', [r.verdict || 'APPROVED'])]);
+            const tdNotes = el('td', null, [r.notes || '']);
+            tr.appendChild(tdTs);
+            tr.appendChild(tdRev);
+            tr.appendChild(tdRole);
+            tr.appendChild(tdRate);
+            tr.appendChild(tdVerd);
+            tr.appendChild(tdNotes);
+            ratingsBody.appendChild(tr);
+          });
+        }
+      }
+    }
+
+    async function runSmePersonaAudit() {
+      const btn = document.getElementById('smeEvalRunBtn');
+      if (btn) btn.disabled = true;
+      try {
+        const res = await fetch('/api/sme_eval/run', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: '{}',
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (currentState) currentState.sme_evaluation = data;
+          renderSmeEvaluation(data);
+        }
+      } catch (err) {
+        console.warn('SME persona audit failed:', err);
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    async function submitSmePersonaRating() {
+      const personaEl = document.getElementById('smeEvalPersonaSelect');
+      const reviewerEl = document.getElementById('smeEvalReviewerInput');
+      const ratingEl = document.getElementById('smeEvalRatingSelect');
+      const verdictEl = document.getElementById('smeEvalVerdictSelect');
+      const notesEl = document.getElementById('smeEvalNotesInput');
+      const submitBtn = document.getElementById('smeEvalSubmitBtn');
+      if (submitBtn) submitBtn.disabled = true;
+      try {
+        const payload = {
+          persona_id: personaEl ? personaEl.value : activeSmePersonaId,
+          reviewer: (reviewerEl && reviewerEl.value.trim()) ? reviewerEl.value.trim() : 'sme-reviewer@google.com',
+          overall_rating: ratingEl ? parseInt(ratingEl.value, 10) : 5,
+          verdict: verdictEl ? verdictEl.value : 'APPROVED',
+          task_completed: true,
+          notes: notesEl ? notesEl.value.trim() : '',
+        };
+        const res = await fetch('/api/sme_eval/rate', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.state) {
+            currentState = data.state;
+            renderState(currentState);
+          } else if (data.sme_evaluation) {
+            renderSmeEvaluation(data.sme_evaluation);
+          }
+          if (notesEl) notesEl.value = '';
+        }
+      } catch (err) {
+        console.warn('SME rating submission failed:', err);
+      } finally {
+        if (submitBtn) submitBtn.disabled = false;
       }
     }
 
@@ -2764,6 +3104,11 @@ async def handle_agent_turn(message_envelope):
       // 00. Telemetry Grounding & LLM-as-a-Judge Validator
       if (state.telemetry_validation) {
         renderTelemetryValidation(state.telemetry_validation);
+      }
+
+      // 00b. Multi-Persona SME Evaluation & Rating Scorecard
+      if (state.sme_evaluation) {
+        renderSmeEvaluation(state.sme_evaluation);
       }
 
       // 0. SME Persona Lens Selector & Operational Playbook
@@ -2840,7 +3185,14 @@ async def handle_agent_turn(message_envelope):
       const geSupBody = document.getElementById('geSupportEventsBody');
       if (geSupBody && Array.isArray(state.gemini_enterprise_support_events)) {
         geSupBody.replaceChildren();
-        state.gemini_enterprise_support_events.forEach(function(ev) {
+        const supEvents = state.gemini_enterprise_support_events.filter(function(ev) {
+          if (geScope === 'all') return true;
+          return engineMatchesScope(ev.agent_id, geScope) || engineMatchesScope(ev.engine_key, geScope);
+        });
+        if (!supEvents.length) {
+          emptyRow(geSupBody, 5, 'No turn or audit events in this scope.');
+        }
+        supEvents.forEach(function(ev) {
           geSupBody.appendChild(el('tr', null, [
             el('td', 'mono', [
               el('strong', null, [ev.ticket_id || ev.event_id || ev.session_id || '']),
@@ -2850,8 +3202,8 @@ async def handle_agent_turn(message_envelope):
             el('td', 'mono', [ev.trace_id || ev.event_timestamp || '']),
             el('td', null, [ev.issue_summary || ev.intent_category || ev.failure_mode || '']),
             el('td', null, [
-              badge(ev.status || ev.resolution_status || 'RESOLVED', 'badge-green'),
-              el('div', 'kpi-sub', [ev.resolution_action || ('Latency: ' + (ev.latency_ms || 0) + 'ms • Tokens: ' + (ev.tokens_used || 0))])
+              badge(ev.status || ev.resolution_status || 'UNKNOWN', supportBadgeClass(ev)),
+              el('div', 'kpi-sub', [ev.resolution_action || ('Latency: ' + orDash(ev.latency_ms, 'ms') + ' • Tokens: ' + orDash(ev.tokens_used))])
             ]),
           ]));
         });
@@ -3057,27 +3409,7 @@ async def handle_agent_turn(message_envelope):
       }
 
       // 7. Power Users Leaderboard (user_ldap)
-      const puBody = document.getElementById('powerUsersBody');
-      if (puBody && Array.isArray(uc.power_users_ldap)) {
-        puBody.replaceChildren();
-        uc.power_users_ldap.forEach(function(u) {
-          const st = String(u.anomaly_status || 'NORMAL');
-          const stCls = st.includes('OPTIMIZED') || st.includes('LIVE') ? 'badge-green' : 'badge-blue';
-          puBody.appendChild(el('tr', null, [
-            el('td', 'mono', [el('strong', null, [u.user_ldap || ''])]),
-            el('td', null, [u.department || '']),
-            el('td', 'mono', [u.primary_agent || '']),
-            el('td', 'mono', [fmtInt(u.sessions_7d)]),
-            el('td', 'mono', [u.total_tokens_m + 'M']),
-            el('td', 'mono', [u.thinking_tokens_k + 'k']),
-            el('td', 'mono', [u.background_tokens_k + 'k']),
-            el('td', 'mono', [u.cache_hit_pct == null ? '—' : u.cache_hit_pct + '%']),
-            el('td', 'mono', [u.avg_csat == null ? 'no ratings' : u.avg_csat + ' ★']),
-            el('td', 'mono', ['$' + Number(u.monthly_cost_usd || 0).toFixed(2)]),
-            el('td', null, [badge(st, stCls)]),
-          ]));
-        });
-      }
+      renderPowerUsersTable((scopeUserCentric(uc) || {}).power_users_ldap);
 
       // 8. Voice-of-Customer CSAT Stream & aive_logs Usage Stream
       const aive = state.aive_logs || {};
@@ -3112,14 +3444,15 @@ async def handle_agent_turn(message_envelope):
               el('strong', 'mono', [u.user_ldap || '']),
               el('div', 'kpi-sub', [u.department || '']),
             ]),
-            el('td', 'mono', [(u.model_name || '') + ' (' + u.latency_ms + 'ms)']),
+            el('td', 'mono', [orDash(u.model_name) + ' (' + orDash(u.latency_ms, 'ms') + ')']),
             el('td', 'mono', [
-              fmtInt(u.total_tokens || 0) + ' / ' +
-              fmtInt(u.thinking_tokens || 0) + ' / ' +
-              fmtInt(u.background_tokens || 0)
+              (u.total_tokens == null ? '—' : fmtInt(u.total_tokens)) + ' / ' +
+              (u.thinking_tokens == null ? '—' : fmtInt(u.thinking_tokens)) + ' / ' +
+              (u.background_tokens == null ? '—' : fmtInt(u.background_tokens))
             ]),
             el('td', 'mono', [firstUri]),
-            el('td', null, [badge((u.csat_rating || 5) + ' ★', 'badge-green')]),
+            // Ratings only exist when a user submitted one; nothing is assumed.
+            el('td', null, [u.csat_rating == null ? '—' : badge(u.csat_rating + ' ★', 'badge-green')]),
           ]));
         });
       }
@@ -3545,9 +3878,9 @@ async def handle_agent_turn(message_envelope):
         const kpiBox = document.getElementById('userCentricKpis');
         if (kpiBox && uc.live) {
           kpiBox.replaceChildren(
-            kpiCard('Active people (7d)', fmtInt(uc.active_people_7d), 'Human principals in audit logs'),
+            kpiCard('Active people (7d)', fmtInt(uc.active_people_7d), 'Human principals in vibelift_mart.fct_turns'),
             kpiCard('Service accounts (7d)', fmtInt(uc.active_service_accounts_7d), 'Automated callers'),
-            kpiCard('Sessions / calls (7d)', fmtInt(uc.sessions_7d), 'ds_ge_audit_raw + agent telemetry'),
+            kpiCard('Sessions / calls (7d)', fmtInt(uc.sessions_7d), 'vibelift_mart.fct_turns + agent telemetry'),
             kpiCard('Savings', 'Not measured', uc.savings_note || '')
           );
         } else if (kpiBox) {
@@ -3564,7 +3897,7 @@ async def handle_agent_turn(message_envelope):
           const t = document.getElementById('userCohortsTitle');
           if (t) t.textContent = 'Users by Gemini Enterprise app (last 7 days)';
           const st = document.getElementById('userCohortsSubtitle');
-          if (st) st.textContent = 'People and service accounts seen in audit logs per app. Source: ds_ge_audit_raw.';
+          if (st) st.textContent = 'People and service accounts seen in turns & audit logs per app. Source: vibelift_mart.fct_turns.';
           const gb = document.getElementById('oauthGovernanceBadge');
           if (gb) { gb.textContent = 'Live'; gb.className = 'badge badge-green'; }
           setTableHead('userCohortsTableBody', ['App', 'Region', 'People', 'Service accounts', 'Sessions / calls (7d)']);
@@ -3613,6 +3946,45 @@ async def handle_agent_turn(message_envelope):
             ]));
           });
         }
+
+        renderPowerUsersTable(uc.power_users_ldap);
+
+        const sessBadge = document.getElementById('geSessionsBadge');
+        if (sessBadge) {
+          const cnt = Array.isArray(uc.ge_sessions) ? uc.ge_sessions.length : 0;
+          sessBadge.textContent = (uc.ge_mart_dataset || 'vibelift_mart.fct_sessions') + ' (' + cnt + ' sessions)';
+        }
+        const sessBody = document.getElementById('geSessionsBody');
+        if (sessBody) {
+          sessBody.replaceChildren();
+          const sessions = Array.isArray(uc.ge_sessions) ? uc.ge_sessions : [];
+          if (!sessions.length) {
+            emptyRow(sessBody, 8, 'No conversation sessions recorded in vibelift_mart.fct_sessions for this scope.');
+          }
+          sessions.forEach(function(s) {
+            const tr = el('tr', null, [
+              el('td', 'mono', [el('strong', null, [s.session_id || '—'])]),
+              el('td', 'mono', [s.engine_key || '—']),
+              el('td', 'mono', [s.user_email || '—']),
+              el('td', null, [badge(s.agent_name || s.agent_id || 'gemini_enterprise', 'badge-blue')]),
+              el('td', 'mono', [
+                fmtInt(s.turns || 0) + ' (' + fmtInt(s.chat_turns || 0) + ' chat / ' + fmtInt(s.failed_turns || 0) + ' err)'
+              ]),
+              el('td', 'mono', [s.duration_seconds == null ? '—' : s.duration_seconds + 's']),
+              el('td', 'mono', [fmtTokens(s.total_tokens)]),
+              el('td', 'mono', [s.session_end || s.session_start || '—']),
+            ]);
+            tr.style.cursor = 'pointer';
+            tr.title = 'Click to pre-fill CSAT form for session ' + (s.session_id || '');
+            tr.addEventListener('click', function() {
+              const emailIn = document.getElementById('csatEmailInput');
+              const sessIn = document.getElementById('csatSessionInput');
+              if (emailIn && s.user_email && s.user_email !== 'anonymous') emailIn.value = s.user_email;
+              if (sessIn && s.session_id) sessIn.value = s.session_id;
+            });
+            sessBody.appendChild(tr);
+          });
+        }
       }
 
       const decBody = document.getElementById('decoratorEventsBody');
@@ -3636,6 +4008,137 @@ async def handle_agent_turn(message_envelope):
       }
     }
 
+    function renderPowerUsersTable(users) {
+      const puBody = document.getElementById('powerUsersBody');
+      if (!puBody || !Array.isArray(users)) return;
+      puBody.replaceChildren();
+      if (!users.length) {
+        emptyRow(puBody, 11, 'No user activity in this scope for the last 7 days.');
+        return;
+      }
+      users.forEach(function(u) {
+        const st = String(u.anomaly_status || 'NORMAL');
+        const stCls = st.includes('OPTIMIZED') || st.includes('LIVE') ? 'badge-green' : 'badge-blue';
+        const hasLiveBreakdown = u.interactions_7d != null || u.api_calls_observed != null;
+        const sessText = hasLiveBreakdown
+          ? fmtInt(u.sessions_7d) + ' (' + fmtInt(u.interactions_7d || 0) + ' turns, ' + fmtInt(u.api_calls_observed || 0) + ' audit)'
+          : fmtInt(u.sessions_7d);
+        puBody.appendChild(el('tr', null, [
+          el('td', 'mono', [el('strong', null, [u.user_ldap || ''])]),
+          el('td', null, [u.department || '']),
+          el('td', 'mono', [u.primary_agent || '']),
+          el('td', 'mono', [sessText]),
+          el('td', 'mono', [orDash(u.total_tokens_m, 'M')]),
+          el('td', 'mono', [orDash(u.thinking_tokens_k, 'k')]),
+          el('td', 'mono', [orDash(u.background_tokens_k, 'k')]),
+          el('td', 'mono', [u.cache_hit_pct == null ? '—' : u.cache_hit_pct + '%']),
+          el('td', 'mono', [u.avg_csat == null ? 'no ratings' : u.avg_csat + ' ★']),
+          el('td', 'mono', [u.monthly_cost_usd == null ? '—' : money(u.monthly_cost_usd)]),
+          el('td', null, [badge(st, stCls)]),
+        ]));
+      });
+    }
+
+    function renderGeMartDaily(gdu) {
+      if (!gdu || typeof gdu !== 'object') return;
+      const refBadge = document.getElementById('geMartRefreshedBadge');
+      if (refBadge) {
+        const ts = gdu.refreshed_at ? ' • refreshed ' + String(gdu.refreshed_at).replace('T', ' ').slice(0, 19) + 'Z' : '';
+        refBadge.textContent = (gdu.mart_dataset || 'vibelift_mart') + ts;
+      }
+      const billBadge = document.getElementById('geMartBillingBadge');
+      if (billBadge) {
+        const bs = String(gdu.billing_status || 'NOT_CONFIGURED');
+        billBadge.textContent = 'Billing: ' + bs;
+        billBadge.className = 'badge ' + (bs === 'LIVE' ? 'badge-green' : 'badge-yellow');
+      }
+      const scopeNote = document.getElementById('geMartScopeNote');
+      if (scopeNote) {
+        scopeNote.textContent = gdu.billing_table
+          ? 'Billing export: ' + gdu.billing_table
+          : 'Set VIBELIFT_BILLING_EXPORT_TABLE to populate live Billed AI Net ($)';
+      }
+
+      const dBody = document.getElementById('geMartDailyBody');
+      if (dBody) {
+        dBody.replaceChildren();
+        const days = Array.isArray(gdu.days) ? gdu.days : [];
+        if (!days.length) {
+          emptyRow(dBody, 13, 'No daily rows in vibelift_mart.agg_daily_usage yet.');
+        }
+        days.forEach(function(d) {
+          dBody.appendChild(el('tr', null, [
+            el('td', 'mono', [el('strong', null, [d.day || '—'])]),
+            el('td', 'mono', [fmtInt(d.interactions)]),
+            el('td', 'mono', [fmtInt(d.chat_turns)]),
+            el('td', 'mono', [fmtInt(d.failed_turns)]),
+            el('td', 'mono', [fmtInt(d.sessions)]),
+            el('td', 'mono', [fmtInt(d.active_users)]),
+            el('td', 'mono', [fmtTokens(d.input_tokens)]),
+            el('td', 'mono', [fmtTokens(d.output_tokens)]),
+            el('td', 'mono', [fmtTokens(d.thought_tokens)]),
+            el('td', 'mono', [fmtTokens(d.cached_tokens)]),
+            el('td', 'mono', [d.ai_net_usd == null ? '—' : money(d.ai_net_usd)]),
+            el('td', 'mono', [d.usd_per_1k_turns == null ? '—' : '$' + Number(d.usd_per_1k_turns).toFixed(4)]),
+            el('td', 'mono', [d.usd_per_1m_tokens == null ? '—' : '$' + Number(d.usd_per_1m_tokens).toFixed(4)]),
+          ]));
+        });
+      }
+
+      const aBody = document.getElementById('geMartByAppBody');
+      if (aBody) {
+        aBody.replaceChildren();
+        const allRows = Array.isArray(gdu.by_app_agent_model) ? gdu.by_app_agent_model : [];
+        const rows = allRows.filter(function(r) {
+          if (geScope === 'all') return true;
+          return engineMatchesScope(r.engine_key, geScope) || engineMatchesScope(r.agent_id, geScope);
+        });
+        if (!rows.length) {
+          emptyRow(aBody, 9, 'No per-app/agent/model rows in vibelift_mart.agg_daily_usage for this scope.');
+        }
+        rows.forEach(function(r) {
+          aBody.appendChild(el('tr', null, [
+            el('td', 'mono', [r.day || '—']),
+            el('td', 'mono', [r.engine_key || '—']),
+            el('td', null, [badge(r.agent_name || r.agent_id || 'gemini_enterprise', 'badge-blue')]),
+            el('td', 'mono', [r.model_name || '—']),
+            el('td', 'mono', [fmtInt(r.interactions)]),
+            el('td', 'mono', [fmtInt(r.failed_turns)]),
+            el('td', 'mono', [fmtInt(r.sessions)]),
+            el('td', 'mono', [fmtInt(r.active_users)]),
+            el('td', 'mono', [fmtTokens(r.total_tokens)]),
+          ]));
+        });
+      }
+    }
+
+    async function refreshGeMartNow() {
+      const btn = document.getElementById('geMartRefreshBtn');
+      const orig = btn ? btn.textContent : 'Refresh Mart';
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Rebuilding fct_turns...';
+      }
+      try {
+        const res = await fetch('/api/ge_mart/refresh', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({}),
+        });
+        const data = await res.json();
+        if (data && data.state) {
+          renderState(data.state);
+        }
+      } catch (err) {
+        console.error('Failed to refresh vibelift_mart.fct_turns:', err);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = orig;
+        }
+      }
+    }
+
     // ---------------------------------------------------------------------------
     // Live Gemini Enterprise agent fleet: real inventory joined with real telemetry.
     // All API-sourced strings are inserted with textContent / createElement (no innerHTML).
@@ -3645,6 +4148,7 @@ async def handle_agent_turn(message_envelope):
     const FLEET_TOOL = 'query_ge_agent_fleet';
     const FLEET_REFRESH_MS = 60000;
     let fleetWindowHours = 24;
+    let userSelectedWindow = false;
     let fleetTimer = null;
     let fleetRefreshMode = 'pending';  // 'host' (MCP App bridge), 'http' (direct API), 'snapshot'
     let lastFleet = null;
@@ -3671,6 +4175,14 @@ async def handle_agent_turn(message_envelope):
 
     function badge(text, cls) { return el('span', 'badge ' + cls, [text]); }
     function orDash(v, suffix) { return v == null ? '—' : String(v) + (suffix || ''); }
+    // Support-event badge colour follows the turn outcome instead of always showing green.
+    function supportBadgeClass(ev) {
+      const s = String(ev.status || ev.resolution_status || '').toUpperCase();
+      if (ev.is_actionable_issue === true) return s === 'SUCCESS' ? 'badge-yellow' : 'badge-red';
+      if (s === 'SUCCESS' || s.indexOf('RESOLVED') === 0) return 'badge-green';
+      if (s === 'SKIPPED' || s === 'UNKNOWN' || s === 'CANCELLED' || s === '') return 'badge-blue';
+      return 'badge-red';
+    }
     function money(v) {
       return v == null ? '—' : '$' + Number(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
     }
@@ -3680,10 +4192,17 @@ async def handle_agent_turn(message_envelope):
       if (!tr) return;
       tr.replaceChildren.apply(tr, headers.map(function(h) { return el('th', null, [h]); }));
     }
-    function emptyRow(tbody, cols, text) {
-      const td = el('td', 'kpi-sub', [text]);
-      td.colSpan = cols;
-      tbody.appendChild(el('tr', null, [td]));
+    function emptyRow(a, b, c) {
+      if (arguments.length >= 3 && a && typeof a.appendChild === 'function') {
+        const td = el('td', 'kpi-sub', [c]);
+        td.colSpan = b;
+        const tr = el('tr', null, [td]);
+        a.appendChild(tr);
+        return tr;
+      }
+      const td = el('td', 'fleet-empty', [b]);
+      td.colSpan = a;
+      return el('tr', null, [td]);
     }
     function fmtInt(v) { return v == null ? '—' : Number(v).toLocaleString(); }
     function fmtTokens(v) {
@@ -3714,6 +4233,10 @@ async def handle_agent_turn(message_envelope):
     function windowLabel(hours) {
       const h = Number(hours) || fleetWindowHours;
       if (h === 168) return 'last 7 days';
+      if (h === 720) return 'last 1 month';
+      if (h === 2160) return 'last 3 months';
+      if (h === 4320) return 'last 6 months';
+      if (h === 8760) return 'last 1 year';
       if (h >= 48 && h % 24 === 0) return 'last ' + (h / 24) + ' days';
       return h === 1 ? 'last hour' : 'last ' + h + ' hours';
     }
@@ -3861,15 +4384,27 @@ async def handle_agent_turn(message_envelope):
           .reduce(function(acc, k) { return acc + Number(be[k] || 0); }, 0);
         return v > 0 ? Object.assign({}, u, {sessions_7d: v}) : null;
       }).filter(Boolean);
-      return Object.assign({}, uc, {power_users_ldap: users});
+      const cohorts = Array.isArray(uc.cohorts) ? uc.cohorts.filter(function(c) {
+        return !c.engine_key || engineMatchesScope(c.engine_key, geScope);
+      }) : uc.cohorts;
+      const sessions = Array.isArray(uc.ge_sessions) ? uc.ge_sessions.filter(function(s) {
+        return engineMatchesScope(s.engine_key, geScope) || engineMatchesScope(s.agent_id, geScope);
+      }) : uc.ge_sessions;
+      return Object.assign({}, uc, {power_users_ldap: users, cohorts: cohorts, ge_sessions: sessions});
     }
     function onGeScopeChange(value) {
       geScope = value || 'all';
       try { localStorage.setItem('vibelift.geScope', geScope); } catch (e) {}
       if (geRawFleet) renderFleet(geRawFleet);
-      if (currentState && currentState.user_centric) {
-        try { renderUserCentricAndDecorator(scopeUserCentric(currentState.user_centric), currentState.decorator_events); } catch (e) {}
-        try { renderExecOverview(execLastFleet, currentState.user_centric); } catch (e) {}
+      if (currentState) {
+        if (currentState.user_centric) {
+          try { renderUserCentricAndDecorator(scopeUserCentric(currentState.user_centric), currentState.decorator_events); } catch (e) {}
+          try { renderExecOverview(execLastFleet, currentState.user_centric); } catch (e) {}
+        }
+        if (currentState.ge_daily_usage) {
+          try { renderGeMartDaily(currentState.ge_daily_usage); } catch (e) {}
+        }
+        try { renderSmeControlPlane(currentState); } catch (e) {}
       }
     }
 
@@ -3952,9 +4487,11 @@ async def handle_agent_turn(message_envelope):
         hit.appendChild(tip);
         const every = Math.max(1, Math.ceil(n / 8));
         if (i % every === 0) {
-          const lbl = bucketS >= 86400 || n * bucketS > 2 * 86400
-            ? start.toLocaleDateString(undefined, {month: 'short', day: 'numeric'}) + ' ' + start.getHours() + 'h'
-            : start.toLocaleTimeString(undefined, {hour: 'numeric', minute: bucketS < 3600 ? '2-digit' : undefined});
+          const lbl = bucketS >= 86400
+            ? start.toLocaleDateString(undefined, {month: 'short', day: 'numeric'})
+            : (n * bucketS > 2 * 86400
+                ? start.toLocaleDateString(undefined, {month: 'short', day: 'numeric'}) + ' ' + start.getHours() + 'h'
+                : start.toLocaleTimeString(undefined, {hour: 'numeric', minute: bucketS < 3600 ? '2-digit' : undefined}));
           mk('text', {x: L + i * bw + bw / 2, y: H - 5, 'text-anchor': 'middle'}, lbl);
         }
       }
@@ -4019,7 +4556,7 @@ async def handle_agent_turn(message_envelope):
       if (!fleet) return;
       const agents = fleet.agents || [];
       const totals = fleet.totals || {};
-      const win = windowLabel(fleet.window_hours);
+      const win = windowLabel(userSelectedWindow ? fleetWindowHours : fleet.window_hours);
       const mu = fleet.model_usage || {};
       const muTotals = mu.totals || {};
       const models = (mu.models || []).slice();
@@ -4062,7 +4599,7 @@ async def handle_agent_turn(message_envelope):
         el('div', 'time-ranges', [
           el('strong', null, ['Time ranges: ']),
           'Traffic, errors, tokens and model spend: ' + win + ' (Time range menu; Cloud Monitoring, usually 3–10 min behind). ' +
-          'Users: last 7 days, fixed (BigQuery audit logs and agent telemetry). ' +
+          'Users: ' + win + ' (BigQuery audit logs and agent telemetry). ' +
           'Agent list: current. Invoice: last 30 days when a billing export is connected.']),
         scoped ? el('div', 'scope-note', ['Filtered to ' + geScopeLabel(geScope) +
           '. Agents, requests and users are filtered. Model spend is project-wide: Vertex AI usage metrics are not tagged by Gemini Enterprise app.' +
@@ -4076,7 +4613,7 @@ async def handle_agent_turn(message_envelope):
           kpiCard('Requests', fmtInt(req), (req ? (100 * e5 / req).toFixed(2) : '0.00') + '% server errors · ' + fmtInt(e4) + ' rejected (4xx)'),
           kpiCard('Est. model spend', spend == null ? '—' : fmtUsd(spend), fmtInt(muTotals.invocations) + ' model calls · ' + (scoped ? 'project-wide' : 'list price')),
           kpiCard('Active people', users.length ? fmtInt(people.length) : '—',
-            users.length ? ('+ ' + fmtInt(sas.length) + ' service accounts · 7 days') : (scoped ? 'no audit-log activity for this scope' : 'loading from BigQuery…'))
+            users.length ? ('+ ' + fmtInt(sas.length) + ' service accounts · ' + win) : (scoped ? 'no audit-log activity for this scope' : 'loading from BigQuery…'))
         );
       }
 
@@ -4098,8 +4635,9 @@ async def handle_agent_turn(message_envelope):
         const srcT = document.getElementById('execSrcTrend');
         const tr = fleet.trend || {};
         const bh = Number(tr.bucket_seconds || 0) / 3600;
+        const bhLabel = bh >= 24 && bh % 24 === 0 ? (bh / 24) + 'd' : (bh >= 1 ? bh + 'h' : Math.round(bh * 60) + 'min');
         if (srcT) srcT.textContent = 'Source: ' + (tr.source || 'Cloud Monitoring') + ' · ' + win +
-          (bh ? ' · ' + (bh >= 1 ? bh + 'h' : Math.round(bh * 60) + 'min') + ' buckets' : '') +
+          (bh ? ' · ' + bhLabel + ' buckets' : '') +
           (tr.status && tr.status !== 'ok' ? ' · status: ' + tr.status : '');
       }
       const reqBox = document.getElementById('execChartRequests');
@@ -4492,12 +5030,6 @@ async def handle_agent_turn(message_envelope):
       node.className = 'fleet-notice' + (text ? '' : ' hidden') + (isWarning ? ' fleet-notice-error' : '');
     }
 
-    function emptyRow(colspan, text) {
-      const td = el('td', 'fleet-empty', [text]);
-      td.colSpan = colspan;
-      return el('tr', null, [td]);
-    }
-
     function renderFleet(fleet) {
       if (fleet && Array.isArray(fleet.agents) && !fleet.__scoped) {
         geRawFleet = fleet;
@@ -4509,14 +5041,14 @@ async def handle_agent_turn(message_envelope):
       lastFleet = fleet;
       const rawLf = (geRawFleet && geRawFleet.live_finops) || fleet.live_finops;
       if (rawLf) { liveFinopsFromFleet = true; renderLiveFinops(rawLf); }
-      if (fleet.window_hours) {
+      if (fleet.window_hours && (!userSelectedWindow || Number(fleet.window_hours) === fleetWindowHours)) {
         fleetWindowHours = Number(fleet.window_hours);
         const sel = document.getElementById('fleetWindow');
         if (sel && Array.from(sel.options).some(function(o) { return Number(o.value) === fleetWindowHours; })) {
           sel.value = String(fleetWindowHours);
         }
       }
-      const win = windowLabel(fleet.window_hours);
+      const win = windowLabel(userSelectedWindow ? fleetWindowHours : fleet.window_hours);
       document.getElementById('fleetEngineBadge').textContent =
         (fleet.engines || []).map(function(e) { return e.display_name || e.engine_id; }).join(', ') || 'Gemini Enterprise';
 
@@ -4655,7 +5187,7 @@ async def handle_agent_turn(message_envelope):
             const result = await callHost('tools/call', {
               name: FLEET_TOOL,
               arguments: {window_hours: fleetWindowHours, force_refresh: !!force},
-            }, 20000);
+            }, 25000);
             if (result && !result.isError && result.structuredContent) {
               fleet = result.structuredContent;
               fleetRefreshMode = 'host';
@@ -4667,7 +5199,7 @@ async def handle_agent_turn(message_envelope):
             const fallback = await callHost('tools/call', {
               name: 'open_dashboard',
               arguments: {window_hours: fleetWindowHours, force_refresh: !!force},
-            }, 20000);
+            }, 25000);
             if (fallback && !fallback.isError && fallback.structuredContent) {
               const sc = fallback.structuredContent;
               if (sc.state) {
@@ -4702,9 +5234,14 @@ async def handle_agent_turn(message_envelope):
 
     function onFleetWindowChange() {
       const sel = document.getElementById('fleetWindow');
-      fleetWindowHours = Number(sel.value) || 24;
+      fleetWindowHours = Number(sel && sel.value) || 24;
+      userSelectedWindow = true;
+      try { localStorage.setItem('vibelift.fleetWindowHours', String(fleetWindowHours)); } catch (e) {}
       if (fleetRefreshMode === 'snapshot') fleetRefreshMode = 'pending';
       refreshFleet(false);
+      if (!isEmbedded()) {
+        fetchState().catch(function() {});
+      }
     }
 
     function scheduleFleetRefresh() {
@@ -4718,7 +5255,8 @@ async def handle_agent_turn(message_envelope):
     }
 
     async function fetchState() {
-      const res = await fetch('/api/state', {cache: 'no-store', credentials: 'same-origin'});
+      const url = '/api/state?window_hours=' + encodeURIComponent(fleetWindowHours);
+      const res = await fetch(url, {cache: 'no-store', credentials: 'same-origin'});
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       fleetRefreshMode = 'http';
@@ -4737,9 +5275,14 @@ async def handle_agent_turn(message_envelope):
           await refreshFleet(true);
           return;
         }
-        const res = await fetch('/api/sync_gcp_telemetry', {method: 'POST'});
+        const res = await fetch('/api/sync_gcp_telemetry', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({window_hours: fleetWindowHours}),
+        });
         const data = await res.json();
         renderState(data.state || data);
+        await refreshFleet(true);
       } catch (err) {
         console.error('Failed to sync GCP telemetry:', err);
       } finally {

@@ -345,14 +345,33 @@ class GeFleetCollectionTest(unittest.TestCase):
 
   def test_window_is_clamped_and_applied_to_queries(self):
     service, api = make_fake_service()
-    self.assertEqual(service.collect(window_hours=100000)['window_hours'], 720)
-    # Window-level aggregates use the whole window; the trend uses 6h buckets for a 30-day window.
+    self.assertEqual(service.collect(window_hours=100000)['window_hours'], 8760)
+    # 1-year window caps Cloud Monitoring alignmentPeriod at 30d (2592000s) and uses 4d (345600s) trend buckets.
+    self.assertEqual(set(api.alignment_periods), {'2592000s', '345600s'})
+    api.alignment_periods.clear()
+    self.assertEqual(service.collect(window_hours=720)['window_hours'], 720)
+    # 1-month (30-day) window uses 30d (2592000s) aggregate and 6h (21600s) trend buckets.
     self.assertEqual(set(api.alignment_periods), {'2592000s', '21600s'})
+    api.alignment_periods.clear()
+    self.assertEqual(service.collect(window_hours=2160)['window_hours'], 2160)
+    # 3-month (90-day) window uses 30d (2592000s) aggregate and 1d (86400s) trend buckets.
+    self.assertEqual(set(api.alignment_periods), {'2592000s', '86400s'})
+    api.alignment_periods.clear()
+    self.assertEqual(service.collect(window_hours=4320)['window_hours'], 4320)
+    # 6-month (180-day) window uses 30d (2592000s) aggregate and 2d (172800s) trend buckets.
+    self.assertEqual(set(api.alignment_periods), {'2592000s', '172800s'})
     self.assertEqual(service.collect(window_hours=0)['window_hours'], 1)
     # Up to 7 days the trend fetches raw per-minute points (no server-side alignment double counting).
     api.alignment_periods.clear()
     service.collect(window_hours=24)
     self.assertEqual(set(api.alignment_periods), {'86400s', 'raw'})
+
+  def test_allow_stale_collects_requested_window_instead_of_snapping_to_24h(self):
+    service, _ = make_fake_service()
+    service.collect(window_hours=24)
+    for hrs in (1, 6, 168, 720, 2160, 4320, 8760):
+      payload = service.collect(window_hours=hrs, allow_stale=True, max_wait_s=5.0)
+      self.assertEqual(payload['window_hours'], hrs)
 
 
 class GeFleetDiscoveryTest(unittest.TestCase):
@@ -395,9 +414,10 @@ class GeFleetRuntimeDedupeTest(unittest.TestCase):
 class GeFleetHelpersTest(unittest.TestCase):
 
   def test_parse_window_hours(self):
-    self.assertEqual(ge_fleet.parse_window_hours('24'), 24)
-    self.assertEqual(ge_fleet.parse_window_hours(168), 168)
-    for bad in (None, True, 0, 721, 'abc', '', '1; DROP'):
+    for valid in (1, 6, 24, 168, 720, 2160, 4320, 8760):
+      self.assertEqual(ge_fleet.parse_window_hours(str(valid)), valid)
+      self.assertEqual(ge_fleet.parse_window_hours(valid), valid)
+    for bad in (None, True, 0, 8761, 'abc', '', '1; DROP'):
       self.assertIsNone(ge_fleet.parse_window_hours(bad), bad)
 
   def test_parse_bool(self):

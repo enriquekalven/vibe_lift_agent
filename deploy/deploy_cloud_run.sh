@@ -14,11 +14,17 @@ SERVICE_NAME="${SERVICE_NAME:-vibe-lift-agent}"
 
 warn() { echo "WARNING: $*" >&2; }
 
-# Gate: never deploy a build that fails the test suite. Tests run offline (no live API calls).
+# Gate: never deploy a build that fails lint or the test suite. Tests run offline (no live API calls).
 if [[ "${VIBELIFT_SKIP_TESTS:-0}" == "1" ]]; then
   warn "VIBELIFT_SKIP_TESTS=1: deploying WITHOUT running the test suite."
 else
-  echo "Running test suite before deploy..."
+  echo "Running bytecode, lint, and test suite before deploy..."
+  python3 -m compileall -q app vibelift tests deploy/bigquery
+  if command -v ruff &>/dev/null; then
+    ruff check .
+  elif [[ -x "${HOME}/.local/bin/ruff" ]]; then
+    "${HOME}/.local/bin/ruff" check .
+  fi
   if ! GOOGLE_APPLICATION_CREDENTIALS=/nonexistent/offline-test-credentials.json \
       python3 -m unittest discover -s tests -t . ; then
     echo "ERROR: tests failed; aborting deploy. Fix the failures (or set VIBELIFT_SKIP_TESTS=1 to override)." >&2

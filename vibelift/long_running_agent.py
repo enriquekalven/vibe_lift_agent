@@ -1,11 +1,10 @@
 """Long-running ADK + Google Cloud agent runner emitting structured turn logs."""
 
-from collections.abc import Sequence
 import datetime
+from collections.abc import Sequence
 
 from vibelift import optimizer as alpha_evolve_optimizer
 from vibelift import telemetry
-
 
 GCP_ADK_TOOL_SEQUENCE: tuple[tuple[str, str], ...] = (
     (
@@ -177,7 +176,7 @@ class LongRunningVibeLiftAgent:
     tool_name, tool_desc = GCP_ADK_TOOL_SEQUENCE[
         (turn_idx - 1) % len(GCP_ADK_TOOL_SEQUENCE)
     ]
-    now_iso = datetime.datetime.now(datetime.timezone.utc).strftime(
+    now_iso = datetime.datetime.now(datetime.UTC).strftime(
         '%Y-%m-%dT%H:%M:%SZ'
     )
     total_prompt = cached_tokens + write_tokens + uncached_tokens

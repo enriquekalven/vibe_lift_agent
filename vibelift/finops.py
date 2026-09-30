@@ -13,7 +13,8 @@ list-price rate cards used elsewhere in VibeLift. Nothing is assumed or seeded:
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 _TOKEN_KEYS = ('input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens')
 _PRICE_KEY = {
@@ -179,7 +180,8 @@ def build_spend_drift(
            'calls_before': n0, 'calls_now': n1, 'change_usd': round(c1 - c0, 4)}
     parts = {k: 0.0 for k, _, _ in DRIVERS}
     if n0 and n1:
-      per = lambda r, k, n: float(r.get(k) or 0) / n
+      def per(r, k, n):
+        return float(r.get(k) or 0) / n
       parts['volume'] = (n1 - n0) * (c0 / n0)
       parts['prompt_size'] = n1 * (per(r1, 'input_tokens', n1) - per(r0, 'input_tokens', n0)) * card['input'] / 1e6
       parts['output_length'] = n1 * (per(r1, 'output_tokens', n1) - per(r0, 'output_tokens', n0)) * card['output'] / 1e6

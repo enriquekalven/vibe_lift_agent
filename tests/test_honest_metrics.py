@@ -4,9 +4,9 @@ import os
 import unittest
 from unittest import mock
 
-from vibelift import optimizer as alpha_evolve_optimizer
 from vibelift import billing_export
 from vibelift import fleet as ge_fleet
+from vibelift import optimizer as alpha_evolve_optimizer
 from vibelift import validator as telemetry_validator
 
 
@@ -158,9 +158,9 @@ class RequestTrendTest(unittest.TestCase):
         {'agent_id': '2', 'backend': {'kind': 'cloud_run', 'service': 'svc', 'project': 'p'}},
     ]
     import datetime
-    fixed = datetime.datetime(2026, 9, 29, 12, 30, tzinfo=datetime.timezone.utc)
+    fixed = datetime.datetime(2026, 9, 29, 12, 30, tzinfo=datetime.UTC)
     with mock.patch.object(ge_fleet, '_utcnow', return_value=fixed):
-      end_last = int(datetime.datetime(2026, 9, 29, 13, 0, tzinfo=datetime.timezone.utc).timestamp())
+      end_last = int(datetime.datetime(2026, 9, 29, 13, 0, tzinfo=datetime.UTC).timestamp())
       results = {('run_series', 'p'): {'svc': {
           end_last: {'requests': 5, 'errors_4xx': 1, 'errors_5xx': 0},
           end_last - 3600: {'requests': 3, 'errors_4xx': 0, 'errors_5xx': 1},

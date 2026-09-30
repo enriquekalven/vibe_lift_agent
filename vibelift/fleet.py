@@ -27,10 +27,10 @@ import os
 import re
 import threading
 import time
-from typing import Any
 import urllib.error
 import urllib.parse
 import urllib.request
+from typing import Any
 
 try:
   import google.auth as google_auth
@@ -39,8 +39,7 @@ except ImportError:  # pragma: no cover - google-auth ships with the Cloud clien
   google_auth = None
   GoogleAuthRequest = None
 
-from vibelift import gcp_telemetry
-from vibelift import telemetry
+from vibelift import gcp_telemetry, telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +85,7 @@ class FleetSourceError(Exception):
 
 
 def _utcnow() -> datetime.datetime:
-  return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+  return datetime.datetime.now(datetime.UTC).replace(microsecond=0)
 
 
 def _iso(dt: datetime.datetime) -> str:
@@ -106,23 +105,27 @@ def _env_list(name: str, default: tuple[str, ...]) -> list[str]:
   return values or list(default)
 
 
+MAX_WINDOW_HOURS = 8760  # 365 days (1 year)
+MAX_ALIGNMENT_PERIOD_S = 30 * 24 * 3600  # 30 days: Cloud Monitoring alignmentPeriod cap
+
+
 def _clamp_window(hours: Any, default: int) -> int:
   try:
     value = int(hours)
   except (TypeError, ValueError):
     return default
-  return max(1, min(value, 720))
+  return max(1, min(value, MAX_WINDOW_HOURS))
 
 
 def parse_window_hours(value: Any) -> int | None:
-  """Validates an untrusted window value: an integer number of hours in [1, 720], else None."""
+  """Validates an untrusted window value: an integer number of hours in [1, 8760], else None."""
   if value is None or isinstance(value, bool):
     return None
   try:
     hours = int(str(value).strip())
   except (TypeError, ValueError):
     return None
-  return hours if 1 <= hours <= 720 else None
+  return hours if 1 <= hours <= MAX_WINDOW_HOURS else None
 
 
 # Up to this window the trend bins raw per-minute points itself (exact); beyond it, server-side alignment.
@@ -130,7 +133,7 @@ RAW_SERIES_MAX_WINDOW_S = 7 * 24 * 3600
 
 
 def trend_bucket_seconds(hours: int) -> int:
-  """Bucket size for the requests-over-time chart (about 24 buckets per window)."""
+  """Bucket size for the requests-over-time chart (about 24–90 buckets per window)."""
   if hours <= 1:
     return 300
   if hours <= 6:
@@ -139,7 +142,13 @@ def trend_bucket_seconds(hours: int) -> int:
     return 3600
   if hours <= 72:
     return 3 * 3600
-  return 6 * 3600
+  if hours <= 720:
+    return 6 * 3600
+  if hours <= 2160:
+    return 24 * 3600
+  if hours <= 4320:
+    return 2 * 24 * 3600
+  return 4 * 24 * 3600
 
 
 def build_request_trend(
@@ -195,7 +204,7 @@ def build_request_trend(
     status = 'ok' if all(results.get(k) is not None for k in results if k[0] in ('run_series', 're_series')) else 'partial'
   return {
       'bucket_seconds': bucket_s,
-      'bucket_ends': [_iso(datetime.datetime.fromtimestamp(t, datetime.timezone.utc)) for t in grid],
+      'bucket_ends': [_iso(datetime.datetime.fromtimestamp(t, datetime.UTC)) for t in grid],
       'by_runtime': by_runtime,
       'status': status,
       'source': 'Cloud Monitoring request_count (Cloud Run + Agent Engine)',
@@ -638,6 +647,9 @@ class GeminiEnterpriseFleetService:
         after_wait = self._any_cache(hours)
         if after_wait is not None:
           return after_wait
+        fallback = self._fallback_cache(hours)
+        if fallback is not None:
+          return fallback
         return self._warming_placeholder(hours)
 
     return self._refresh_sync(hours, force_refresh=force_refresh)
@@ -688,13 +700,19 @@ class GeminiEnterpriseFleetService:
   def _any_cache(self, hours: int) -> dict[str, Any] | None:
     with self._cache_lock:
       entry = self._cache.get(hours)
-      if entry is None and self._cache:
-        # Fall back to the most recently collected window while the requested window refreshes.
-        entry = max(self._cache.values(), key=lambda item: item[0])
     if entry is None:
       return None
     age = time.monotonic() - entry[0]
     return dict(entry[1], cache_age_seconds=round(age, 1))
+
+  def _fallback_cache(self, hours: int) -> dict[str, Any] | None:
+    """Falls back to the most recently collected window if the requested window timed out warming, preserving window_hours."""
+    with self._cache_lock:
+      if not self._cache:
+        return None
+      entry = max(self._cache.values(), key=lambda item: item[0])
+    age = time.monotonic() - entry[0]
+    return dict(entry[1], window_hours=hours, cache_age_seconds=round(age, 1))
 
   def _warming_placeholder(self, hours: int) -> dict[str, Any]:
     return {
@@ -803,11 +821,12 @@ class GeminiEnterpriseFleetService:
       end_offset_s: int = 0,
   ) -> list[tuple[dict[str, str], float]]:
     end = _utcnow() - datetime.timedelta(seconds=end_offset_s)
+    align_s = min(window_s, MAX_ALIGNMENT_PERIOD_S)
     params = [
         ('filter', metric_filter),
         ('interval.startTime', _iso(end - datetime.timedelta(seconds=window_s))),
         ('interval.endTime', _iso(end)),
-        ('aggregation.alignmentPeriod', f'{window_s}s'),
+        ('aggregation.alignmentPeriod', f'{align_s}s'),
         ('aggregation.perSeriesAligner', aligner),
         ('aggregation.crossSeriesReducer', reducer),
     ] + [('aggregation.groupByFields', field) for field in group_by]
@@ -817,13 +836,20 @@ class GeminiEnterpriseFleetService:
       points = series.get('points') or []
       if not points:
         continue
-      value = points[0].get('value', {})  # Newest point covers exactly the requested window.
-      number = value.get('int64Value', value.get('doubleValue'))
-      if number is None and 'distributionValue' in value:
-        number = value['distributionValue'].get('mean')
+      nums: list[float] = []
+      for pt in points:
+        value = pt.get('value', {})
+        number = value.get('int64Value', value.get('doubleValue'))
+        if number is None and 'distributionValue' in value:
+          number = value['distributionValue'].get('mean')
+        if number is not None:
+          nums.append(float(number))
+      if not nums:
+        continue
+      agg_val = sum(nums) if aligner == 'ALIGN_SUM' else (sum(nums) / len(nums))
       labels = dict(series.get('resource', {}).get('labels', {}))
       labels.update(series.get('metric', {}).get('labels', {}))
-      rows.append((labels, float(number or 0.0)))
+      rows.append((labels, float(agg_val)))
     return rows
 
   @staticmethod
@@ -842,7 +868,7 @@ class GeminiEnterpriseFleetService:
       key = labels.get(label)
       if key not in out:
         continue
-      count = int(round(value))
+      count = round(value)
       out[key]['requests'] += count
       code_class = str(labels.get('response_code_class') or '')
       if code_class.startswith('4'):
@@ -889,7 +915,7 @@ class GeminiEnterpriseFleetService:
           continue
         epoch = int(datetime.datetime.fromisoformat(t_end.replace('Z', '+00:00')).timestamp())
         val = pt.get('value', {})
-        count = int(round(float(val.get('int64Value', val.get('doubleValue', 0)) or 0)))
+        count = round(float(val.get('int64Value', val.get('doubleValue', 0)) or 0))
         slot = out.setdefault(key, {}).setdefault(epoch, {'requests': 0, 'errors_4xx': 0, 'errors_5xx': 0})
         slot['requests'] += count
         if code_class.startswith('4'):
@@ -1000,8 +1026,9 @@ class GeminiEnterpriseFleetService:
 
   def _list_traces(self, project: str, trace_filter: str, window_s: int) -> tuple[list[dict[str, Any]], bool]:
     end = _utcnow()
+    trace_window_s = min(window_s, 30 * 24 * 3600)  # Cloud Trace retains 30 days max
     params = {
-        'startTime': _iso(end - datetime.timedelta(seconds=window_s)),
+        'startTime': _iso(end - datetime.timedelta(seconds=trace_window_s)),
         'endTime': _iso(end),
         'view': 'COMPLETE',
         'pageSize': '500',
@@ -1095,7 +1122,7 @@ class GeminiEnterpriseFleetService:
     for labels, value in token_rows:
       row = bucket(labels.get('model_user_id') or 'unknown')
       token_type = str(labels.get('type') or '').lower()
-      count = int(round(value))
+      count = round(value)
       if token_type == 'input':
         row['input_tokens'] += count
       elif token_type == 'output':
@@ -1107,7 +1134,7 @@ class GeminiEnterpriseFleetService:
       else:
         row['other_tokens'] += count
     for labels, value in invocation_rows:
-      bucket(labels.get('model_user_id') or 'unknown')['invocations'] += int(round(value))
+      bucket(labels.get('model_user_id') or 'unknown')['invocations'] += round(value)
 
     cards = self._rate_cards()
     totals = {'input_tokens': 0, 'output_tokens': 0, 'cache_read_tokens': 0, 'cache_write_tokens': 0,
@@ -1151,7 +1178,7 @@ class GeminiEnterpriseFleetService:
     )
     assist = sum(v for labels, v in rows if str(labels.get('method', '')).endswith('AssistantService.StreamAssist'))
     return {
-        'assistant_requests': int(round(assist)),
+        'assistant_requests': round(assist),
         'scope': f'Project-wide Gemini Enterprise assistant (StreamAssist) calls in {self.project_id}',
     }
 
@@ -1323,7 +1350,8 @@ class GeminiEnterpriseFleetService:
     """Joins one agent with the telemetry fetched for its backend (exact project match)."""
     backend, metrics = agent['backend'], agent['metrics']
     project = backend.get('project') or self.project_id
-    pick = lambda name: results.get((name, project))
+    def pick(name):
+      return results.get((name, project))
     if backend.get('kind') == 'agent_engine' and backend.get('reasoning_engine_id'):
       rid = backend['reasoning_engine_id']
       requests = pick('re_requests')

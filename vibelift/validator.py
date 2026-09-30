@@ -6,13 +6,13 @@ Engine v1alpha) to guarantee zero fabricated users, zero fake GCS URIs, and
 explicit provenance tagging across all 6 dashboard tabs.
 """
 
-from collections.abc import Mapping
 import datetime
 import json
 import logging
 import os
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 
 try:
   import google.auth
@@ -47,7 +47,7 @@ def validate_dashboard_state(
     run_llm_judge: bool = False,
 ) -> dict[str, object]:
   """Audits all 6 tabs of `/api/state` for telemetry grounding, math integrity, and zero hallucination."""
-  now_iso = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+  now_iso = datetime.datetime.now(datetime.UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
   fleet = ge_fleet_payload or (state.get('ge_fleet') if isinstance(state.get('ge_fleet'), Mapping) else {}) or {}
   live_mode = _is_live_gcp_mode(state, fleet)
 
@@ -294,11 +294,11 @@ def validate_dashboard_state(
   otel = state.get('otel_catalog') if isinstance(state.get('otel_catalog'), Mapping) else {}
   layers = otel.get('layers') if isinstance(otel.get('layers'), list) else []
   total_otel_metrics = sum(
-      len(l.get('metrics') or l.get('parameters') or [])
-      for l in layers
-      if isinstance(l, Mapping)
+      len(layer.get('metrics') or layer.get('parameters') or [])
+      for layer in layers
+      if isinstance(layer, Mapping)
   )
-  has_metrics_key = all(isinstance(l, Mapping) and isinstance(l.get('metrics'), list) for l in layers)
+  has_metrics_key = all(isinstance(layer, Mapping) and isinstance(layer.get('metrics'), list) for layer in layers)
   _add_check(
       check_id='TAB6-OTEL-5LAYER-26-METRICS',
       tab='Tab 6: Tools & SDK',
@@ -326,7 +326,7 @@ def validate_dashboard_state(
 
   passed_count = sum(1 for c in checks if c['status'] == 'PASS')
   total_checks = max(1, len(checks))
-  deterministic_score = int(round((passed_count / total_checks) * 100.0))
+  deterministic_score = round((passed_count / total_checks) * 100.0)
   overall_verdict = 'VERIFIED_GROUNDED' if not flagged_unverified_fields else 'FLAGGED_ISSUES'
 
   llm_judge_report: dict[str, object]
@@ -495,6 +495,32 @@ def _add_live_finops_checks(state, fleet, fleet_agents, fleet_totals, add_check)
                 if not unsourced else f'FLAGGED: token counts without a source: {unsourced}'),
   )
 
+  gdu = state.get('ge_daily_usage') if isinstance(state.get('ge_daily_usage'), Mapping) else None
+  if gdu is not None:
+    days = gdu.get('days') if isinstance(gdu.get('days'), list) else []
+    b_status = str(gdu.get('billing_status') or '')
+    invented_cost = (
+        b_status != 'LIVE'
+        and any(isinstance(d, Mapping) and d.get('ai_net_usd') is not None for d in days)
+    )
+    mart_ok = len(days) > 0 and not invented_cost
+    add_check(
+        check_id='TAB4-GE-MART-DAILY-USAGE',
+        tab='Tab 4: Cost & Billing',
+        metric_or_panel='ge_daily_usage (vibelift_mart.fct_turns + agg_daily_usage + billing_export)',
+        passed=mart_ok,
+        provenance='OBSERVED_GCP_TELEMETRY',
+        source_dataset=str(gdu.get('source') or 'vibelift_mart.fct_turns + Cloud Billing export'),
+        evidence=(
+            f"{len(days)} daily rollup rows, {len(gdu.get('by_app_agent_model') or [])} app/agent/model rows, "
+            f"{len(gdu.get('sessions') or [])} sessions (refreshed_at={gdu.get('refreshed_at') or 'unknown'}, "
+            f"billing={b_status})."
+            if mart_ok
+            else f'FLAGGED: days={len(days)}, invented_cost={invented_cost}, billing={b_status}.'
+        ),
+    )
+
+
 
 def run_llm_as_judge_audit(
     state: Mapping[str, object],
@@ -587,7 +613,7 @@ def run_llm_as_judge_audit(
 
   passed_count = len(deterministic_checks) - len(failed_checks)
   total_count = max(1, len(deterministic_checks))
-  score = int(round((passed_count / total_count) * 100.0))
+  score = round((passed_count / total_count) * 100.0)
   if failed_checks:
     exec_f = (
         f'{passed_count}/{total_count} rule-based checks passed. Failing: '

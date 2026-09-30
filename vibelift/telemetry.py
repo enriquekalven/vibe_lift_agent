@@ -1,9 +1,16 @@
 """Log-based token cache economics, pricing, and prompt breakpoint analyzer."""
 
-from collections.abc import Mapping, Sequence
 import dataclasses
+import datetime
+import functools
 import hashlib
+import inspect
 import json
+import threading
+import time
+import uuid
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
 
 
 @dataclasses.dataclass(frozen=True)
@@ -283,12 +290,6 @@ def summarize_log_stream(
 # message-passing protocols (MCP / A2A / ADK) to avoid BigQuery log router delay.
 # ---------------------------------------------------------------------------
 
-import functools
-import inspect
-import threading
-import time
-from typing import Any, Callable
-
 
 @dataclasses.dataclass(frozen=True)
 class DecoratorTelemetryEvent:
@@ -563,9 +564,6 @@ def vibelift_telemetry(
 # to the real-time `@vibelift_telemetry` stream.
 # ---------------------------------------------------------------------------
 
-import datetime
-import uuid
-
 _AIVE_LOGS_LOCK = threading.Lock()
 
 _SEED_AIVE_USAGE_LOGS: list[dict[str, object]] = [
@@ -742,7 +740,7 @@ def log_agent_generation_event(
   """Streams an agent generation event to `aive_logs.agent_usage_log` and real-time decorator stream."""
   clean_email = (user_email or 'unknown@google.com').strip()
   user_ldap = clean_email.split('@')[0] if '@' in clean_email else (clean_email or 'unknown')
-  now_iso = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+  now_iso = datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
   tok_total = max(0, int(total_tokens or 18400))
   think_tok = max(0, int(thinking_tokens or round(tok_total * 0.08)))
   bg_tok = max(0, int(background_tokens or round(tok_total * 0.11)))
@@ -782,7 +780,7 @@ def log_agent_generation_event(
     del _AIVE_USAGE_LOGS[30:]
 
   # Dual-write to @vibelift_telemetry real-time stream so dashboard updates in <10ms
-  cached_tok = int(round(tok_total * 0.89))
+  cached_tok = round(tok_total * 0.89)
   record_decorator_event(
       DecoratorTelemetryEvent(
           timestamp=time.strftime('%H:%M:%S UTC', time.gmtime()),
@@ -817,7 +815,7 @@ def log_csat_rating(
   clamped_rating = max(1, min(5, int(rating)))
   entry: dict[str, object] = {
       'rating_id': f'rat-{uuid.uuid4().hex[:6]}',
-      'timestamp': datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
+      'timestamp': datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
       'session_id': str(session_id or 'unknown_session'),
       'event_id': str(event_id or ''),
       'user_email': clean_email,

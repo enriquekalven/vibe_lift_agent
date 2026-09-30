@@ -39,6 +39,7 @@ steps:
         set -euo pipefail
         cp -r /workspace /tmp/src
         cd /tmp/src
+        python -m compileall -q app vibelift tests deploy/bigquery
         python -m unittest discover -s tests -t .
 
   - id: push

@@ -5,16 +5,15 @@ from the hosting Google Cloud Project (Cloud Run, Cloud Logging, Cloud Monitorin
 and Gemini Enterprise / BigQuery Agent Analytics).
 """
 
-from collections.abc import Mapping, Sequence
 import datetime
 import hashlib
 import json
 import logging
 import os
 import subprocess
-from typing import Any
 import urllib.error
 import urllib.request
+from typing import Any
 
 try:
   from google.cloud import logging as gcp_logging
@@ -33,7 +32,7 @@ except ImportError:
   google_auth = None
   GoogleAuthRequest = None
 
-from vibelift import telemetry
+from vibelift import ge_mart, telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -237,7 +236,7 @@ class GoogleCloudTelemetryService:
       out: list[dict[str, object]] = []
       for row in res.get('rows', []):
         vals = [cell.get('v') for cell in row.get('f', [])]
-        out.append(dict(zip(fields, vals)))
+        out.append(dict(zip(fields, vals, strict=False)))
       return out
     except Exception as exc:
       logger.debug('BigQuery REST query skipped (%s): %s', sql[:60], exc)
@@ -384,127 +383,73 @@ class GoogleCloudTelemetryService:
       evt.wait(timeout=0.05)
       return self._cached_support_events if self._cached_support_events is not None else []
 
-    events: list[dict[str, object]] = []
-    # Query real Gemini Enterprise user activity & audit logs in project-maui
-    rows = self._query_bigquery_rest(f"""
-      SELECT
-        insertId AS event_id,
-        CAST(timestamp AS STRING) AS ts,
-        protopayload_auditlog.authenticationInfo.principalEmail AS principal,
-        protopayload_auditlog.methodName AS method_name,
-        protopayload_auditlog.resourceName AS resource_name,
-         COALESCE(trace, '') AS trace_id
-      FROM `{self.project_id}.ds_ge_audit_raw.cloudaudit_googleapis_com_data_access`
-      WHERE protopayload_auditlog.authenticationInfo.principalEmail IS NOT NULL
-      ORDER BY timestamp DESC
-      LIMIT {int(limit)}
-    """, timeout_s=6.0)
-    for idx, r in enumerate(rows):
-      method_full = str(r.get('method_name') or '')
-      short_method = method_full.split('.')[-1] if method_full else 'DiscoveryEngineCall'
-      principal = str(r.get('principal') or 'system')
-      res_name = str(r.get('resource_name') or '')
-      engine_id = 'gemini-enterprise'
-      if '/engines/' in res_name:
-        engine_id = res_name.split('/engines/')[1].split('/')[0]
-      trace_raw = str(r.get('trace_id') or '').split('/')[-1] or f'bq-audit-{idx + 1}'
-      events.append({
-          'ticket_id': str(r.get('event_id') or f'GE-AUD-{idx + 1}')[:14],
-          'event_id': str(r.get('event_id') or f'GE-AUD-{idx + 1}'),
-          'timestamp': str(r.get('ts') or ''),
-          'tier': 'L1 Audit' if 'List' in short_method or 'Get' in short_method else 'L2 Interactive',
-          'triage_tier': 'L1 Audit' if 'List' in short_method or 'Get' in short_method else 'L2 Interactive',
-          'agent_id': engine_id,
-          'trace_id': trace_raw[:16],
-          'user': principal,
-          'source': f'{self.project_id}.ds_ge_audit_raw',
-          'source_dataset': f'{self.project_id}.ds_ge_audit_raw.cloudaudit_googleapis_com_data_access',
-          'category': short_method,
-          'intent_category': f'{short_method} ({principal})',
-          'issue_summary': f'{short_method} by {principal} on {engine_id}',
-          'status': 'LOGGED_IN_BQ',
-          'resolution_status': 'VERIFIED_AUDIT_LOG',
-          'resolution_action': f'Recorded in ds_ge_audit_raw ({method_full})',
-      })
-
+    # Turns from VibeLift's GE mart (deploy/bigquery/provision_ge_mart.py), actionable issues
+    # first. If the mart is not provisioned the query fails and the panel stays empty.
+    try:
+      sql = ge_mart.build_support_turns_sql(self.project_id, hours=168, limit=limit)
+    except ValueError:
+      return []
+    rows = self._query_bigquery_rest(sql, timeout_s=6.0)
+    events = [ge_mart.support_event_from_row(r, self.project_id) for r in rows]
     self._cached_support_events = events
     return events
 
   def fetch_bigquery_fleet_summary(self, hours_ago: int = 168) -> dict[str, object] | None:
-    """Queries BigQuery vibelift_analytics.vw_fleet_finops_summary for fast pre-aggregated metrics."""
-    if self.bigquery_client is None:
-      return None
+    """Per agent/model usage from vibelift_mart.agg_daily_usage (tokens None when not logged).
 
+    Spend is not modelled here: billed cost comes only from the Cloud Billing export.
+    """
     try:
-      query = f"""
-      SELECT
-        agent_id,
-        model,
-        total_turns,
-        total_prompt_tokens,
-        total_cached_tokens,
-        aggregate_cache_hit_ratio,
-        total_naive_spend_usd,
-        total_actual_spend_usd,
-        total_finops_savings_usd,
-        avg_latency_ms
-      FROM `{self.project_id}.vibelift_analytics.vw_fleet_finops_summary`
-      LIMIT 20
-      """
-      job = self.bigquery_client.query(query)
-      rows = list(job.result())
-      if not rows:
-        return None
-
-      fleet_breakdown = []
-      total_prompts = 0
-      total_cached = 0
-      total_naive = 0.0
-      total_actual = 0.0
-      total_savings = 0.0
-
-      for row in rows:
-        agent_id = str(row.get('agent_id', 'agent'))
-        model = str(row.get('model', 'gemini-2.5-flash'))
-        prompt_tok = int(row.get('total_prompt_tokens') or 0)
-        cached_tok = int(row.get('total_cached_tokens') or 0)
-        naive_usd = float(row.get('total_naive_spend_usd') or 0.0)
-        actual_usd = float(row.get('total_actual_spend_usd') or 0.0)
-        saved_usd = float(row.get('total_finops_savings_usd') or 0.0)
-
-        total_prompts += prompt_tok
-        total_cached += cached_tok
-        total_naive += naive_usd
-        total_actual += actual_usd
-        total_savings += saved_usd
-
-        fleet_breakdown.append({
-            'agent_id': agent_id,
-            'model': model,
-            'total_turns': int(row.get('total_turns') or 0),
-            'prompt_tokens': prompt_tok,
-            'cached_tokens': cached_tok,
-            'cache_hit_ratio': float(row.get('aggregate_cache_hit_ratio') or 0.0),
-            'naive_spend_usd': round(naive_usd, 4),
-            'actual_spend_usd': round(actual_usd, 4),
-            'saved_usd': round(saved_usd, 4),
-            'avg_latency_ms': float(row.get('avg_latency_ms') or 0.0),
-        })
-
-      overall_cache_ratio = round((total_cached / total_prompts * 100.0), 2) if total_prompts > 0 else 0.0
-      return {
-          'source': 'BigQuery (vibelift_analytics.vw_fleet_finops_summary)',
-          'fleet_breakdown': fleet_breakdown,
-          'total_prompt_tokens': total_prompts,
-          'total_cached_tokens': total_cached,
-          'aggregate_cache_hit_ratio': overall_cache_ratio,
-          'total_naive_spend_usd': round(total_naive, 4),
-          'total_actual_spend_usd': round(total_actual, 4),
-          'total_finops_savings_usd': round(total_savings, 4),
-      }
-    except Exception as exc:
-      logger.debug('BigQuery fleet summary query skipped/fallback: %s', exc)
+      sql = ge_mart.build_daily_usage_sql(self.project_id, days=max(1, int(hours_ago) // 24))
+    except ValueError:
       return None
+    rows = [ge_mart.daily_usage_from_row(r) for r in self._query_bigquery_rest(sql, timeout_s=6.0)]
+    if not rows:
+      return None
+    groups: dict[tuple[str | None, str | None], dict[str, object]] = {}
+    for r in rows:
+      g = groups.setdefault((r.get('agent_name'), r.get('model_name')), {
+          'agent_id': r.get('agent_name'),
+          'model': r.get('model_name'),
+          'total_turns': 0,
+          'turns_with_tokens': 0,
+          'prompt_tokens': None,
+          'cached_tokens': None,
+          'output_tokens': None,
+      })
+      g['total_turns'] = int(g['total_turns']) + int(r.get('interactions') or 0)  # type: ignore[arg-type]
+      g['turns_with_tokens'] = int(g['turns_with_tokens']) + int(r.get('turns_with_tokens') or 0)  # type: ignore[arg-type]
+      for src, dst in (('input_tokens', 'prompt_tokens'), ('cached_input_tokens', 'cached_tokens'),
+                       ('output_tokens', 'output_tokens')):
+        if r.get(src) is not None:
+          g[dst] = int(g[dst] or 0) + int(r[src])  # type: ignore[arg-type]
+    breakdown = []
+    for g in groups.values():
+      prompt, cached = g['prompt_tokens'], g['cached_tokens']
+      g['cache_hit_ratio'] = round(cached / prompt * 100.0, 2) if prompt and cached is not None else None  # type: ignore[operator]
+      g['naive_spend_usd'] = None
+      g['actual_spend_usd'] = None
+      g['saved_usd'] = None
+      g['avg_latency_ms'] = None
+      breakdown.append(g)
+    breakdown.sort(key=lambda g: -int(g['total_turns']))  # type: ignore[arg-type]
+    prompts = [g['prompt_tokens'] for g in breakdown if g['prompt_tokens'] is not None]
+    cached_vals = [g['cached_tokens'] for g in breakdown if g['cached_tokens'] is not None]
+    total_prompts = sum(prompts) if prompts else None  # type: ignore[arg-type]
+    total_cached = sum(cached_vals) if cached_vals else None  # type: ignore[arg-type]
+    return {
+        'source': f'BigQuery ({ge_mart.mart_ref(self.project_id)}.agg_daily_usage)',
+        'fleet_breakdown': breakdown,
+        'total_turns': sum(int(g['total_turns']) for g in breakdown),  # type: ignore[arg-type]
+        'total_prompt_tokens': total_prompts,
+        'total_cached_tokens': total_cached,
+        'aggregate_cache_hit_ratio': (
+            round(total_cached / total_prompts * 100.0, 2) if total_prompts and total_cached is not None else None
+        ),
+        'total_naive_spend_usd': None,
+        'total_actual_spend_usd': None,
+        'total_finops_savings_usd': None,
+    }
 
   def fetch_live_cloud_turns(
       self,
@@ -518,73 +463,44 @@ class GoogleCloudTelemetryService:
 
     turns: list[telemetry.TurnUsageLog] = []
 
-    # 1. Primary High-Performance Query: BigQuery vibelift_analytics.agent_turns
-    if self.bigquery_client is not None:
-      try:
-        query = f"""
-        SELECT
-          timestamp,
-          agent_id,
-          model,
-          turn_index,
-          prompt_tokens,
-          cached_tokens,
-          uncached_tokens,
-          output_tokens,
-          thoughts_tokens,
-          tool_called,
-          cache_breakpoint_line,
-          cache_breakpoint_reason,
-          prompt_prefix_hash,
-          generation,
-          status_code
-        FROM `{self.project_id}.vibelift_analytics.agent_turns`
-        WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {hours_ago} HOUR)
-        ORDER BY timestamp DESC
-        LIMIT {max_results}
-        """
-        job = self.bigquery_client.query(query)
-        for row in job.result():
-          ts_str = str(row.get('timestamp'))
-          agent_name = str(row.get('agent_id', 'gemini-agent'))
-          model = str(row.get('model', 'gemini-2.5-flash'))
-          prompt_tok = int(row.get('prompt_tokens') or 0)
-          cached_tok = int(row.get('cached_tokens') or 0)
-          uncached_tok = int(row.get('uncached_tokens') or max(0, prompt_tok - cached_tok))
-          output_tok = int(row.get('output_tokens') or 0)
-          thoughts_tok = int(row.get('thoughts_tokens') or 0)
-          turn_idx = int(row.get('turn_index') or len(turns) + 1)
-          breakpoint_line = row.get('cache_breakpoint_line')
-          breakpoint_reason = str(row.get('cache_breakpoint_reason') or 'BigQuery recorded turn')
-          prefix_hash = str(row.get('prompt_prefix_hash') or 'bq_hash')
-          gen = int(row.get('generation') or 14)
-          tool_called = str(row.get('tool_called') or f'{agent_name}.inference')
-
-          turn_log = telemetry.TurnUsageLog(
-              timestamp=ts_str,
-              agent_name=agent_name,
-              model=model,
-              turn_index=turn_idx,
-              prompt_prefix_hash=prefix_hash,
-              cache_breakpoint_line=int(breakpoint_line) if breakpoint_line is not None else None,
-              cache_breakpoint_reason=breakpoint_reason,
-              prompt_token_count=prompt_tok,
+    # 1. VibeLift GE mart: turns whose inference logs reported token usage. Only rows with both
+    # input and output tokens are used; cached tokens absent from the log count as no cache read.
+    try:
+      mart_sql = ge_mart.build_recent_turns_sql(
+          self.project_id, hours=hours_ago, limit=max_results, tokens_only=True)
+    except ValueError:
+      mart_sql = ''
+    mart_rows = self._query_bigquery_rest(mart_sql, timeout_s=6.0) if mart_sql else []
+    for idx, r in enumerate(mart_rows):
+      in_tok = ge_mart.int_or_none(r.get('input_tokens'))
+      out_tok = ge_mart.int_or_none(r.get('output_tokens'))
+      if in_tok is None or out_tok is None:
+        continue
+      cached_tok = ge_mart.int_or_none(r.get('cached_input_tokens')) or 0
+      turn_id = str(r.get('turn_id') or f'turn-{idx + 1}')
+      turns.append(
+          telemetry.TurnUsageLog(
+              timestamp=str(r.get('ts') or ''),
+              agent_name=str(r.get('agent_name') or r.get('engine_key') or 'unknown agent'),
+              model=str(r.get('model_name') or 'unknown'),
+              turn_index=idx + 1,
+              prompt_prefix_hash=hashlib.sha256(turn_id.encode('utf-8')).hexdigest()[:10],
+              cache_breakpoint_line=None,
+              cache_breakpoint_reason=f"{r.get('turn_source')} turn ({ge_mart.mart_ref(self.project_id)}.fct_turns)",
+              prompt_token_count=in_tok,
               cached_content_token_count=cached_tok,
               cache_creation_input_tokens=0,
-              uncached_input_tokens=uncached_tok,
-              candidates_token_count=output_tok,
-              thoughts_token_count=thoughts_tok,
-              status_code=int(row.get('status_code') or 200),
-              tool_called=tool_called,
-              evolution_generation=gen,
+              uncached_input_tokens=max(0, in_tok - cached_tok),
+              candidates_token_count=out_tok,
+              thoughts_token_count=ge_mart.int_or_none(r.get('reasoning_tokens')) or 0,
+              status_code=200 if r.get('turn_status') == 'SUCCESS' else 500,
+              tool_called=str(r.get('tool_names') or r.get('api_method') or 'inference'),
+              evolution_generation=0,
           )
-          turns.append(turn_log)
-
-        if turns:
-          self._cached_live_turns = turns
-          return turns
-      except Exception as exc:
-        logger.debug('BigQuery agent_turns query fallback to Cloud Logging: %s', exc)
+      )
+    if turns:
+      self._cached_live_turns = turns
+      return turns
 
     # 1b. Secondary BigQuery Source: real OTel GenAI turns in sre_triage_agent_telemetry
     otel_rows = self._query_bigquery_rest(f"""
@@ -614,7 +530,7 @@ class GoogleCloudTelemetryService:
           telemetry.TurnUsageLog(
               timestamp=str(r.get('ts') or ''),
               agent_name=str(r.get('agent_name') or 'root_agent'),
-              model='gemini-2.5-flash',
+              model='unknown',  # the OTel labels in this table carry no model name
               turn_index=idx + 1,
               prompt_prefix_hash=prefix_hash,
               cache_breakpoint_line=None,
@@ -663,7 +579,7 @@ class GoogleCloudTelemetryService:
         if not payload:
           continue
 
-        ts_str = entry.timestamp.isoformat() if entry.timestamp else datetime.datetime.now(datetime.timezone.utc).isoformat()
+        ts_str = entry.timestamp.isoformat() if entry.timestamp else datetime.datetime.now(datetime.UTC).isoformat()
         service_name = 'gemini-enterprise-agent'
         if entry.resource and entry.resource.labels:
           service_name = entry.resource.labels.get('service_name', service_name)
@@ -691,7 +607,7 @@ class GoogleCloudTelemetryService:
         if prompt_tokens <= 0:
           continue
 
-        prefix_hash = hashlib.sha256(f'{service_name}:{turn_idx}'.encode('utf-8')).hexdigest()[:10]
+        prefix_hash = hashlib.sha256(f'{service_name}:{turn_idx}'.encode()).hexdigest()[:10]
 
         turn_log = telemetry.TurnUsageLog(
             timestamp=ts_str,
@@ -724,10 +640,35 @@ class GoogleCloudTelemetryService:
     self._cached_live_turns = turns
     return turns
 
+  def refresh_ge_mart_turns(self) -> dict[str, object]:
+    """Rebuilds the materialized vibelift_mart.fct_turns table from v_fct_turns via BigQuery REST."""
+    if not self.project_id or self.project_id in (UNCONFIGURED_PROJECT_ID, 'test-project'):
+      return {'status': 'OFFLINE', 'message': 'No live Google Cloud project configured.'}
+    mart = ge_mart.mart_ref(self.project_id)
+    ddl = ge_mart.build_refresh_fct_turns_ddl(self.project_id)
+    self._query_bigquery_rest(ddl, timeout_s=60.0)
+    rows = self._query_bigquery_rest(
+        f'SELECT COUNT(1) AS row_count, CAST(MAX(refreshed_at) AS STRING) AS refreshed_at FROM `{mart}.fct_turns`',
+        timeout_s=15.0,
+    )
+    self._cached_bq_insights = None
+    self._cached_bq_insights_ts = 0.0
+    self._cached_bq_summary = None
+    self._cached_ge_support_events = None
+    row = rows[0] if rows else {}
+    return {
+        'status': 'REFRESHED',
+        'table': f'{mart}.fct_turns',
+        'row_count': ge_mart.int_or_none(row.get('row_count')) or 0,
+        'refreshed_at': str(row.get('refreshed_at') or ''),
+        'refresh_cli': f'python3 deploy/bigquery/provision_ge_mart.py --project {self.project_id} --refresh',
+    }
+
   def fetch_live_bigquery_project_insights(
       self,
       force_refresh: bool = False,
       non_blocking: bool = False,
+      window_hours: int | None = None,
   ) -> dict[str, object] | None:
     """Queries real BigQuery telemetry datasets in project-maui for user, session, tool, and turn grounding."""
     import concurrent.futures
@@ -737,10 +678,15 @@ class GoogleCloudTelemetryService:
     if not self.project_id or self.project_id in (UNCONFIGURED_PROJECT_ID, 'test-project'):
       return None
 
+    eff_hours = max(1, min(int(window_hours), 8760)) if window_hours is not None else 168
+    eff_days = max(30, min(400, -(-eff_hours // 24))) if window_hours is not None else 30
+    cached_hours = getattr(self, '_cached_bq_insights_hours', 168)
+
     now_mono = time.monotonic()
     if (
         self._cached_bq_insights is not None
         and not force_refresh
+        and (window_hours is None or eff_hours == cached_hours)
         and (now_mono - self._cached_bq_insights_ts) < 60.0
     ):
       return self._cached_bq_insights
@@ -749,7 +695,9 @@ class GoogleCloudTelemetryService:
       evt = threading.Event()
       def _bg() -> None:
         try:
-          self.fetch_live_bigquery_project_insights(force_refresh=True, non_blocking=False)
+          self.fetch_live_bigquery_project_insights(
+              force_refresh=True, non_blocking=False, window_hours=window_hours
+          )
         finally:
           evt.set()
       threading.Thread(target=_bg, daemon=True).start()
@@ -762,40 +710,13 @@ class GoogleCloudTelemetryService:
 
     p = self.project_id
     queries = {
-        'ge_audit_principals': f"""
-          SELECT
-            protopayload_auditlog.authenticationInfo.principalEmail AS principal,
-            protopayload_auditlog.methodName AS method_name,
-            CONCAT(
-              IFNULL(REGEXP_EXTRACT(protopayload_auditlog.resourceName, r'locations/([^/]+)/'), ''), '/',
-              IFNULL(REGEXP_EXTRACT(protopayload_auditlog.resourceName, r'engines/([^/]+)'), '')
-            ) AS engine_key,
-            COUNT(*) AS call_count,
-            CAST(MAX(timestamp) AS STRING) AS last_seen
-          FROM `{p}.ds_ge_audit_raw.cloudaudit_googleapis_com_data_access`
-          WHERE protopayload_auditlog.authenticationInfo.principalEmail IS NOT NULL
-            AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
-          GROUP BY 1, 2, 3
-          ORDER BY call_count DESC
-          LIMIT 500
-        """,
-        'ge_assistant_activity': f"""
-          SELECT
-            insertId AS event_id,
-            CAST(timestamp AS STRING) AS ts,
-            TO_JSON_STRING(jsonPayload) AS payload_json
-          FROM `{p}.ds_ge_assistant_raw.discoveryengine_googleapis_com_gemini_enterprise_user_activity`
-          WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
-          ORDER BY timestamp DESC
-          LIMIT 20
-        """,
-        'ge_search_activity': f"""
-          SELECT
-            COUNT(*) AS search_count,
-            CAST(MAX(timestamp) AS STRING) AS last_search_ts
-          FROM `{p}.ds_ge_search_raw.discoveryengine_googleapis_com_gemini_enterprise_user_activity`
-          WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
-        """,
+        # Gemini Enterprise: VibeLift's curated views and mart (provision_ge_mart.py).
+        'ge_audit_principals': ge_mart.build_audit_principals_sql(p, hours=eff_hours),
+        'ge_user_rollup': ge_mart.build_user_engine_rollup_sql(p, hours=eff_hours),
+        'ge_recent_turns': ge_mart.build_recent_turns_sql(p, hours=eff_hours, limit=20),
+        'ge_daily_totals': ge_mart.build_daily_totals_sql(p, days=eff_days),
+        'ge_daily_by_app': ge_mart.build_daily_usage_sql(p, days=eff_days),
+        'ge_sessions': ge_mart.build_recent_sessions_sql(p, days=eff_days, limit=50),
         'sre_triage_turns': f"""
           SELECT
             insertId AS event_id,
@@ -811,7 +732,7 @@ class GoogleCloudTelemetryService:
             COALESCE(labels.gen_ai_tool_definitions, '[]') AS tool_defs_json,
             resource.labels.reasoning_engine_id AS engine_id
           FROM `{p}.sre_triage_agent_telemetry.gen_ai_client_inference_operation_details`
-          WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
+          WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {eff_hours} HOUR)
           ORDER BY timestamp DESC
           LIMIT 2000
         """,
@@ -860,7 +781,7 @@ class GoogleCloudTelemetryService:
     }
 
     raw_results: dict[str, list[dict[str, object]]] = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
       futs = {k: pool.submit(self._query_bigquery_rest, sql, 7.0) for k, sql in queries.items()}
       for k, fut in futs.items():
         try:
@@ -869,107 +790,57 @@ class GoogleCloudTelemetryService:
           raw_results[k] = []
 
     ge_audit = raw_results.get('ge_audit_principals', [])
-    ge_assist = raw_results.get('ge_assistant_activity', [])
-    ge_search = raw_results.get('ge_search_activity', [])
+    ge_rollup = raw_results.get('ge_user_rollup', [])
+    ge_recent = raw_results.get('ge_recent_turns', [])
+    ge_daily = [ge_mart.daily_usage_from_row(r) for r in raw_results.get('ge_daily_totals', [])]
+    ge_daily_by_app = [ge_mart.daily_usage_from_row(r) for r in raw_results.get('ge_daily_by_app', [])]
+    ge_sessions = [ge_mart.session_from_row(r, p) for r in raw_results.get('ge_sessions', [])]
     sre_turns = raw_results.get('sre_triage_turns', [])
     cr_reqs = raw_results.get('cloud_run_requests', [])
     vx_audit = raw_results.get('vertex_and_run_audit', [])
+    mart = ge_mart.mart_ref(p)
+    curated = ge_mart.curated_ref(p)
 
-    if not any((ge_audit, ge_assist, sre_turns, cr_reqs, vx_audit)):
+    if not any((ge_audit, ge_rollup, ge_recent, ge_daily, ge_daily_by_app, ge_sessions, sre_turns, cr_reqs, vx_audit)):
       return self._cached_bq_insights
 
-    # 1. Build real usage_logs and ratings_logs for Tab 5 (aive_logs) from ge_assist + sre_turns
-    live_usage_logs: list[dict[str, object]] = []
+    # 1. Usage logs for Tab 5 (aive_logs): GE turns from the mart plus Agent Engine OTel turns.
+    # No prompt text, latency or ratings exist in these sources, so none are reported.
+    live_usage_logs: list[dict[str, object]] = [ge_mart.usage_log_from_row(r, p) for r in ge_recent]
     live_ratings_logs: list[dict[str, object]] = []
 
-    for idx, row in enumerate(ge_assist):
-      try:
-        pj = json.loads(str(row.get('payload_json') or '{}'))
-      except Exception:
-        pj = {}
-      email = str(pj.get('useriamprincipal') or 'enriq@google.com')
-      ldap = email.split('@')[0] if '@' in email else email
-      meta = pj.get('logmetadata') or {}
-      req_obj = pj.get('request') or {}
-      resp_obj = pj.get('response') or {}
-      q_parts = ((req_obj.get('query') or {}).get('parts')) or []
-      q_text = str(q_parts[0].get('text') if q_parts and isinstance(q_parts[0], dict) else 'StreamAssist query')
-      model_name = str(((resp_obj.get('modelinfo') or {}).get('model')) or 'gemini-3.5-flash')
-      ds_list = ((resp_obj.get('datasourceinfo') or {}).get('datastores')) or []
-      ds_uri = str(ds_list[0]).split('/')[-1] if ds_list else 'gemini-enterprise-default-assistant'
-      reply_text = str(pj.get('servicetextreply') or '')
-      est_in_tok = max(64, len(q_text) * 4 + 480)
-      est_out_tok = max(32, len(reply_text) // 4)
-      evt_id = str(row.get('event_id') or f'ge-assist-{idx + 1}')
-      sess_name = str(req_obj.get('name') or meta.get('name') or '').split('/')[-1] or f'ge-sess-{idx + 1}'
-      live_usage_logs.append({
-          'event_id': evt_id,
-          'timestamp': str(row.get('ts') or ''),
-          'session_id': sess_name,
-          'user_email': email,
-          'user_ldap': ldap,
-          'company_name': 'Google Cloud (project-maui)',
-          'department': 'Gemini Enterprise Interactive (ds_ge_assistant_raw)',
-          'task_type': str(meta.get('methodname') or 'StreamAssist'),
-          'model_name': model_name,
-          'prompts': [q_text[:160]],
-          'outputs': [{
-              'gcs_uri': f'bq://project-maui.ds_ge_assistant_raw/{ds_uri}',
-              'media_type': 'TEXT',
-              'mime_type': 'text/markdown',
-          }],
-          'latency_ms': 620.0,
-          'total_tokens': est_in_tok + est_out_tok,
-          'thinking_tokens': 0,
-          'background_tokens': 0,
-          'status': 'SUCCESS',
-          'error_message': None,
-          'csat_rating': 'VERIFIED',
-          'source_table': f'{p}.ds_ge_assistant_raw.discoveryengine_googleapis_com_gemini_enterprise_user_activity',
-      })
-      live_ratings_logs.append({
-          'rating_id': f'bq-assist-{evt_id[:8]}',
-          'timestamp': str(row.get('ts') or ''),
-          'session_id': sess_name,
-          'event_id': evt_id,
-          'user_email': email,
-          'user_ldap': ldap,
-          'rating': 5,
-          'feedback_text': f'Verified StreamAssist response in ds_ge_assistant_raw (query: "{q_text[:60]}", model: {model_name})',
-      })
-
     for idx, row in enumerate(sre_turns[:15]):
-      uid = str(row.get('user_id') or 'unknown')
-      in_tok = int(row.get('input_tokens') or 0)
-      out_tok = int(row.get('output_tokens') or 0)
-      tot_tok = in_tok + out_tok
+      uid = str(row.get('user_id') or '') or None
+      in_tok = ge_mart.int_or_none(row.get('input_tokens'))
+      out_tok = ge_mart.int_or_none(row.get('output_tokens'))
       out_uri = str(row.get('output_gcs_uri') or row.get('input_gcs_uri') or row.get('sys_gcs_uri') or '')
       evt_id = str(row.get('event_id') or f'otel-{idx + 1}')
-      conv_id = str(row.get('conversation_id') or f'conv-{idx + 1}')
+      source_table = f'{p}.sre_triage_agent_telemetry.gen_ai_client_inference_operation_details'
       live_usage_logs.append({
           'event_id': evt_id,
           'timestamp': str(row.get('ts') or ''),
-          'session_id': conv_id,
-          'user_email': f'{uid}@project-maui.internal',
+          'session_id': str(row.get('conversation_id') or '') or None,
+          'user_email': uid if uid and '@' in uid else None,
           'user_ldap': uid,
-          'company_name': 'Google Cloud (project-maui)',
+          'company_name': f'Google Cloud ({p})',
           'department': f"ReasoningEngine {row.get('engine_id')} (sre_triage_agent_telemetry)",
           'task_type': 'OTEL_GENAI_INFERENCE',
-          'model_name': 'gemini-2.5-flash (ADK root_agent)',
-          'prompts': [f"OTel GenAI turn in conversation {conv_id}"],
+          'agent_name': str(row.get('agent_name') or '') or None,
+          'model_name': None,  # not in these OTel labels
+          'prompts': [],
           'outputs': [{
-              'gcs_uri': out_uri or 'gs://project-maui-sre-triage-agent-logs/completions/',
-              'media_type': 'APPLICATION_JSONL',
-              'mime_type': 'application/jsonl',
+              'gcs_uri': out_uri or f'bq://{source_table}/{evt_id}',
+              'media_type': 'APPLICATION_JSONL' if out_uri else 'BIGQUERY_ROW',
+              'mime_type': 'application/jsonl' if out_uri else 'application/x-bigquery-row',
           }],
-          'latency_ms': 840.0,
-          'total_tokens': tot_tok,
-          'thinking_tokens': 0,
-          'background_tokens': 0,
-          'status': 'SUCCESS',
+          'latency_ms': None,
+          'total_tokens': in_tok + out_tok if in_tok is not None and out_tok is not None else None,
+          'thinking_tokens': None,
+          'background_tokens': None,
+          'status': 'UNKNOWN',
           'error_message': None,
-          'csat_rating': 'OTEL_OK',
-          'source_table': f'{p}.sre_triage_agent_telemetry.gen_ai_client_inference_operation_details',
+          'csat_rating': None,
+          'source_table': source_table,
       })
 
     # 2. Aggregate real principals across BigQuery tables for power_users_ldap
@@ -985,13 +856,46 @@ class GoogleCloudTelemetryService:
           'is_service_account': is_sa,
           'api_calls': 0,
           'interactive_sessions': 0,
+          'interactions': 0,
           'observed_tokens': 0,
+          'reasoning_tokens': None,
           'methods': set(),
           'source_tables': set(),
           'last_seen': '',
           'engine_calls': {},
           'engine_sessions': {},
       })
+
+    # Real sessions, interactions and tokens per user and GE app from the mart.
+    for r in ge_rollup:
+      pr = str(r.get('user_email') or '')
+      if not pr:
+        continue
+      is_sa = pr.endswith('.gserviceaccount.com')
+      st = _ensure_p(
+          pr,
+          'Service Account Runtime (vibelift_mart)' if is_sa else 'Gemini Enterprise Interactive User (vibelift_mart)',
+          'Gemini Enterprise Assistant & Search',
+          is_sa=is_sa,
+      )
+      sess = ge_mart.int_or_none(r.get('sessions')) or 0
+      st['interactive_sessions'] += sess
+      st['interactions'] += ge_mart.int_or_none(r.get('interactions')) or 0
+      ek = str(r.get('engine_key') or '')
+      if ek:
+        st['engine_sessions'][ek] = st['engine_sessions'].get(ek, 0) + sess
+      tok = ge_mart.int_or_none(r.get('total_tokens'))
+      if tok is not None:
+        st['observed_tokens'] += tok
+        st['tokens_reported'] = True
+      rtok = ge_mart.int_or_none(r.get('reasoning_tokens'))
+      if rtok is not None:
+        st['reasoning_tokens'] = (st['reasoning_tokens'] or 0) + rtok
+      st['methods'].add('fct_turns')
+      st['source_tables'].add('vibelift_mart')
+      ls = str(r.get('last_seen') or '')
+      if ls > st['last_seen']:
+        st['last_seen'] = ls
 
     for r in ge_audit:
       pr = str(r.get('principal') or '')
@@ -1007,10 +911,6 @@ class GoogleCloudTelemetryService:
       ek = str(r.get('engine_key') or '')
       if ek and ek != '/':
         st['engine_calls'][ek] = st['engine_calls'].get(ek, 0) + cnt
-      if mname in ('StreamAssist', 'ExecuteUiWidgetAction', 'Search'):
-        st['interactive_sessions'] += cnt
-        if ek and ek != '/':
-          st['engine_sessions'][ek] = st['engine_sessions'].get(ek, 0) + cnt
       st['methods'].add(mname)
       st['source_tables'].add('ds_ge_audit_raw')
       ls = str(r.get('last_seen') or '')
@@ -1072,8 +972,9 @@ class GoogleCloudTelemetryService:
       )
       st['otel_session_id_only'] = True
       st['api_calls'] += u['turns']
-      st['interactive_sessions'] += len(u['convs']) or u['turns']
+      st['interactive_sessions'] += len(u['convs'])  # turns without a conversation id are not sessions
       st['observed_tokens'] += (u['in_tok'] + u['out_tok'])
+      st['tokens_reported'] = True
       st['methods'].add('gen_ai.client.inference')
       st['source_tables'].add('sre_triage_agent_telemetry')
       if u['last_ts'] > st['last_seen']:
@@ -1085,10 +986,13 @@ class GoogleCloudTelemetryService:
         principal_stats.items(),
         key=lambda kv: (kv[1]['is_service_account'], -(kv[1]['interactive_sessions'] + kv[1]['api_calls'])),
     ):
-      obs_tok = int(st['observed_tokens'])
-      tok_m = round(obs_tok / 1_000_000.0, 4)
-      est_cost = round(obs_tok / 1_000_000.0 * 0.75, 4)
-      sessions_val = st['interactive_sessions'] if st['interactive_sessions'] > 0 else st['api_calls']
+      # Tokens are None (unknown) unless a source reported them for this principal.
+      obs_tok = int(st['observed_tokens']) if st.get('tokens_reported') else None
+      tok_m = round(obs_tok / 1_000_000.0, 4) if obs_tok is not None else None
+      # Real sessions only (mart session ids / OTel conversations); audit call counts are
+      # reported separately as api_calls_observed, never relabelled as sessions.
+      sessions_val = st['interactive_sessions']
+      reasoning = st.get('reasoning_tokens')
       if st['is_service_account']:
         role_tag = 'SERVICE_ACCOUNT_TELEMETRY'
       elif st.get('otel_session_id_only') and '@' not in str(pr):
@@ -1105,20 +1009,26 @@ class GoogleCloudTelemetryService:
           'api_calls_observed': int(st['api_calls']),
           'observed_tokens_exact': obs_tok,
           'total_tokens_m': tok_m,
-          'thinking_tokens_k': 0.0,
-          'background_tokens_k': 0.0,
+          'thinking_tokens_k': round(reasoning / 1000.0, 2) if reasoning is not None else None,
+          'background_tokens_k': None,
           # Not measured per principal in these sources: leave unset rather than invent values.
           'cache_hit_pct': None,
           'csat_rating': None,
           'avg_csat': None,
-          'monthly_cost_usd': est_cost,
-          'cost_30d_usd': est_cost,
+          # Billed cost is project-level (Cloud Billing export); it is never allocated per user.
+          'monthly_cost_usd': None,
+          'cost_30d_usd': None,
           'saved_30d_usd': None,
           'source_tables': sorted(st['source_tables']),
           'last_seen': st['last_seen'],
-          # Per GE app ('location/engine_id'), same unit as sessions_7d. Principals seen only in
-          # non-GE sources (e.g. Agent Engine OTel) have no GE app attribution.
-          'by_engine': dict(st['engine_sessions'] if st['interactive_sessions'] > 0 else st['engine_calls']),
+          # Per GE app ('location/engine_id'), same unit as sessions_7d. Apps a principal only
+          # called (audit) appear with 0 sessions so app cohorts still count the principal.
+          # Principals seen only in non-GE sources (Agent Engine OTel) have no GE app attribution.
+          'by_engine': {
+              **{k: 0 for k in st['engine_calls']},
+              **st['engine_sessions'],
+          },
+          'interactions_7d': int(st['interactions']),
           'status': role_tag,
           'anomaly_status': role_tag,
       })
@@ -1214,18 +1124,28 @@ class GoogleCloudTelemetryService:
 
     insights: dict[str, object] = {
         'project_id': p,
-        'fetched_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        'fetched_at_utc': datetime.datetime.now(datetime.UTC).isoformat(),
         'queried_tables': [
-            f'{p}.ds_ge_audit_raw.cloudaudit_googleapis_com_data_access',
-            f'{p}.ds_ge_assistant_raw.discoveryengine_googleapis_com_assistant_user_activity',
-            f'{p}.ds_ge_search_raw.discoveryengine_googleapis_com_gen_search_user_activity',
-            f'{p}.sre_triage_agent_telemetry._AllSpans',
+            f'{curated}.v_consolidated_audit_log',
+            f'{mart}.fct_turns',
+            f'{mart}.fct_sessions',
+            f'{mart}.agg_daily_usage',
             f'{p}.sre_triage_agent_telemetry.gen_ai_client_inference_operation_details',
             f'{p}.vibelift_analytics.run_googleapis_com_requests_*',
         ],
+        'ge_mart_dataset': mart,
+        'ge_curated_dataset': curated,
         'ge_audit_principals': ge_audit,
-        'ge_assistant_activity_count': len(ge_assist),
-        'ge_search_activity_count': int((ge_search[0].get('search_count') if ge_search else 0) or 0),
+        # Per-day GE usage for the last 30 days (fct_turns); joined with billed cost in server.py.
+        'ge_daily_totals': ge_daily,
+        # Per-day usage broken down by (engine_key, agent_name, model_name) from agg_daily_usage.
+        'ge_daily_by_app': ge_daily_by_app,
+        # Real conversation sessions from fct_sessions.
+        'ge_sessions': ge_sessions,
+        # When fct_turns was last rebuilt (None = unknown); the table is a scheduled snapshot.
+        'ge_mart_refreshed_at': ge_mart.mart_refreshed_at(ge_daily),
+        'ge_assistant_activity_count': sum(int(d.get('chat_turns') or 0) for d in ge_daily[-7:]),
+        'ge_search_activity_count': sum(int(d.get('searches') or 0) for d in ge_daily[-7:]),
         'sre_triage_turns_count': len(sre_turns),
         'sre_triage_total_input_tokens': total_sre_in,
         'sre_triage_total_output_tokens': sum(int(r.get('output_tokens') or 0) for r in sre_turns),
@@ -1247,6 +1167,7 @@ class GoogleCloudTelemetryService:
     }
     self._cached_bq_insights = insights
     self._cached_bq_insights_ts = now_mono
+    self._cached_bq_insights_hours = eff_hours
     return insights
 
   def get_telemetry_summary_payload(self) -> dict[str, object]:
@@ -1266,13 +1187,18 @@ class GoogleCloudTelemetryService:
         'cloud_run_agent_count': len(services),
         'services': services,
         'cloud_run_services': services,
-        'bigquery_datasets': ['vibelift_analytics', 'gemini_enterprise_support_views', 'sre_triage_agent_telemetry'],
+        'bigquery_datasets': [
+            'vibelift_analytics',
+            ge_mart.curated_ref(self.project_id).split('.')[1],
+            ge_mart.mart_ref(self.project_id).split('.')[1],
+            'sre_triage_agent_telemetry',
+        ],
         'bigquery_fleet_summary': bq_fleet,
         'gemini_enterprise_support_events': support_events,
         'live_turns_ingested': len(live_turns),
         'live_turns': [t.to_dict() for t in live_turns],
         'summary_stats': dict(summary_stats),
-        'timestamp_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        'timestamp_utc': datetime.datetime.now(datetime.UTC).isoformat(),
     }
 
   def get_cloud_telemetry_summary(self) -> dict[str, object]:
