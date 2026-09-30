@@ -19,6 +19,7 @@
 #   3. VibeLift Analytics Tables & Summary View:
 #      - agent_turns, agent_eval_runs, alpha_evolve_generations, agent_registry_snapshots
 #      - vw_fleet_finops_summary
+#   2b. Raw log retention: VIBELIFT_RETENTION_DAYS (default 90) via deploy/set_log_retention.sh
 #   4. Curated Staging Views & Reporting Mart (via deploy/bigquery/provision_ge_mart.py):
 #      - ds_ge_curated_staging (v_user_activity_curated, v_agentic_operations_curated, v_consolidated_audit_log)
 #      - vibelift_mart (v_fct_turns, fct_turns, fct_sessions, agg_daily_usage)
@@ -32,6 +33,8 @@ PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-$(gcloud config get-value project 2>/dev/nul
 BQ_LOCATION="${BQ_LOCATION:-US}"
 REGION="${GOOGLE_CLOUD_REGION:-us-central1}"
 DATASET_ID="vibelift_analytics"
+# Days of raw log history kept in BigQuery and read by the mart (see deploy/set_log_retention.sh).
+RETENTION_DAYS="${VIBELIFT_RETENTION_DAYS:-90}"
 SINK_NAME="vibelift-telemetry-sink"
 
 if [[ -z "${PROJECT_ID}" ]]; then
@@ -166,6 +169,10 @@ SINK_VIBELIFT_FILTER="resource.type=\"cloud_run_revision\" AND resource.labels.s
 configure_sink "vibelift-telemetry-sink" "${DATASET_ID}" "${SINK_VIBELIFT_FILTER}"
 
 echo ""
+echo "--- Step 2b: Raw log retention (${RETENTION_DAYS} days) ---"
+VIBELIFT_RETENTION_DAYS="${RETENTION_DAYS}" GOOGLE_CLOUD_PROJECT="${PROJECT_ID}" ./deploy/set_log_retention.sh
+
+echo ""
 echo "--- Step 3: Provisioning VibeLift Analytics Tables & Views ---"
 
 # Table: agent_turns
@@ -281,12 +288,12 @@ echo "--- Step 4: Provisioning Curated Staging Views & Reporting Mart ---"
 # Raw tables that do not exist yet (no logs routed so far) resolve to empty views, not errors.
 MART_STATUS="ok"
 if ! python3 deploy/bigquery/provision_ge_mart.py --project="${PROJECT_ID}" --location="${BQ_LOCATION}" \
-    --gcloud-auth --apply; then
+    --gcloud-auth --apply --lookback-days="${RETENTION_DAYS}"; then
   MART_STATUS="failed"
   echo "ERROR: provision_ge_mart.py failed; curated views and vibelift_mart may be incomplete." >&2
   echo "  Needs: python3 with 'pip install -r requirements.txt' (google-cloud-bigquery), and BigQuery" >&2
   echo "  Data Editor + Job User for your account. Re-run just this step with:" >&2
-  echo "  python3 deploy/bigquery/provision_ge_mart.py --project=${PROJECT_ID} --location=${BQ_LOCATION} --gcloud-auth --apply" >&2
+  echo "  python3 deploy/bigquery/provision_ge_mart.py --project=${PROJECT_ID} --location=${BQ_LOCATION} --gcloud-auth --apply --lookback-days=${RETENTION_DAYS}" >&2
 fi
 
 echo ""
@@ -301,6 +308,8 @@ echo "   - \`${PROJECT_ID}.ds_security_guardrails_raw\`"
 echo "   - \`${PROJECT_ID}.${DATASET_ID}\`"
 echo "   - \`${PROJECT_ID}.ds_ge_curated_staging\`"
 echo "   - \`${PROJECT_ID}.vibelift_mart\` (provisioning: ${MART_STATUS})"
+echo ""
+echo " Raw log retention: ${RETENTION_DAYS} days (mart lookback: ${RETENTION_DAYS} days)"
 echo ""
 echo " Sinks:"
 echo "   - sink-ge-assistant-activity"
@@ -320,8 +329,8 @@ echo "  2. Enable Data Access audit logs for discoveryengine.googleapis.com (IAM
 echo "     if you want read/assist calls in ds_ge_audit_raw. Admin Activity logs are always on."
 echo "  3. Sinks only capture NEW log entries. After real GE traffic, rebuild the mart table with:"
 echo "     python3 deploy/bigquery/provision_ge_mart.py --project=${PROJECT_ID} --location=${BQ_LOCATION} --gcloud-auth --refresh"
-echo "  4. Keep fct_turns fresh with a BigQuery scheduled query using the DDL printed by:"
-echo "     python3 deploy/bigquery/provision_ge_mart.py --project=${PROJECT_ID} --print-refresh"
+echo "  4. After ./deploy/deploy_cloud_run.sh, keep fct_turns fresh with an hourly scheduled query:"
+echo "     GOOGLE_CLOUD_PROJECT=${PROJECT_ID} ./deploy/setup_mart_refresh.sh"
 if [[ "${MART_STATUS}" != "ok" ]]; then
   exit 1
 fi

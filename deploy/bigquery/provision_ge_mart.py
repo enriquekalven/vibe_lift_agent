@@ -44,7 +44,8 @@ TEMPLATE_DIR = pathlib.Path(__file__).resolve().parent / 'ge_mart'
 DEFAULT_CURATED_DATASET = 'ds_ge_curated_staging'
 DEFAULT_MART_DATASET = 'vibelift_mart'
 DEFAULT_LOCATION = 'US'
-DEFAULT_LOOKBACK_DAYS = 30
+# Matches the default raw log retention set by deploy/set_log_retention.sh (VIBELIFT_RETENTION_DAYS).
+DEFAULT_LOOKBACK_DAYS = 90
 # The audit entry is written at request start, the activity entry at completion.
 DEFAULT_AUDIT_LAG_S = 300
 DEFAULT_AUDIT_LEAD_S = 30

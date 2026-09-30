@@ -244,6 +244,7 @@ echo ""
 echo "Next steps (see README 'Deploy in your own GCP project'):"
 echo "  1. If not done yet: ./deploy/setup_bigquery_sink.sh, then re-run this script for the mart grant."
 echo "  2. Register in Gemini Enterprise: ./deploy/register_ge_agent.sh <GE_APP_ID>"
+echo "  3. Hourly mart refresh (scheduled query): GOOGLE_CLOUD_PROJECT=${PROJECT_ID} ./deploy/setup_mart_refresh.sh"
 if [[ "${IAM_FAILURES}" -gt 0 ]]; then
   warn "${IAM_FAILURES} IAM grant(s) failed; see the warnings above."
 fi

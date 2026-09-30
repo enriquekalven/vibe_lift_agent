@@ -78,8 +78,8 @@ Each rebuild covers the whole lookback window, so audit matching stays correct w
 entries arrive. `CREATE OR REPLACE TABLE` swaps the table atomically, so readers never see a
 half-built table.
 
-To schedule the rebuild as a BigQuery scheduled query, print the DDL with `--print-refresh` and schedule
-the `CREATE OR REPLACE TABLE … fct_turns` statement, for example hourly. You can also trigger an
+To schedule the rebuild hourly, run `deploy/setup_mart_refresh.sh`: it creates (or updates) a BigQuery
+scheduled query from the `--print-refresh` DDL that runs as the runtime service account. You can also trigger an
 on-demand rebuild from the dashboard (**Cost & Billing → Refresh Mart** button, which calls
 `POST /api/ge_mart/refresh`). The dashboard reports the last rebuild as `ge_mart_refreshed_at`.
 
@@ -88,7 +88,7 @@ on-demand rebuild from the dashboard (**Cost & Billing → Refresh Mart** button
 | `--raw-project` | `--project` | Project that holds the raw sink datasets. |
 | `--location` | `US` | Must match the raw datasets. BigQuery cannot join across locations. |
 | `--curated-dataset` / `--mart-dataset` | `ds_ge_curated_staging` / `vibelift_mart` | Set `VIBELIFT_GE_CURATED_DATASET` / `VIBELIFT_GE_MART_DATASET` to match. |
-| `--lookback-days` | 30 | One window for every source (the stage views used different windows). |
+| `--lookback-days` | 90 | One window for every source (the stage views used different windows). Keep it equal to the raw log retention (`deploy/set_log_retention.sh`, default 90 days). The lookback is fixed in the curated views by `--apply`; `--refresh` and the scheduled query only re-read them. |
 | `--audit-lag-seconds` / `--audit-lead-seconds` | 300 / 30 | Audit-to-activity matching window (see below). |
 | `--audit-only` | `errors` | `all` also creates turns from unmatched successful audit calls. |
 | `--source key=project.dataset.table` | | Overrides a source table. Keys: `assistant`, `search`, `inference`, `audit_activity`, `audit_data_access` (`armor` commented out until enabled). |

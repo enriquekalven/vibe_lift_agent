@@ -112,6 +112,8 @@ vibe_lift_agent/
 │   ├── cloudbuild.yaml          # Build -> test -> push -> deploy
 │   ├── cloud_run_service.yaml   # Declarative service reference
 │   ├── setup_bigquery_sink.sh   # BigQuery datasets, Logging sinks, analytics tables, curated views + mart
+│   ├── set_log_retention.sh     # Raw log retention (partition expiration, default 90 days)
+│   ├── setup_mart_refresh.sh    # Hourly BigQuery scheduled query that rebuilds fct_turns
 │   ├── register_ge_agent.sh     # A2A registration + MCP connector values for a Gemini Enterprise app
 │   └── bigquery/
 │       ├── provision_ge_mart.py # Curated views + vibelift_mart (apply / refresh / scheduled-query DDL)
@@ -187,7 +189,10 @@ Runtime variables are read by the service (set on Cloud Run by `deploy/deploy_cl
 | `SERVICE_NAME` | all scripts | `vibe-lift-agent` | Cloud Run service name. |
 | `VIBELIFT_SKIP_TESTS` | `deploy_cloud_run.sh` | `0` | `1` deploys without running the local test gate (not recommended). |
 | `VIBELIFT_INVOKERS` | `deploy_cloud_run.sh` | *(empty)* | Comma-separated IAM members granted `roles/run.invoker` so they can open the dashboard, for example `user:alice@example.com,group:finops@example.com`. |
-| `BQ_LOCATION` | `setup_bigquery_sink.sh` | `US` | BigQuery location for all datasets. Keep it the same as your log sinks. |
+| `BQ_LOCATION` | `setup_bigquery_sink.sh`, `setup_mart_refresh.sh` | `US` | BigQuery location for all datasets. Keep it the same as your log sinks. |
+| `VIBELIFT_RETENTION_DAYS` | `setup_bigquery_sink.sh`, `set_log_retention.sh` | `90` | Days of raw log history kept in BigQuery (partition expiration on the raw sink datasets). The mart reads the same window (`provision_ge_mart.py --lookback-days`, default 90). |
+| `VIBELIFT_REFRESH_SCHEDULE` | `setup_mart_refresh.sh` | `every 1 hours` | How often the scheduled query rebuilds `fct_turns` (Data Transfer schedule syntax). |
+| `VIBELIFT_REFRESH_SA` | `setup_mart_refresh.sh` | `vibe-lift-runtime-sa@PROJECT.iam.gserviceaccount.com` | Service account the scheduled query runs as. |
 | `GE_ENGINE_ID` | `register_ge_agent.sh` | *(required)* | Gemini Enterprise app ID (or pass it as the first argument). |
 | `GE_LOCATION` | `register_ge_agent.sh` | `global` | Location of that app (`global`, `us`, `eu`). |
 
@@ -306,10 +311,13 @@ Idempotent. It creates:
 | :--- | :--- |
 | Raw datasets (`BQ_LOCATION`) | `ds_ge_assistant_raw`, `ds_ge_search_raw`, `ds_vertex_agents_raw`, `ds_ge_audit_raw`, `ds_security_guardrails_raw`, `vibelift_analytics` |
 | Log sinks (partitioned tables) | `sink-ge-assistant-activity`, `sink-ge-search-activity`, `sink-vertex-reasoning-engine`, **`sink-ge-inference-tokens`** (the only source of per-turn tokens), `sink-platform-audit`, `sink-model-armor-sdp`, `vibelift-telemetry-sink`. Each sink's writer identity gets `roles/bigquery.dataEditor` on the project. |
+| Raw log retention | Partition expiration of `VIBELIFT_RETENTION_DAYS` (default **90 days**) on the raw sink datasets, set on each dataset (new tables) and each existing table, by `deploy/set_log_retention.sh`. `vibelift_analytics` is not expired. |
 | Analytics tables | `vibelift_analytics.agent_turns`, `agent_eval_runs`, `alpha_evolve_generations`, `agent_registry_snapshots`, view `vw_fleet_finops_summary` |
-| Curated views + mart | `ds_ge_curated_staging` (`v_user_activity_curated`, `v_agentic_operations_curated`, `v_consolidated_audit_log`) and `vibelift_mart` (`v_fct_turns`, table `fct_turns`, `fct_sessions`, `agg_daily_usage`), built by `deploy/bigquery/provision_ge_mart.py --apply` |
+| Curated views + mart | `ds_ge_curated_staging` (`v_user_activity_curated`, `v_agentic_operations_curated`, `v_consolidated_audit_log`) and `vibelift_mart` (`v_fct_turns`, table `fct_turns`, `fct_sessions`, `agg_daily_usage`), built by `deploy/bigquery/provision_ge_mart.py --apply --lookback-days=$VIBELIFT_RETENTION_DAYS` |
 
 On a new project the raw tables do not exist until the first logs arrive; the curated views then return no rows instead of failing. The script exits non-zero if the mart step fails and prints the command to re-run just that step. Details of the mart logic: [docs/GE_MART.md](docs/GE_MART.md).
+
+To change retention later, run `VIBELIFT_RETENTION_DAYS=180 ./deploy/set_log_retention.sh` and rebuild the views with the same window: `python3 deploy/bigquery/provision_ge_mart.py --project=PROJECT_ID --gcloud-auth --apply --lookback-days=180`. Data that already expired cannot be recovered.
 
 > [!NOTE]
 > Sinks only capture log entries written **after** they exist. There is no backfill. After real Gemini Enterprise traffic, rebuild the mart table:
@@ -398,17 +406,14 @@ gcloud run services proxy vibe-lift-agent --project=PROJECT_ID --region=REGION -
 ```
 Teammates need `roles/run.invoker` on the service (`VIBELIFT_INVOKERS` in step 3) to do the same. In Gemini Enterprise, ask the assistant to "open the VibeLift dashboard".
 
-### 6. Keep the mart fresh
+### 6. Keep the mart fresh (hourly scheduled query)
 
-`fct_turns` is a materialized table. Rebuild it on a schedule with a BigQuery scheduled query (needs the BigQuery Data Transfer API):
+`fct_turns` is a materialized snapshot, so it only changes when it is rebuilt. Create an hourly BigQuery scheduled query that rebuilds it (run after steps 2 and 3):
 ```bash
-gcloud services enable bigquerydatatransfer.googleapis.com --project=PROJECT_ID
-python3 deploy/bigquery/provision_ge_mart.py --project=PROJECT_ID --print-refresh > /tmp/vibelift_refresh.sql
-bq mk --transfer_config --project_id=PROJECT_ID --location=US \
-  --data_source=scheduled_query --display_name="VibeLift fct_turns refresh" \
-  --schedule="every 1 hours" \
-  --params="{\"query\": $(python3 -c 'import json; print(json.dumps(open("/tmp/vibelift_refresh.sql").read()))')}"
+GOOGLE_CLOUD_PROJECT=PROJECT_ID ./deploy/setup_mart_refresh.sh
 ```
+Idempotent: it updates the existing "VibeLift fct_turns refresh" query if there is one. It enables the BigQuery Data Transfer API, runs the query as the runtime service account (not your user, so it keeps working if you leave the project), grants the Data Transfer service agent `roles/iam.serviceAccountTokenCreator` on that account, and starts one run immediately. Check runs with `bq ls --transfer_run --max_results=5 CONFIG_NAME` (printed by the script) or in **BigQuery > Scheduled queries**.
+
 Operators can also click **Refresh Mart** in the dashboard, or run `provision_ge_mart.py --refresh`.
 
 ### Executive PDF Export
@@ -488,4 +493,9 @@ done
 gcloud iam roles delete vibeLiftGeFleetReader --project=$PROJECT_ID
 gcloud iam service-accounts delete vibe-lift-runtime-sa@$PROJECT_ID.iam.gserviceaccount.com --project=$PROJECT_ID
 ```
-Remove the VibeLift agent and MCP connector from the Gemini Enterprise app in the console, and delete any scheduled query you created in step 6.
+Delete the scheduled query from step 6 (before deleting the service account):
+```bash
+bq ls --transfer_config --transfer_location=US --project_id=$PROJECT_ID   # find 'VibeLift fct_turns refresh'
+bq rm -f --transfer_config projects/PROJECT_NUMBER/locations/us/transferConfigs/CONFIG_ID
+```
+Remove the VibeLift agent and MCP connector from the Gemini Enterprise app in the console.
