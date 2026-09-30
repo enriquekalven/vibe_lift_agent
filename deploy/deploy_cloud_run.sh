@@ -140,14 +140,27 @@ done
 # vibelift_mart.fct_turns, so the runtime SA needs write access on that dataset only (not project-wide).
 MART_DATASET="${VIBELIFT_GE_MART_DATASET:-vibelift_mart}"
 if bq --project_id="${PROJECT_ID}" show --format=none "${PROJECT_ID}:${MART_DATASET}" &>/dev/null; then
-  echo "Granting roles/bigquery.dataEditor on dataset ${MART_DATASET} to ${SA_EMAIL}..."
-  if ! bq add-iam-policy-binding --dataset \
-      --member="serviceAccount:${SA_EMAIL}" \
-      --role="roles/bigquery.dataEditor" \
-      "${PROJECT_ID}:${MART_DATASET}" > /dev/null; then
-    warn "could not grant dataEditor on ${MART_DATASET}; the dashboard's Refresh Mart button will fail."
+  echo "Granting WRITER (BigQuery Data Editor) on dataset ${MART_DATASET} to ${SA_EMAIL}..."
+  # Dataset-level IAM (bq add-iam-policy-binding --dataset) needs allowlisting, so edit the dataset's
+  # access list instead: WRITER on a dataset is equivalent to roles/bigquery.dataEditor on it.
+  ACL_FILE="$(mktemp)"
+  if bq --project_id="${PROJECT_ID}" show --format=prettyjson "${PROJECT_ID}:${MART_DATASET}" > "${ACL_FILE}" \
+      && python3 - "${ACL_FILE}" "${SA_EMAIL}" <<'PY' \
+      && bq --project_id="${PROJECT_ID}" update --source "${ACL_FILE}" "${PROJECT_ID}:${MART_DATASET}" > /dev/null; then
+import json, sys
+path, email = sys.argv[1], sys.argv[2]
+ds = json.load(open(path))
+access = ds.get('access', [])
+if not any(e.get('userByEmail') == email and e.get('role') in ('WRITER', 'OWNER') for e in access):
+  access.append({'role': 'WRITER', 'userByEmail': email})
+json.dump({'access': access}, open(path, 'w'))
+PY
+    :
+  else
+    warn "could not grant WRITER on ${MART_DATASET}; the dashboard's Refresh Mart button will fail."
     IAM_FAILURES=$((IAM_FAILURES + 1))
   fi
+  rm -f "${ACL_FILE}"
 else
   echo "Dataset ${MART_DATASET} not found; run deploy/setup_bigquery_sink.sh, then re-run this script"
   echo "so the runtime SA can refresh the mart from the dashboard."
