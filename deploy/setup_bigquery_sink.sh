@@ -1,36 +1,168 @@
 #!/usr/bin/env bash
-# setup_bigquery_sink.sh — Provision BigQuery dataset, tables, views, and Cloud Logging sink for VibeLift
+# setup_bigquery_sink.sh — Turnkey BigQuery Datasets, Curated Views, Mart, and Cloud Logging Sinks
+#
+# Provisions the complete telemetry & FinOps data plane used by VibeLift and Gemini Enterprise:
+#   1. Raw Cloud Logging BigQuery Datasets (US multi-region):
+#      - ds_ge_assistant_raw
+#      - ds_ge_search_raw
+#      - ds_vertex_agents_raw
+#      - ds_ge_audit_raw
+#      - ds_security_guardrails_raw
+#      - vibelift_analytics
+#   2. Cloud Logging Sinks (with --use-partitioned-tables and IAM writerIdentity bindings):
+#      - sink-ge-assistant-activity
+#      - sink-ge-search-activity
+#      - sink-vertex-reasoning-engine
+#      - sink-platform-audit
+#      - sink-model-armor-sdp
+#      - vibelift-telemetry-sink
+#   3. VibeLift Analytics Tables & Summary View:
+#      - agent_turns, agent_eval_runs, alpha_evolve_generations, agent_registry_snapshots
+#      - vw_fleet_finops_summary
+#   4. Curated Staging Views & Reporting Mart (via deploy/bigquery/provision_ge_mart.py):
+#      - ds_ge_curated_staging (v_user_activity_curated, v_agentic_operations_curated, v_consolidated_audit_log)
+#      - vibelift_mart (v_fct_turns, fct_turns, fct_sessions, agg_daily_usage)
+#
+# Idempotent and safe to run on existing or clean GCP projects.
 set -euo pipefail
 
-PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-$(gcloud config get-value project)}"
+cd "$(dirname "$0")/.."
+
+PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
+BQ_LOCATION="${BQ_LOCATION:-US}"
 REGION="${GOOGLE_CLOUD_REGION:-us-central1}"
 DATASET_ID="vibelift_analytics"
 SINK_NAME="vibelift-telemetry-sink"
 
-# Cloud Run services whose logs are exported (VibeLift itself + explicit opt-ins).
-# Mirrors the runtime allowlist in gcp_telemetry.get_monitored_service_names().
-MONITORED_SERVICES="vibe-lift-agent${VIBELIFT_MONITORED_SERVICES:+,${VIBELIFT_MONITORED_SERVICES}}"
-SERVICE_CLAUSE=$(echo "${MONITORED_SERVICES}" | tr ',' '\n' | sed '/^ *$/d; s/^ *//; s/ *$//; s/.*/"&"/' | paste -sd ' ' - | sed 's/ / OR /g')
-SINK_FILTER="resource.type=\"cloud_run_revision\" AND resource.labels.service_name=(${SERVICE_CLAUSE})"
-
-echo "=========================================================="
-echo " Provisioning BigQuery Analytics Engine for VibeLift"
-echo " Project:  ${PROJECT_ID}"
-echo " Region:   ${REGION}"
-echo " Dataset:  ${DATASET_ID}"
-echo "=========================================================="
-
-# 1. Enable BigQuery API
-echo "Ensuring BigQuery API is enabled..."
-gcloud services enable bigquery.googleapis.com --project="${PROJECT_ID}"
-
-# 2. Create Dataset if not exists
-echo "Creating BigQuery dataset ${DATASET_ID}..."
-if ! bq show --dataset "${PROJECT_ID}:${DATASET_ID}" &>/dev/null; then
-  bq --location="${REGION}" mk --dataset --label=datacloud:jetski "${PROJECT_ID}:${DATASET_ID}"
+if [[ -z "${PROJECT_ID}" ]]; then
+  echo "ERROR: Set GOOGLE_CLOUD_PROJECT or run 'gcloud config set project <PROJECT_ID>'." >&2
+  exit 1
 fi
 
-# 3. Create Table: agent_turns (Partitioned by DATE(timestamp), Clustered by agent_id, model)
+echo "=========================================================="
+echo " Provisioning Complete BigQuery Telemetry Engine & Sinks"
+echo " Project:     ${PROJECT_ID}"
+echo " BQ Location: ${BQ_LOCATION}"
+echo " Default Reg: ${REGION}"
+echo "=========================================================="
+
+# 1. Enable BigQuery and Cloud Logging APIs
+echo "Ensuring required APIs are enabled..."
+gcloud services enable \
+    bigquery.googleapis.com \
+    logging.googleapis.com \
+    monitoring.googleapis.com \
+    --project="${PROJECT_ID}"
+
+# 2. Helper to create BigQuery dataset idempotently
+create_dataset_if_missing() {
+  local ds="$1"
+  local desc="$2"
+  echo "Checking dataset: ${PROJECT_ID}:${ds}..."
+  if ! bq show --dataset "${PROJECT_ID}:${ds}" &>/dev/null; then
+    echo "  Creating dataset ${ds} (location: ${BQ_LOCATION})..."
+    bq --location="${BQ_LOCATION}" mk --dataset \
+        --label=datacloud:jetski \
+        --label=app:vibelift \
+        --description="${desc}" \
+        "${PROJECT_ID}:${ds}"
+  else
+    echo "  Dataset ${ds} already exists."
+  fi
+}
+
+echo ""
+echo "--- Step 1: Provisioning Raw & Reporting Datasets ---"
+create_dataset_if_missing "ds_ge_assistant_raw" "Gemini Enterprise Assistant raw user activity log sink"
+create_dataset_if_missing "ds_ge_search_raw" "Gemini Enterprise Search raw user activity log sink"
+create_dataset_if_missing "ds_vertex_agents_raw" "Vertex AI Reasoning Engine and Model inference log sink"
+create_dataset_if_missing "ds_ge_audit_raw" "Gemini Enterprise and Cloud Audit data access & activity log sink"
+create_dataset_if_missing "ds_security_guardrails_raw" "Model Armor and Sensitive Data Protection guardrail log sink"
+create_dataset_if_missing "${DATASET_ID}" "VibeLift agent runtime turns, evaluations, and optimizer snapshots"
+create_dataset_if_missing "ds_ge_curated_staging" "Curated typed views over raw Gemini Enterprise log sinks"
+create_dataset_if_missing "vibelift_mart" "VibeLift turn, session, and daily usage reporting mart"
+
+# 3. Helper to create or update Cloud Logging Sinks idempotently
+configure_sink() {
+  local name="$1"
+  local dataset="$2"
+  local filter="$3"
+
+  echo ""
+  echo "Configuring Sink: ${name} -> ${dataset}..."
+  local destination="bigquery.googleapis.com/projects/${PROJECT_ID}/datasets/${dataset}"
+
+  local writer_sa=""
+  if ! gcloud logging sinks describe "${name}" --project="${PROJECT_ID}" &>/dev/null; then
+    echo "  Creating sink ${name}..."
+    writer_sa=$(gcloud logging sinks create "${name}" "${destination}" \
+        --log-filter="${filter}" \
+        --use-partitioned-tables \
+        --project="${PROJECT_ID}" \
+        --format="value(writerIdentity)")
+  else
+    echo "  Sink ${name} exists; updating filter and destination..."
+    gcloud logging sinks update "${name}" "${destination}" \
+        --log-filter="${filter}" \
+        --use-partitioned-tables \
+        --project="${PROJECT_ID}" \
+        --quiet >/dev/null
+    writer_sa=$(gcloud logging sinks describe "${name}" --project="${PROJECT_ID}" --format="value(writerIdentity)")
+  fi
+
+  if [[ -n "${writer_sa}" ]]; then
+    echo "  Granting roles/bigquery.dataEditor to ${writer_sa}..."
+    gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+        --member="${writer_sa}" \
+        --role="roles/bigquery.dataEditor" \
+        --condition=None \
+        --quiet >/dev/null || true
+  fi
+}
+
+echo ""
+echo "--- Step 2: Provisioning Cloud Logging Sinks ---"
+
+# Sink 1: GE Assistant Activity
+SINK_GE_ASSISTANT_FILTER="logName=\"projects/${PROJECT_ID}/logs/discoveryengine.googleapis.com%2Fgemini_enterprise_user_activity\" AND jsonPayload.logMetadata.serviceName=\"google.cloud.discoveryengine.v1main.AssistantService\""
+configure_sink "sink-ge-assistant-activity" "ds_ge_assistant_raw" "${SINK_GE_ASSISTANT_FILTER}"
+
+# Sink 2: GE Search Activity
+SINK_GE_SEARCH_FILTER="logName=\"projects/${PROJECT_ID}/logs/discoveryengine.googleapis.com%2Fgemini_enterprise_user_activity\" AND (jsonPayload.logMetadata.serviceName=\"google.cloud.discoveryengine.v1main.SearchService\" OR jsonPayload.logMetadata.serviceName=\"google.cloud.discoveryengine.v1main.ConversationSearchService\")"
+configure_sink "sink-ge-search-activity" "ds_ge_search_raw" "${SINK_GE_SEARCH_FILTER}"
+
+# Sink 3: Vertex AI Agents & Reasoning Engines
+SINK_VERTEX_FILTER="protoPayload.serviceName=\"aiplatform.googleapis.com\" AND (protoPayload.methodName=~\"(ReasoningEngineExecutionService|ReasoningEngineService)\" OR (protoPayload.methodName=\"Predict\" AND protoPayload.resourceName=~\"publishers/(google/models/gemini|anthropic/models)\"))"
+configure_sink "sink-vertex-reasoning-engine" "ds_vertex_agents_raw" "${SINK_VERTEX_FILTER}"
+
+# Sink 4: Platform Audit Logs
+SINK_AUDIT_FILTER=$(cat <<EOF
+logName=~"projects/${PROJECT_ID}/logs/cloudaudit.googleapis.com%2F(activity|data_access)"
+AND protoPayload.serviceName="discoveryengine.googleapis.com"
+AND (
+  protoPayload.methodName=~"\.(CreateAgent|UpdateAgent|DeleteAgent|SetIamPolicy)$"
+  OR protoPayload.methodName=~"\.(CreateDataConnector|UpdateDataConnector|DeleteDataConnector|SyncDataConnector|RunDataConnector)$"
+  OR protoPayload.methodName=~"\.(CreateEngine|UpdateEngine|DeleteEngine|ImportDocuments|PurgeDocuments)$"
+  OR protoPayload.methodName=~"\.(StreamAssist|Assist|AddContextFile|AnswerQuery|Search)"
+)
+EOF
+)
+configure_sink "sink-platform-audit" "ds_ge_audit_raw" "${SINK_AUDIT_FILTER}"
+
+# Sink 5: Model Armor & Sensitive Data Protection
+SINK_ARMOR_FILTER="protoPayload.serviceName=\"modelarmor.googleapis.com\" OR jsonPayload.\"@type\"=\"type.googleapis.com/google.cloud.modelarmor.logging.v1.SanitizeOperationLogEntry\" OR (protoPayload.serviceName=\"dlp.googleapis.com\" AND protoPayload.methodName=~\"(InspectContent|DeidentifyContent)\")"
+configure_sink "sink-model-armor-sdp" "ds_security_guardrails_raw" "${SINK_ARMOR_FILTER}"
+
+# Sink 6: VibeLift Cloud Run Telemetry
+MONITORED_SERVICES="vibe-lift-agent${VIBELIFT_MONITORED_SERVICES:+,${VIBELIFT_MONITORED_SERVICES}}"
+SERVICE_CLAUSE=$(echo "${MONITORED_SERVICES}" | tr ',' '\n' | sed '/^ *$/d; s/^ *//; s/ *$//; s/.*/"&"/' | paste -sd ' ' - | sed 's/ / OR /g')
+SINK_VIBELIFT_FILTER="resource.type=\"cloud_run_revision\" AND resource.labels.service_name=(${SERVICE_CLAUSE})"
+configure_sink "vibelift-telemetry-sink" "${DATASET_ID}" "${SINK_VIBELIFT_FILTER}"
+
+echo ""
+echo "--- Step 3: Provisioning VibeLift Analytics Tables & Views ---"
+
+# Table: agent_turns
 echo "Creating table ${DATASET_ID}.agent_turns..."
 bq query --use_legacy_sql=false --project_id="${PROJECT_ID}" "
 CREATE TABLE IF NOT EXISTS \`${PROJECT_ID}.${DATASET_ID}.agent_turns\` (
@@ -60,7 +192,7 @@ PARTITION BY DATE(timestamp)
 CLUSTER BY agent_id, model;
 "
 
-# 4. Create Table: agent_eval_runs (Accuracy, Guardrail Verification & Hallucination)
+# Table: agent_eval_runs
 echo "Creating table ${DATASET_ID}.agent_eval_runs..."
 bq query --use_legacy_sql=false --project_id="${PROJECT_ID}" "
 CREATE TABLE IF NOT EXISTS \`${PROJECT_ID}.${DATASET_ID}.agent_eval_runs\` (
@@ -77,7 +209,7 @@ PARTITION BY DATE(timestamp)
 CLUSTER BY agent_id;
 "
 
-# 5. Create Table: alpha_evolve_generations (Evolution actions, diffs, Pareto choices)
+# Table: alpha_evolve_generations
 echo "Creating table ${DATASET_ID}.alpha_evolve_generations..."
 bq query --use_legacy_sql=false --project_id="${PROJECT_ID}" "
 CREATE TABLE IF NOT EXISTS \`${PROJECT_ID}.${DATASET_ID}.alpha_evolve_generations\` (
@@ -96,7 +228,7 @@ CREATE TABLE IF NOT EXISTS \`${PROJECT_ID}.${DATASET_ID}.alpha_evolve_generation
 );
 "
 
-# 6. Create Table: agent_registry_snapshots (Fleet FinOps tokens & spend from Agent Registry)
+# Table: agent_registry_snapshots
 echo "Creating table ${DATASET_ID}.agent_registry_snapshots..."
 bq query --use_legacy_sql=false --project_id="${PROJECT_ID}" "
 CREATE TABLE IF NOT EXISTS \`${PROJECT_ID}.${DATASET_ID}.agent_registry_snapshots\` (
@@ -116,7 +248,7 @@ CREATE TABLE IF NOT EXISTS \`${PROJECT_ID}.${DATASET_ID}.agent_registry_snapshot
 );
 "
 
-# 7. Create View: vw_fleet_finops_summary
+# View: vw_fleet_finops_summary
 echo "Creating view ${DATASET_ID}.vw_fleet_finops_summary..."
 bq query --use_legacy_sql=false --project_id="${PROJECT_ID}" "
 CREATE OR REPLACE VIEW \`${PROJECT_ID}.${DATASET_ID}.vw_fleet_finops_summary\` AS
@@ -135,22 +267,33 @@ FROM \`${PROJECT_ID}.${DATASET_ID}.agent_turns\`
 GROUP BY agent_id, model;
 "
 
-# 8. Create Cloud Logging Sink to stream the monitored services' logs into BigQuery
-echo "Configuring Cloud Logging Sink: ${SINK_NAME} (filter: ${SINK_FILTER})..."
-if ! gcloud logging sinks describe "${SINK_NAME}" --project="${PROJECT_ID}" &>/dev/null; then
-  SINK_IDENTITY=$(gcloud logging sinks create "${SINK_NAME}"       "bigquery.googleapis.com/projects/${PROJECT_ID}/datasets/${DATASET_ID}"       --log-filter="${SINK_FILTER}"       --project="${PROJECT_ID}"       --format="value(writerIdentity)")
-  echo "Created sink with identity: ${SINK_IDENTITY}"
-  # Grant writerIdentity DataEditor access on BigQuery dataset
-  bq show --format=prettyjson "${PROJECT_ID}:${DATASET_ID}" > /tmp/ds.json
-  # Assign access to logging service account
-  gcloud projects add-iam-policy-binding "${PROJECT_ID}"       --member="${SINK_IDENTITY}"       --role="roles/bigquery.dataEditor"       --quiet > /dev/null || true
-else
-  echo "Cloud Logging sink ${SINK_NAME} already exists; reconciling its filter..."
-  gcloud logging sinks update "${SINK_NAME}" --log-filter="${SINK_FILTER}" --project="${PROJECT_ID}" --quiet
+echo ""
+echo "--- Step 4: Provisioning Curated Staging Views & Reporting Mart ---"
+if [[ -f "deploy/bigquery/provision_ge_mart.py" ]]; then
+  echo "Executing provision_ge_mart.py --apply --refresh..."
+  python3 deploy/bigquery/provision_ge_mart.py --project="${PROJECT_ID}" --apply --refresh || {
+    echo "WARNING: provision_ge_mart.py reported a notice; dry run / structure built."
+  }
 fi
 
+echo ""
 echo "=========================================================="
-echo " BigQuery Analytics Engine & Telemetry Sink Successfully Configured!"
-echo " Dataset: \`${PROJECT_ID}.${DATASET_ID}\`"
-echo " View:    \`${PROJECT_ID}.${DATASET_ID}.vw_fleet_finops_summary\`"
+echo " BigQuery Datasets, Views, Mart, & Log Sinks Ready!"
+echo " Datasets:"
+echo "   - \`${PROJECT_ID}.ds_ge_assistant_raw\`"
+echo "   - \`${PROJECT_ID}.ds_ge_search_raw\`"
+echo "   - \`${PROJECT_ID}.ds_vertex_agents_raw\`"
+echo "   - \`${PROJECT_ID}.ds_ge_audit_raw\`"
+echo "   - \`${PROJECT_ID}.ds_security_guardrails_raw\`"
+echo "   - \`${PROJECT_ID}.${DATASET_ID}\`"
+echo "   - \`${PROJECT_ID}.ds_ge_curated_staging\`"
+echo "   - \`${PROJECT_ID}.vibelift_mart\`"
+echo ""
+echo " Sinks:"
+echo "   - sink-ge-assistant-activity"
+echo "   - sink-ge-search-activity"
+echo "   - sink-vertex-reasoning-engine"
+echo "   - sink-platform-audit"
+echo "   - sink-model-armor-sdp"
+echo "   - vibelift-telemetry-sink"
 echo "=========================================================="

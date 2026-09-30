@@ -357,10 +357,11 @@ _TOOLS: list[dict[str, Any]] = [
         'description': (
             'CRITICAL: Always call this tool whenever the user asks to see, open, '
             'or inspect the VibeLift Analytics & FinOps Dashboard, or asks for the Gemini Enterprise '
-            'agent fleet, agent telemetry, prompt cache economics, user-centric FinOps, or AlphaEvolve '
-            'optimization in the interactive UI. Opens the interactive dashboard in the right side panel '
-            '(with a Fullscreen button): every agent deployed on the Gemini Enterprise app with live Cloud '
-            'Monitoring and Cloud Logging telemetry, plus the optimization studio and @vibelift_telemetry stream.'
+            'agent fleet, standalone/unregistered agents (Vertex AI Agent Engine, Cloud Run, GKE), '
+            'MCP servers, Skills/tools, agent telemetry, prompt cache economics, user-centric FinOps, '
+            'or AlphaEvolve optimization in the interactive UI. Opens the interactive dashboard in the '
+            'right side panel (with a Fullscreen button): every agent registered in Gemini Enterprise '
+            'PLUS standalone/unregistered Agent Engines, Cloud Run services, GKE workloads, Skills, and MCP servers.'
         ),
         'visibility': ['model', 'app'],
         'widget': True,
@@ -410,12 +411,12 @@ _TOOLS: list[dict[str, Any]] = [
     },
     {
         'name': 'query_ge_agent_fleet',
-        'title': 'Query Gemini Enterprise Agent Fleet',
+        'title': 'Query Gemini Enterprise & Project-Wide Agent Fleet',
         'description': (
-            'Lists every agent deployed on the Gemini Enterprise app (ADK agents on Vertex AI Agent Engine, '
-            'A2A agents, and Google-managed agents) with live telemetry aggregated from Cloud Monitoring and '
-            'Cloud Logging: requests, 4xx/5xx errors, p50/p95 latency, LLM calls, input/output tokens, '
-            'conversations, and last activity, plus project-wide Vertex AI model token usage and estimated cost.'
+            'Lists every agent deployed on the Gemini Enterprise app PLUS standalone/unregistered runtimes '
+            'across the GCP project (standalone Vertex AI Agent Engines, zombie/idle engines, Cloud Run agents, '
+            'MCP servers, Skill backends, GKE agent/inference workloads, and Cloud Trace Skills/MCP tool spans) '
+            'with live telemetry aggregated from Cloud Monitoring, Cloud Logging, and Cloud Trace.'
         ),
         'visibility': ['model', 'app'],
         'inputSchema': {

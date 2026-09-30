@@ -227,29 +227,62 @@ gcloud builds submit --config=deploy/cloudbuild.yaml .
 gcloud builds submit --config=deploy/cloudbuild.yaml --substitutions=_DEPLOY=false .
 ```
 
-### BigQuery Analytics Sink (`deploy/setup_bigquery_sink.sh`)
-To provision the partitioned BigQuery dataset (`vibelift_analytics`), reporting views (`vw_fleet_finops_summary`), and Cloud Logging sink (`vibelift-telemetry-sink`):
+### Option C: Complete BigQuery Analytics Engine, Curated Mart & Log Sinks (`deploy/setup_bigquery_sink.sh`)
+To stand up the complete, turnkey BigQuery telemetry and FinOps reporting data plane across any customer GCP project:
 ```bash
 ./deploy/setup_bigquery_sink.sh
 ```
+This automated, idempotent script provisions:
+1. **Raw Log Sink Datasets (`US` multi-region)**:
+   - `ds_ge_assistant_raw` — Gemini Enterprise Assistant user interactions and search turns.
+   - `ds_ge_search_raw` — Enterprise Search and conversational search sessions.
+   - `ds_vertex_agents_raw` — Vertex AI Reasoning Engines and model inference operation logs.
+   - `ds_ge_audit_raw` — Admin activity and data-access audit calls.
+   - `ds_security_guardrails_raw` — Model Armor sanitization operations and DLP guardrail events.
+   - `vibelift_analytics` — Agent turns, accuracy evaluations, optimizer snapshots, and registry states.
+2. **Cloud Logging Sinks (Partitioned Tables + IAM bindings)**:
+   - `sink-ge-assistant-activity` -> `ds_ge_assistant_raw`
+   - `sink-ge-search-activity` -> `ds_ge_search_raw`
+   - `sink-vertex-reasoning-engine` -> `ds_vertex_agents_raw`
+   - `sink-platform-audit` -> `ds_ge_audit_raw`
+   - `sink-model-armor-sdp` -> `ds_security_guardrails_raw`
+   - `vibelift-telemetry-sink` -> `vibelift_analytics`
+   Automatically binds `roles/bigquery.dataEditor` to each sink's `writerIdentity`.
+3. **Curated Views & Reporting Mart**:
+   - Executes `deploy/bigquery/provision_ge_mart.py --apply --refresh`.
+   - Creates `ds_ge_curated_staging` views (`v_user_activity_curated`, `v_agentic_operations_curated`, `v_consolidated_audit_log`).
+   - Builds `vibelift_mart` tables and views (`v_fct_turns`, `fct_turns` materialized table, `fct_sessions`, `agg_daily_usage`).
+   - Creates `vibelift_analytics.vw_fleet_finops_summary`.
 
 ---
 
-## Gemini Enterprise BYO MCP Integration
+## Gemini Enterprise Registration & BYO MCP Integration
 
-VibeLift registers in Gemini Enterprise as a **Custom MCP Data Connector** (`vibelift-analytics-mcp`) and attaches its federated `mcp_data` data store (`vibelift-analytics-mcp_mcp_data`) to any Global (`locations/global`) or Regional (`locations/us`, `locations/eu`) Gemini Enterprise engine.
+### 1. Automated Registration Script (`deploy/register_ge_agent.sh`)
+Once the Cloud Run service is deployed, register both the A2A Agent and the interactive MCP connector into Gemini Enterprise:
+```bash
+./deploy/register_ge_agent.sh [ENGINE_ID]
+```
+The script:
+- Verifies Cloud Run health and HTTPS reachability.
+- Grants `roles/run.invoker` to the Discovery Engine service agent (`service-${PROJECT_NUMBER}@gcp-sa-discoveryengine.iam.gserviceaccount.com`).
+- Publishes the A2A Agent to the specified Gemini Enterprise engine (`projects/.../engines/{ENGINE_ID}`).
+- Outputs the exact parameters to attach VibeLift as an interactive BYO MCP Tool Connector in Google Cloud Console.
 
-### Connection Details
+### 2. Manual / Console Setup Details
 - **MCP Endpoint URL**: `https://vibe-lift-agent-<PROJECT_NUMBER>.<REGION>.run.app/mcp`
 - **Connector Type**: `custom_mcp` (`THIRD_PARTY_FEDERATED`, modes `["ACTIONS", "FEDERATED"]`)
 - **UI Resource URI**: `ui://vibelift-analytics/dashboard` (`text/html;profile=mcp-app`)
 - **Exposed MCP Tools**:
-  - `open_dashboard`: Renders the 4-Tab interactive VibeLift dashboard in the Gemini Enterprise Right Side Panel (with one-click Fullscreen expansion).
+  - `open_dashboard`: Renders the 4-Tab interactive VibeLift dashboard in the Gemini Enterprise Right Side Panel (with one-click Fullscreen expansion and PDF Export).
   - `query_ge_agent_fleet`: Returns live inventory and telemetry across all agents deployed on Gemini Enterprise.
   - `query_project_telemetry`: Returns live Cloud Run service metrics and BigQuery triage log summaries.
   - `calculate_prompt_cache_economics`: Evaluates prompt prefix cache hit rates and dollar savings.
   - `run_alpha_evolve_generation`: Executes a closed-loop optimization generation on the selected platform (`alpha_evolve`, `opus_critic`, `vertex_vizier`, `hybrid_ensemble`).
   - `get_vibelift_state`: Returns the complete active agent state, parameters, and turn trajectory.
+
+### 3. Executive PDF Export
+Operators can filter by Gemini Enterprise app, standalone runtimes, and time window (1 hour to 1 year), then click the **Export PDF** button in the dashboard action bar to generate a clean, print-optimized multi-page executive PDF report. Output is styled via dedicated `@media print` CSS rules that suppress interactive controls while preserving KPI cards, charts, and agent tables.
 
 ---
 

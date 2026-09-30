@@ -48,12 +48,19 @@ _MONITORING = 'https://monitoring.googleapis.com/v3'
 _TRACE = 'https://cloudtrace.googleapis.com/v1'
 _LOGGING = 'https://logging.googleapis.com/v2'
 _AIPLATFORM = 'https://{location}-aiplatform.googleapis.com/v1'
+_GKE = 'https://container.googleapis.com/v1'
 _HTTP_TIMEOUT_S = 25.0
 _MAX_PAGES = 10
 
 DEFAULT_ENGINE_IDS = ('agent-platform-demo', 'us/gemini-enterprise-17649552_1764955289529')
 # 'auto' discovers every Gemini Enterprise app in these locations.
 DEFAULT_DISCOVERY_LOCATIONS = ('global', 'us', 'eu')
+# Locations scanned for standalone/unregistered Vertex AI Reasoning Engines.
+DEFAULT_RE_LOCATIONS = ('us-central1', 'us-west1', 'us-east4', 'europe-west1')
+SYSTEM_K8S_NAMESPACES = frozenset({
+    'kube-system', 'gmp-system', 'gke-managed-cim', 'gke-managed-system',
+    'gke-managed-volumepopulator', 'istio-system', 'config-management-system', 'asm-system',
+})
 ALLOWED_WINDOWS_HOURS = (1, 6, 24, 168, 720, 2160, 4320, 8760)
 
 AGENT_TYPE_LABELS = {
@@ -63,6 +70,11 @@ AGENT_TYPE_LABELS = {
     'LOW_CODE': 'No-code agent (Agent Designer)',
     'DIALOGFLOW': 'Dialogflow agent',
     'UNKNOWN': 'Agent',
+    'ADK_STANDALONE': 'Standalone Vertex AI Agent Engine (Not in GE)',
+    'MCP_SERVER': 'Cloud Run MCP Server (Not in GE)',
+    'CLOUD_RUN_AGENT': 'Standalone Cloud Run Agent / App (Not in GE)',
+    'SKILL_BACKEND': 'Cloud Run Skill / Tool Backend (Not in GE)',
+    'GKE_WORKLOAD': 'GKE Agent / Inference Workload (Not in GE)',
 }
 
 _REASONING_ENGINE_RE = re.compile(
@@ -288,6 +300,224 @@ def aggregate_trace_usage(traces: list[dict[str, Any]], engine_ids: list[str]) -
     st['conversations'] = len(st.pop('_conversations'))
     st['models'] = [m for m, _ in st.pop('_models').most_common(3)]
   return stats
+
+
+def aggregate_trace_usage_all(traces: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+  """Sums gen_ai token usage across ALL Agent Engines found in Cloud Trace spans (including unregistered)."""
+  engine_ids: set[str] = set()
+  agent_names_by_engine: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
+  for trace in traces:
+    spans = trace.get('spans') or []
+    trace_engine = next((e for e in (_span_engine_id(sp.get('labels') or {}) for sp in spans) if e), None)
+    for sp in spans:
+      labels = sp.get('labels') or {}
+      eid = _span_engine_id(labels) or trace_engine
+      if eid:
+        engine_ids.add(eid)
+        name = str(sp.get('name') or '').strip()
+        if name.startswith('invoke_agent '):
+          aname = str(labels.get('gen_ai.agent.name') or name[len('invoke_agent '):]).strip()
+          if aname:
+            agent_names_by_engine[eid][aname] += 1
+  stats = aggregate_trace_usage(traces, sorted(engine_ids))
+  for eid, st in stats.items():
+    st['agent_names'] = [n for n, _ in agent_names_by_engine[eid].most_common(3)]
+  return stats
+
+
+def _span_duration_ms(span: dict[str, Any]) -> float | None:
+  start_s = span.get('startTime')
+  end_s = span.get('endTime')
+  if not start_s or not end_s:
+    return None
+  try:
+    t0 = datetime.datetime.fromisoformat(str(start_s).replace('Z', '+00:00'))
+    t1 = datetime.datetime.fromisoformat(str(end_s).replace('Z', '+00:00'))
+    return max(0.0, (t1 - t0).total_seconds() * 1000.0)
+  except ValueError:
+    return None
+
+
+def aggregate_trace_skills_and_mcp(
+    traces: list[dict[str, Any]],
+    registered_engine_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+  """Extracts Skills (execute_tool), Sub-Agents (invoke_agent), and MCP tool spans from Cloud Trace."""
+  reg_ids = registered_engine_ids or set()
+  buckets: dict[tuple[str, str], dict[str, Any]] = {}
+  for trace in traces:
+    spans = trace.get('spans') or []
+    trace_engine = next((e for e in (_span_engine_id(sp.get('labels') or sp.get('attributes') or {}) for sp in spans) if e), None)
+    # Sum trace-level token usage so we can attribute token amplification to tools/skills used in the trace.
+    usage_spans = [
+        sp for sp in spans
+        if any(k in (sp.get('labels') or sp.get('attributes') or {}) for k in ('gen_ai.usage.input_tokens', 'gen_ai.usage.output_tokens'))
+    ]
+    wrappers = {sp.get('parentSpanId') for sp in usage_spans if sp.get('parentSpanId')}
+    trace_in = 0
+    trace_out = 0
+    trace_models: set[str] = set()
+    for usp in usage_spans:
+      if usp.get('spanId') in wrappers:
+        continue
+      ulabels = usp.get('labels') or usp.get('attributes') or {}
+      trace_in += _to_int(ulabels.get('gen_ai.usage.input_tokens'))
+      trace_out += _to_int(ulabels.get('gen_ai.usage.output_tokens'))
+      m = ulabels.get('gen_ai.response.model') or ulabels.get('gen_ai.request.model')
+      if m:
+        trace_models.add(str(m))
+
+    seen_in_trace: set[tuple[str, str]] = set()
+    for sp in spans:
+      name = str(sp.get('name') or '').strip()
+      labels = sp.get('labels') or sp.get('attributes') or {}
+      engine = _span_engine_id(labels) or trace_engine
+      tool_name = str(labels.get('gen_ai.tool.name') or '').strip()
+      op_name = str(labels.get('gen_ai.operation.name') or '').strip()
+      kind: str | None = None
+      item_name: str | None = None
+      if name.startswith('execute_tool ') or op_name == 'execute_tool' or tool_name:
+        item_name = tool_name or (name[len('execute_tool '):].strip() if name.startswith('execute_tool ') else name)
+        if item_name in ('transfer_to_agent', 'call_remote_agent'):
+          kind = 'AGENT_HANDOFF_SKILL'
+        elif 'mcp' in item_name.lower():
+          kind = 'MCP_TOOL'
+        else:
+          kind = 'SKILL_TOOL'
+      elif name.startswith('invoke_agent ') or op_name == 'invoke_agent':
+        item_name = (
+            str(labels.get('gen_ai.agent.name') or '').strip()
+            or (name[len('invoke_agent '):].strip() if name.startswith('invoke_agent ') else name)
+        )
+        kind = 'SUB_AGENT'
+      elif '/mcp' in name.lower() or '/mcp' in str(labels.get('http.route') or labels.get('http.url') or '').lower():
+        item_name = name or 'mcp_endpoint'
+        kind = 'MCP_TOOL'
+
+      if not kind or not item_name:
+        continue
+      key = (kind, item_name)
+      entry = buckets.setdefault(key, {
+          'name': item_name,
+          'kind': kind,
+          'calls': 0,
+          'traces_count': 0,
+          'co_occurring_input_tokens': 0,
+          'co_occurring_output_tokens': 0,
+          'last_activity': None,
+          '_latencies': [],
+          '_engines': collections.Counter(),
+          '_models': collections.Counter(),
+      })
+      entry['calls'] += 1
+      dur = _span_duration_ms(sp)
+      if dur is not None:
+        entry['_latencies'].append(dur)
+      if engine:
+        entry['_engines'][engine] += 1
+      for tm in trace_models:
+        entry['_models'][tm] += 1
+      stamp = sp.get('endTime')
+      if stamp and (entry['last_activity'] is None or stamp > entry['last_activity']):
+        entry['last_activity'] = stamp
+      if key not in seen_in_trace:
+        seen_in_trace.add(key)
+        entry['traces_count'] += 1
+        entry['co_occurring_input_tokens'] += trace_in
+        entry['co_occurring_output_tokens'] += trace_out
+
+  out: list[dict[str, Any]] = []
+  for entry in buckets.values():
+    lats = entry.pop('_latencies')
+    eng_counter = entry.pop('_engines')
+    mod_counter = entry.pop('_models')
+    engines_list = [e for e, _ in eng_counter.most_common(5)]
+    entry['avg_latency_ms'] = round(sum(lats) / len(lats), 1) if lats else None
+    entry['engines'] = engines_list
+    entry['models'] = [m for m, _ in mod_counter.most_common(3)]
+    if engines_list:
+      in_ge = sum(1 for e in engines_list if e in reg_ids)
+      if in_ge == len(engines_list):
+        entry['registration_scope'] = 'GE_REGISTERED'
+      elif in_ge == 0:
+        entry['registration_scope'] = 'UNREGISTERED_STANDALONE'
+      else:
+        entry['registration_scope'] = 'SHARED_GE_AND_STANDALONE'
+    else:
+      entry['registration_scope'] = 'PROJECT_WIDE'
+    out.append(entry)
+  out.sort(key=lambda r: (-r['calls'], r['name']))
+  return out
+
+
+def classify_cloud_run_service(raw_svc: dict[str, Any], default_project: str) -> dict[str, Any]:
+  """Normalizes a Cloud Run v2 Service resource for FinOps inventory."""
+  full_name = str(raw_svc.get('name') or (raw_svc.get('metadata') or {}).get('name') or '')
+  parts = full_name.split('/')
+  service_name = parts[-1] if parts else ''
+  project = parts[1] if len(parts) >= 2 and parts[0] == 'projects' else default_project
+  region = parts[3] if len(parts) >= 4 and parts[2] == 'locations' else 'us-central1'
+  template = raw_svc.get('template') or (raw_svc.get('spec') or {}).get('template') or {}
+  scaling = template.get('scaling') or {}
+  min_inst = _to_int(scaling.get('minInstanceCount'))
+  max_inst = _to_int(scaling.get('maxInstanceCount')) if scaling.get('maxInstanceCount') is not None else None
+  containers = template.get('containers') or (template.get('spec') or {}).get('containers') or [{}]
+  limits = ((containers[0] if containers else {}).get('resources') or {}).get('limits') or {}
+  lower_name = service_name.lower()
+  if 'mcp' in lower_name:
+    category = 'MCP_SERVER'
+  elif any(tok in lower_name for tok in (
+      'agent', 'assistant', 'copilot', 'bot', 'orchestrator', 'proxy', 'ui-engine', 'ui-starter', 'ops-backend'
+  )):
+    category = 'CLOUD_RUN_AGENT'
+  elif any(tok in lower_name for tok in ('skill', 'tool', 'function', 'plugin', 'action')):
+    category = 'SKILL_BACKEND'
+  else:
+    category = 'CLOUD_RUN_SERVICE'
+  return {
+      'service_name': service_name,
+      'resource_name': full_name,
+      'project': project,
+      'region': region,
+      'uri': raw_svc.get('uri'),
+      'ingress': raw_svc.get('ingress'),
+      'created': raw_svc.get('createTime'),
+      'updated': raw_svc.get('updateTime'),
+      'min_instances': min_inst,
+      'max_instances': max_inst,
+      'cpu': limits.get('cpu'),
+      'memory': limits.get('memory'),
+      'type': category,
+      'category': category,
+      'category_label': AGENT_TYPE_LABELS.get(category, 'Cloud Run Service'),
+  }
+
+
+def _estimate_token_cost_usd(
+    input_tokens: int | None,
+    output_tokens: int | None,
+    cached_tokens: int | None,
+    models: list[str] | None,
+    rate_cards: dict[str, dict[str, float]],
+) -> float | None:
+  in_tok = int(input_tokens or 0)
+  out_tok = int(output_tokens or 0)
+  cache_tok = int(cached_tokens or 0)
+  if not (in_tok or out_tok or cache_tok):
+    return 0.0
+  card = None
+  for m in models or []:
+    if m in rate_cards:
+      card = rate_cards[m]
+      break
+  if card is None:
+    card = rate_cards.get('gemini-2.5-flash') or {'input': 0.30, 'output': 2.50, 'cached_read': 0.075}
+  return round(
+      in_tok / 1e6 * card.get('input', 0.30)
+      + out_tok / 1e6 * card.get('output', 2.50)
+      + cache_tok / 1e6 * card.get('cached_read', 0.075),
+      4,
+  )
 
 
 _GE_RESOURCE_RE = re.compile(r'locations/([^/]+)/collections/[^/]+/engines/([^/]+)(?:/assistants/[^/]+/agents/([^/]+))?')
@@ -597,12 +827,21 @@ class GeminiEnterpriseFleetService:
       location: str | None = None,
       collection: str | None = None,
       api: Any | None = None,
+      discover_unregistered: bool | None = None,
   ):
     self.project_id = project_id or gcp_telemetry.get_current_gcp_project()
     self.engine_ids = engine_ids or _env_list('VIBELIFT_GE_ENGINES', ('auto',))
     self.discovery_locations = _env_list('VIBELIFT_GE_LOCATIONS', DEFAULT_DISCOVERY_LOCATIONS)
+    self.reasoning_engine_locations = _env_list('VIBELIFT_RE_LOCATIONS', DEFAULT_RE_LOCATIONS)
     self.location = location or os.environ.get('VIBELIFT_GE_LOCATION', 'global')
     self.collection = collection or os.environ.get('VIBELIFT_GE_COLLECTION', 'default_collection')
+    if discover_unregistered is None:
+      default_unreg = self.project_id not in ('test-project', gcp_telemetry.UNCONFIGURED_PROJECT_ID)
+      self.discover_unregistered = parse_bool(
+          os.environ.get('VIBELIFT_DISCOVER_UNREGISTERED', 'true' if default_unreg else 'false')
+      )
+    else:
+      self.discover_unregistered = bool(discover_unregistered)
     self.ttl_seconds = float(os.environ.get('VIBELIFT_FLEET_TTL_SECONDS', '60'))
     # Forced refreshes inside this interval are served from cache (protects API quotas).
     self.min_refresh_interval_s = float(os.environ.get('VIBELIFT_FLEET_MIN_REFRESH_SECONDS', '10'))
@@ -727,6 +966,35 @@ class GeminiEnterpriseFleetService:
         'cache_age_seconds': 0.0,
         'agents': [],
         'totals': {'agents': 0, 'enabled': 0, 'by_type': {}, 'with_runtime_telemetry': 0},
+        'unregistered_runtimes': [],
+        'gke_workloads': {'clusters': [], 'workloads': []},
+        'skills_and_mcp': [],
+        'unregistered_summary': {
+            'total_unregistered_runtimes': 0,
+            'unregistered_reasoning_engines': 0,
+            'active_unregistered_reasoning_engines': 0,
+            'zombie_reasoning_engines': 0,
+            'unregistered_cloud_run_services': 0,
+            'mcp_cloud_run_services': 0,
+            'always_on_cloud_run_services': 0,
+            'gke_clusters_count': 0,
+            'gke_workloads_count': 0,
+            'discovered_skills_and_mcp_count': 0,
+            'unregistered_requests': 0,
+            'unregistered_llm_calls': 0,
+            'unregistered_input_tokens': 0,
+            'unregistered_output_tokens': 0,
+            'unregistered_cached_tokens': 0,
+            'unregistered_est_token_cost_usd': 0.0,
+            'zombie_vcpu_hours': 0.0,
+            'zombie_memory_gib_hours': 0.0,
+            'unregistered_vcpu_hours': 0.0,
+            'unregistered_memory_gib_hours': 0.0,
+            'unregistered_billable_instance_hours': 0.0,
+            'gke_cpu_core_hours': 0.0,
+            'gke_memory_gib': 0.0,
+            'discovery_status': 'warming',
+        },
         'model_usage': None,
         'ge_traffic': None,
         'token_log_scan': {'entries_scanned': 0, 'truncated': False},
@@ -846,7 +1114,11 @@ class GeminiEnterpriseFleetService:
           nums.append(float(number))
       if not nums:
         continue
-      agg_val = sum(nums) if aligner == 'ALIGN_SUM' else (sum(nums) / len(nums))
+      agg_val = (
+          sum(nums)
+          if (aligner == 'ALIGN_SUM' or (aligner == 'ALIGN_DELTA' and reducer == 'REDUCE_SUM'))
+          else (sum(nums) / len(nums))
+      )
       labels = dict(series.get('resource', {}).get('labels', {}))
       labels.update(series.get('metric', {}).get('labels', {}))
       rows.append((labels, float(agg_val)))
@@ -1012,7 +1284,13 @@ class GeminiEnterpriseFleetService:
   def _trace_usage(self, project: str, engine_ids: list[str], window_s: int) -> dict[str, Any]:
     """Per-engine gen_ai token usage from Cloud Trace spans exported by Agent Engine telemetry."""
     traces, truncated = self._list_traces(project, '+cloud.platform:gcp.agent_engine', window_s)
-    return {'by_engine': aggregate_trace_usage(traces, engine_ids), 'traces_scanned': len(traces), 'truncated': truncated}
+    return {
+        'by_engine': aggregate_trace_usage(traces, engine_ids),
+        'all_engines': aggregate_trace_usage_all(traces),
+        'skills_and_mcp': aggregate_trace_skills_and_mcp(traces, set(engine_ids)),
+        'traces_scanned': len(traces),
+        'truncated': truncated,
+    }
 
   def _ge_assistant_usage(self, window_s: int) -> dict[str, Any]:
     """Gemini Enterprise assistant token usage per app, from Cloud Trace (gcp.gemini_enterprise spans)."""
@@ -1058,9 +1336,9 @@ class GeminiEnterpriseFleetService:
     spec = data.get('spec') or {}
     return {'exists': True, 'display_name': data.get('displayName'), 'framework': spec.get('agentFramework')}
 
-  def _cloud_run_services(self, project: str) -> set[str]:
-    """Names of every Cloud Run service in the project (all regions). Raises if the list is incomplete."""
-    names: set[str] = set()
+  def _cloud_run_services_catalog(self, project: str) -> dict[str, dict[str, Any]]:
+    """Catalog of every Cloud Run service in the project (all regions). Raises if the list is incomplete."""
+    catalog: dict[str, dict[str, Any]] = {}
     token = ''
     for _ in range(_MAX_PAGES):
       url = f'https://run.googleapis.com/v2/projects/{project}/locations/-/services?pageSize=500'
@@ -1068,11 +1346,153 @@ class GeminiEnterpriseFleetService:
         url += f'&pageToken={urllib.parse.quote(token)}'
       page = self._api.call('GET', url)
       for svc in page.get('services', []):
-        names.add(str(svc.get('name', '')).rsplit('/', 1)[-1])
+        info = classify_cloud_run_service(svc, project)
+        if info['service_name']:
+          catalog[info['service_name']] = info
       token = page.get('nextPageToken', '')
       if not token:
-        return names
+        return catalog
     raise FleetSourceError(0, 'Cloud Run service list exceeded the page limit; existence not verified.')
+
+  def _cloud_run_services(self, project: str) -> set[str]:
+    """Names of every Cloud Run service in the project (all regions). Raises if the list is incomplete."""
+    return set(self._cloud_run_services_catalog(project).keys())
+
+  def _discover_reasoning_engines(self, project: str) -> list[dict[str, Any]]:
+    """Lists every Vertex AI Agent Engine (ReasoningEngine) across configured regional endpoints."""
+    discovered: list[dict[str, Any]] = []
+    for loc in self.reasoning_engine_locations:
+      url = f'{_AIPLATFORM.format(location=loc)}/projects/{project}/locations/{loc}/reasoningEngines?pageSize=100'
+      try:
+        items = self._paged(url, 'reasoningEngines')
+      except FleetSourceError:
+        continue
+      for raw in items:
+        resource = str(raw.get('name') or '')
+        match = _REASONING_ENGINE_RE.match(resource)
+        rid = match['id'] if match else resource.rsplit('/', 1)[-1]
+        if not rid:
+          continue
+        spec = raw.get('spec') or {}
+        discovered.append({
+            'reasoning_engine_id': rid,
+            'resource': resource or f'projects/{project}/locations/{loc}/reasoningEngines/{rid}',
+            'project': match['project'] if match else project,
+            'location': match['location'] if match else loc,
+            'display_name': raw.get('displayName') or f'ReasoningEngine {rid}',
+            'description': str(raw.get('description') or '')[:280],
+            'framework': spec.get('agentFramework') or 'google-adk',
+            'created': raw.get('createTime'),
+            'updated': raw.get('updateTime'),
+        })
+    return discovered
+
+  def _discover_gke_workloads(self, project: str, window_s: int) -> dict[str, Any]:
+    """Discovers GKE clusters and non-system agent/inference container workloads via GKE & Cloud Monitoring APIs."""
+    clusters_resp = self._api.call('GET', f'{_GKE}/projects/{project}/locations/-/clusters')
+    clusters: list[dict[str, Any]] = []
+    cluster_by_name: dict[str, dict[str, Any]] = {}
+    for c in clusters_resp.get('clusters') or []:
+      cname = str(c.get('name') or '')
+      if not cname:
+        continue
+      autopilot = bool((c.get('autopilot') or {}).get('enabled'))
+      c_obj = {
+          'name': cname,
+          'location': c.get('location') or 'us-central1',
+          'status': c.get('status') or 'RUNNING',
+          'autopilot': autopilot,
+          'mode': 'Autopilot' if autopilot else 'Standard',
+          'node_count': _to_int(c.get('currentNodeCount')),
+          'version': c.get('currentMasterVersion'),
+          'endpoint': c.get('endpoint'),
+          'created': c.get('createTime'),
+          'user_cpu_core_hours': 0.0,
+          'system_cpu_core_hours': 0.0,
+          'user_memory_gib': 0.0,
+      }
+      clusters.append(c_obj)
+      cluster_by_name[cname] = c_obj
+
+    workloads_map: dict[tuple[str, str, str], dict[str, Any]] = {}
+    try:
+      cpu_rows = self._timeseries(
+          project,
+          'metric.type="kubernetes.io/container/cpu/core_usage_time"',
+          window_s,
+          ['resource.label.cluster_name', 'resource.label.namespace_name', 'resource.label.container_name'],
+          aligner='ALIGN_DELTA',
+          reducer='REDUCE_SUM',
+      )
+    except FleetSourceError:
+      cpu_rows = []
+    try:
+      mem_rows = self._timeseries(
+          project,
+          'metric.type="kubernetes.io/container/memory/used_bytes"',
+          window_s,
+          ['resource.label.cluster_name', 'resource.label.namespace_name', 'resource.label.container_name'],
+          aligner='ALIGN_MEAN',
+          reducer='REDUCE_SUM',
+      )
+    except FleetSourceError:
+      mem_rows = []
+
+    for labels, core_seconds in cpu_rows:
+      cname = str(labels.get('cluster_name') or '')
+      ns = str(labels.get('namespace_name') or 'default')
+      cont = str(labels.get('container_name') or 'container')
+      core_hours = round(float(core_seconds) / 3600.0, 4)
+      if ns in SYSTEM_K8S_NAMESPACES:
+        if cname in cluster_by_name:
+          cluster_by_name[cname]['system_cpu_core_hours'] = round(
+              cluster_by_name[cname]['system_cpu_core_hours'] + core_hours, 4
+          )
+        continue
+      if cname in cluster_by_name:
+        cluster_by_name[cname]['user_cpu_core_hours'] = round(
+            cluster_by_name[cname]['user_cpu_core_hours'] + core_hours, 4
+        )
+      w = workloads_map.setdefault((cname, ns, cont), {
+          'cluster_name': cname,
+          'location': (cluster_by_name.get(cname) or {}).get('location') or 'us-central1',
+          'cluster_mode': (cluster_by_name.get(cname) or {}).get('mode') or 'Standard',
+          'node_count': (cluster_by_name.get(cname) or {}).get('node_count') or 0,
+          'namespace': ns,
+          'container_name': cont,
+          'cpu_core_hours': 0.0,
+          'memory_gib': 0.0,
+      })
+      w['cpu_core_hours'] = round(w['cpu_core_hours'] + core_hours, 4)
+
+    for labels, mem_bytes in mem_rows:
+      cname = str(labels.get('cluster_name') or '')
+      ns = str(labels.get('namespace_name') or 'default')
+      cont = str(labels.get('container_name') or 'container')
+      if ns in SYSTEM_K8S_NAMESPACES:
+        continue
+      gib = round(float(mem_bytes) / (1024.0 ** 3), 4)
+      if cname in cluster_by_name:
+        cluster_by_name[cname]['user_memory_gib'] = round(
+            cluster_by_name[cname]['user_memory_gib'] + gib, 4
+        )
+      w = workloads_map.setdefault((cname, ns, cont), {
+          'cluster_name': cname,
+          'location': (cluster_by_name.get(cname) or {}).get('location') or 'us-central1',
+          'cluster_mode': (cluster_by_name.get(cname) or {}).get('mode') or 'Standard',
+          'node_count': (cluster_by_name.get(cname) or {}).get('node_count') or 0,
+          'namespace': ns,
+          'container_name': cont,
+          'cpu_core_hours': 0.0,
+          'memory_gib': 0.0,
+      })
+      w['memory_gib'] = round(w['memory_gib'] + gib, 4)
+
+    workloads = sorted(
+        workloads_map.values(),
+        key=lambda r: (-(r['cpu_core_hours'] + r['memory_gib']), r['cluster_name'], r['container_name']),
+    )
+    return {'clusters': clusters, 'workloads': workloads}
 
   def _rate_cards(self) -> dict[str, dict[str, float]]:
     cards = {
@@ -1216,7 +1636,8 @@ class GeminiEnterpriseFleetService:
     re_metric = 'aiplatform.googleapis.com/reasoning_engine'
     bucket_s = trend_bucket_seconds(hours)
     jobs: dict[tuple[str, ...], Any] = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+    unreg_jobs: dict[tuple[str, ...], Any] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=14) as pool:
       for project, ids in engines_by_project.items():
         id_list = sorted(ids)
         jobs[('re_requests', project)] = pool.submit(self._requests_by, project, f'{re_metric}/request_count', 'reasoning_engine_id', id_list, window_s)
@@ -1243,6 +1664,54 @@ class GeminiEnterpriseFleetService:
       jobs[('ge_traffic',)] = pool.submit(self._ge_traffic, window_s)
       jobs[('ge_assistant_tokens',)] = pool.submit(self._ge_assistant_usage, window_s)
 
+      if self.discover_unregistered:
+        unreg_jobs[('discover_re', self.project_id)] = pool.submit(self._discover_reasoning_engines, self.project_id)
+        unreg_jobs[('run_catalog', self.project_id)] = pool.submit(self._cloud_run_services_catalog, self.project_id)
+        unreg_jobs[('discover_gke', self.project_id)] = pool.submit(self._discover_gke_workloads, self.project_id, window_s)
+        if ('re_trace_tokens', self.project_id) not in jobs:
+          unreg_jobs[('unreg_trace_tokens', self.project_id)] = pool.submit(
+              self._trace_usage, self.project_id, [], window_s
+          )
+        try:
+          disc_re = unreg_jobs[('discover_re', self.project_id)].result() or []
+        except Exception:
+          disc_re = []
+        reg_re_ids = engines_by_project.get(self.project_id, set())
+        unreg_re_ids = sorted({r['reasoning_engine_id'] for r in disc_re if r.get('reasoning_engine_id')} - reg_re_ids)
+        if unreg_re_ids:
+          unreg_jobs[('unreg_re_requests', self.project_id)] = pool.submit(
+              self._requests_by, self.project_id, f'{re_metric}/request_count', 'reasoning_engine_id', unreg_re_ids, window_s
+          )
+          unreg_jobs[('unreg_re_latency', self.project_id)] = pool.submit(
+              self._latency_by, self.project_id, f'{re_metric}/request_latencies', 'reasoning_engine_id', unreg_re_ids, window_s
+          )
+          unreg_jobs[('unreg_re_cpu', self.project_id)] = pool.submit(
+              self._sum_by, self.project_id, f'{re_metric}/cpu/allocation_time', 'reasoning_engine_id', unreg_re_ids, window_s
+          )
+          unreg_jobs[('unreg_re_mem', self.project_id)] = pool.submit(
+              self._sum_by, self.project_id, f'{re_metric}/memory/allocation_time', 'reasoning_engine_id', unreg_re_ids, window_s
+          )
+          unreg_jobs[('unreg_re_tokens', self.project_id)] = pool.submit(
+              self._genai_usage, self.project_id, unreg_re_ids, window_s
+          )
+
+        try:
+          run_cat = unreg_jobs[('run_catalog', self.project_id)].result() or {}
+        except Exception:
+          run_cat = {}
+        reg_run_svcs = services_by_project.get(self.project_id, set())
+        unreg_run_svcs = sorted(set(run_cat.keys()) - reg_run_svcs)
+        if unreg_run_svcs:
+          unreg_jobs[('unreg_run_requests', self.project_id)] = pool.submit(
+              self._requests_by, self.project_id, 'run.googleapis.com/request_count', 'service_name', unreg_run_svcs, window_s
+          )
+          unreg_jobs[('unreg_run_latency', self.project_id)] = pool.submit(
+              self._latency_by, self.project_id, 'run.googleapis.com/request_latencies', 'service_name', unreg_run_svcs, window_s
+          )
+          unreg_jobs[('unreg_run_billable', self.project_id)] = pool.submit(
+              self._sum_by, self.project_id, 'run.googleapis.com/container/billable_instance_time', 'service_name', unreg_run_svcs, window_s
+          )
+
       results: dict[tuple[str, ...], Any] = {}
       source_names = {
           're_requests': 'Agent Engine request metrics', 're_latency': 'Agent Engine latency metrics',
@@ -1264,6 +1733,13 @@ class GeminiEnterpriseFleetService:
           if key[0] not in ('re_meta', 'run_inventory'):  # Shown per agent as UNVERIFIED instead.
             errors.append({'source': source_names.get(key[0], key[0]), 'detail': str(exc)[:300]})
 
+      unreg_results: dict[tuple[str, ...], Any] = {}
+      for key, future in unreg_jobs.items():
+        try:
+          unreg_results[key] = future.result()
+        except Exception:
+          unreg_results[key] = None
+
     def source_state(prefix: str) -> str:
       keys = [k for k in results if k[0] == prefix]
       if not keys:
@@ -1280,6 +1756,8 @@ class GeminiEnterpriseFleetService:
     for agent in agents:
       self._apply_telemetry(agent, results)
       agent['registration'] = assess_registration(agent, results, checked_at, self.project_id)
+
+    unreg_bundle = self._build_unregistered_inventory(agents, results, unreg_results, checked_at)
 
     telemetry_agents = [a for a in agents if a['metrics']['requests'] is not None]
     # The same runtime (Cloud Run service / Agent Engine) can be registered as an
@@ -1326,6 +1804,10 @@ class GeminiEnterpriseFleetService:
         'cache_ttl_seconds': self.ttl_seconds,
         'agents': agents,
         'totals': totals,
+        'unregistered_runtimes': unreg_bundle['unregistered_runtimes'],
+        'gke_workloads': unreg_bundle['gke_workloads'],
+        'skills_and_mcp': unreg_bundle['skills_and_mcp'],
+        'unregistered_summary': unreg_bundle['unregistered_summary'],
         'model_usage': results.get(('model_usage',)),
         'model_usage_previous': results.get(('model_usage_prev',)),
         'ge_traffic': results.get(('ge_traffic',)),
@@ -1343,7 +1825,486 @@ class GeminiEnterpriseFleetService:
             'Cloud Monitoring data points typically appear 1-3 minutes after the request.',
             'A2A agents on Cloud Run report service-level metrics (all traffic to the service).',
             'Google-managed and no-code agents expose no per-project runtime telemetry.',
+            'Standalone Agent Engine, Cloud Run, GKE, and MCP runtimes not registered in GE are tracked in unregistered_runtimes.',
         ],
+    }
+
+  def _build_unregistered_inventory(
+      self,
+      registered_agents: list[dict[str, Any]],
+      results: dict[tuple[str, ...], Any],
+      unreg_results: dict[tuple[str, ...], Any],
+      checked_at: str,
+  ) -> dict[str, Any]:
+    """Builds the FinOps inventory of standalone Agent Engines, Cloud Run services, GKE workloads, and Skills/MCP."""
+    project = self.project_id
+    rate_cards = self._rate_cards()
+    reg_re_ids: set[str] = set()
+    reg_run_svcs: set[str] = set()
+    engine_name_by_id: dict[str, str] = {}
+    for a in registered_agents:
+      b = a.get('backend') or {}
+      if b.get('kind') == 'agent_engine' and b.get('reasoning_engine_id'):
+        rid = str(b['reasoning_engine_id'])
+        reg_re_ids.add(rid)
+        engine_name_by_id[rid] = a.get('display_name') or rid
+      elif b.get('kind') == 'cloud_run' and b.get('service'):
+        reg_run_svcs.add(str(b['service']))
+
+    trace_bundle = (
+        results.get(('re_trace_tokens', project))
+        or unreg_results.get(('unreg_trace_tokens', project))
+        or {}
+    )
+    all_trace_engines: dict[str, dict[str, Any]] = dict(trace_bundle.get('all_engines') or {})
+    trace_skills_mcp: list[dict[str, Any]] = [dict(item) for item in (trace_bundle.get('skills_and_mcp') or [])]
+
+    disc_re_list: list[dict[str, Any]] = list(unreg_results.get(('discover_re', project)) or [])
+    disc_re_by_id: dict[str, dict[str, Any]] = {}
+    for r in disc_re_list:
+      rid = str(r.get('reasoning_engine_id') or '')
+      if rid:
+        disc_re_by_id[rid] = r
+        if rid not in engine_name_by_id and r.get('display_name'):
+          engine_name_by_id[rid] = str(r['display_name'])
+
+    # Also include any standalone Agent Engine that emitted Cloud Trace spans in the window
+    # even if it was deleted before reasoningEngines.list ran or lives in another region.
+    for rid, t_usage in all_trace_engines.items():
+      if rid not in reg_re_ids and rid not in disc_re_by_id:
+        inferred_names = t_usage.get('agent_names') or []
+        display = inferred_names[0] if inferred_names else f'Standalone Agent Engine {rid}'
+        disc_re_by_id[rid] = {
+            'reasoning_engine_id': rid,
+            'resource': f'projects/{project}/locations/us-central1/reasoningEngines/{rid}',
+            'project': project,
+            'location': 'us-central1',
+            'display_name': display,
+            'description': 'Discovered via Cloud Trace gen_ai spans (not registered in any Gemini Enterprise app).',
+            'framework': 'google-adk',
+            'created': None,
+            'updated': t_usage.get('last_activity'),
+        }
+        engine_name_by_id[rid] = display
+
+    re_req = unreg_results.get(('unreg_re_requests', project)) or {}
+    re_lat = unreg_results.get(('unreg_re_latency', project)) or {}
+    re_cpu = unreg_results.get(('unreg_re_cpu', project)) or {}
+    re_mem = unreg_results.get(('unreg_re_mem', project)) or {}
+    re_tok = (unreg_results.get(('unreg_re_tokens', project)) or {}).get('by_engine') or {}
+
+    unregistered_runtimes: list[dict[str, Any]] = []
+    count_re = 0
+    count_active_re = 0
+    count_zombie_re = 0
+    zombie_vcpu_hours = 0.0
+    zombie_mem_gib_hours = 0.0
+
+    for rid, info in disc_re_by_id.items():
+      if rid in reg_re_ids:
+        continue
+      count_re += 1
+      loc = info.get('location') or 'us-central1'
+      req_info = re_req.get(rid) or {'requests': 0, 'errors_4xx': 0, 'errors_5xx': 0}
+      lat_info = re_lat.get(rid) or {}
+      vcpu_h = round(float(re_cpu.get(rid, 0.0)) / 3600.0, 4) if rid in re_cpu else 0.0
+      mem_h = round(float(re_mem.get(rid, 0.0)) / 3600.0, 4) if rid in re_mem else 0.0
+      log_u = re_tok.get(rid)
+      tr_u = all_trace_engines.get(rid)
+      usage = log_u if (log_u and log_u.get('llm_calls')) else (tr_u if (tr_u and tr_u.get('llm_calls')) else (log_u or tr_u))
+      llm_calls = int((usage or {}).get('llm_calls') or 0)
+      in_tok = int((usage or {}).get('input_tokens') or 0)
+      out_tok = int((usage or {}).get('output_tokens') or 0)
+      cache_tok = int((usage or {}).get('cached_tokens') or 0)
+      convs = int((usage or {}).get('conversations') or 0)
+      last_act = (usage or {}).get('last_activity')
+      models = list((usage or {}).get('models') or [])
+      inferred_names = (tr_u or {}).get('agent_names') or []
+      display_name = info.get('display_name') or f'ReasoningEngine {rid}'
+      if inferred_names and (display_name.startswith('ReasoningEngine ') or display_name.startswith('Standalone ')):
+        display_name = inferred_names[0]
+      elif inferred_names and inferred_names[0] not in display_name:
+        display_name = f'{display_name} ({inferred_names[0]})'
+      engine_name_by_id[rid] = display_name
+
+      requests_cnt = int(req_info.get('requests') or 0)
+      err_4xx = int(req_info.get('errors_4xx') or 0)
+      err_5xx = int(req_info.get('errors_5xx') or 0)
+      est_cost = _estimate_token_cost_usd(in_tok, out_tok, cache_tok, models, rate_cards)
+
+      is_active = (requests_cnt > 0) or (llm_calls > 0)
+      if is_active:
+        count_active_re += 1
+        finops_status = 'ACTIVE_UNREGISTERED'
+        state_str = 'ACTIVE_UNREGISTERED'
+        finops_rec = (
+            'Active standalone Agent Engine consuming tokens/compute outside Gemini Enterprise governance. '
+            'Register in GE App or enforce standalone FinOps budget.'
+        )
+        finops_cmd = (
+            f'gcloud alpha discovery-engine engines assistants agents create --project={project} '
+            f'--reasoning-engine={info["resource"]}'
+        )
+      else:
+        count_zombie_re += 1
+        zombie_vcpu_hours += vcpu_h
+        zombie_mem_gib_hours += mem_h
+        finops_status = 'ZOMBIE_IDLE_ENGINE'
+        state_str = 'ZOMBIE_IDLE'
+        finops_rec = (
+            f'Zombie/idle Reasoning Engine holding {mem_h:,.1f} GiB-hrs ({vcpu_h:,.1f} vCPU-hrs) with 0 requests '
+            'and 0 LLM calls. Delete to reclaim idle runtime footprint.'
+        )
+        finops_cmd = f'gcloud ai reasoning-engines delete {rid} --project={project} --region={loc} --quiet'
+
+      est_infra = round(vcpu_h * 0.0445 + mem_h * 0.0049, 4)
+      unregistered_runtimes.append({
+          'agent_id': f're-{rid}',
+          'resource_name': info['resource'],
+          'display_name': display_name,
+          'description': info.get('description') or f'Standalone Vertex AI ReasoningEngine ({loc})',
+          'engine_id': 'unregistered',
+          'engine_key': 'unregistered',
+          'engine_display_name': 'Standalone / Not in GE App',
+          'assistant_id': 'standalone',
+          'location': loc,
+          'type': 'ADK_STANDALONE',
+          'type_label': AGENT_TYPE_LABELS['ADK_STANDALONE'],
+          'state': state_str,
+          'sharing_scope': 'UNREGISTERED_STANDALONE',
+          'created': info.get('created'),
+          'updated': info.get('updated'),
+          'starter_prompts': 0,
+          'backend': {
+              'kind': 'agent_engine',
+              'resource': info['resource'],
+              'project': project,
+              'location': loc,
+              'reasoning_engine_id': rid,
+              'display_name': display_name,
+              'framework': info.get('framework') or 'google-adk',
+              'models': models,
+          },
+          'telemetry_scope': 'agent',
+          'metrics': {
+              'requests': requests_cnt,
+              'errors_4xx': err_4xx,
+              'errors_5xx': err_5xx,
+              'error_rate_pct': round(err_5xx / requests_cnt * 100, 2) if requests_cnt else None,
+              'latency_p50_ms': lat_info.get('p50'),
+              'latency_p95_ms': lat_info.get('p95'),
+              'llm_calls': llm_calls,
+              'input_tokens': in_tok,
+              'output_tokens': out_tok,
+              'cached_tokens': cache_tok,
+              'conversations': convs,
+              'last_activity': last_act,
+              'vcpu_hours': vcpu_h,
+              'memory_gib_hours': mem_h,
+              'billable_instance_hours': None,
+              'est_token_cost_usd': est_cost,
+              'est_infra_cost_usd': est_infra,
+          },
+          'registration': {
+              'status': 'UNREGISTERED_STANDALONE',
+              'finops_status': finops_status,
+              'evidence': f'Provisioned in Vertex AI Agent Engine ({loc}/{rid}) but not registered in any Gemini Enterprise app.',
+              'checked_at': checked_at,
+              'action': {'summary': finops_rec, 'delete_command': finops_cmd},
+          },
+          'finops_status': finops_status,
+          'finops_recommendation': finops_rec,
+          'finops_action_command': finops_cmd,
+          'data_sources': ['Vertex AI ReasoningEngines API', 'Cloud Monitoring: reasoning_engine/*', 'Cloud Trace / Logging: gen_ai.*'],
+          'notes': [finops_rec],
+      })
+
+    run_catalog: dict[str, dict[str, Any]] = dict(unreg_results.get(('run_catalog', project)) or {})
+    run_req = unreg_results.get(('unreg_run_requests', project)) or {}
+    run_lat = unreg_results.get(('unreg_run_latency', project)) or {}
+    run_bill = unreg_results.get(('unreg_run_billable', project)) or {}
+
+    count_run = 0
+    count_mcp_run = 0
+    count_always_on_run = 0
+    for svc_name, sinfo in run_catalog.items():
+      if svc_name in reg_run_svcs:
+        continue
+      count_run += 1
+      cat = sinfo.get('category') or 'CLOUD_RUN_AGENT'
+      if cat == 'MCP_SERVER':
+        count_mcp_run += 1
+      min_inst = int(sinfo.get('min_instances') or 0)
+      if min_inst >= 1:
+        count_always_on_run += 1
+      region = sinfo.get('region') or 'us-central1'
+      s_req = run_req.get(svc_name) or {'requests': 0, 'errors_4xx': 0, 'errors_5xx': 0}
+      s_lat = run_lat.get(svc_name) or {}
+      bill_h = round(float(run_bill.get(svc_name, 0.0)) / 3600.0, 4) if svc_name in run_bill else 0.0
+      req_cnt = int(s_req.get('requests') or 0)
+      err_4xx = int(s_req.get('errors_4xx') or 0)
+      err_5xx = int(s_req.get('errors_5xx') or 0)
+
+      if min_inst >= 1:
+        finops_status = 'ALWAYS_ON_UNREGISTERED'
+        state_str = f'ALWAYS_ON (min={min_inst})'
+        finops_rec = (
+            f'Cloud Run {sinfo.get("category_label")} configured with min-instances={min_inst} '
+            f'({bill_h:,.1f} billable instance-hrs). Scale to min-instances=0 if cold-start budget permits.'
+        )
+        finops_cmd = f'gcloud run services update {svc_name} --project={project} --region={region} --min-instances=0'
+      elif req_cnt == 0:
+        finops_status = 'ZOMBIE_IDLE_SERVICE'
+        state_str = 'ZOMBIE_IDLE'
+        finops_rec = f'Idle Cloud Run service ({region}) with 0 requests in window. Review for decommission.'
+        finops_cmd = f'gcloud run services delete {svc_name} --project={project} --region={region} --quiet'
+      else:
+        finops_status = 'ACTIVE_UNREGISTERED'
+        state_str = 'ACTIVE_UNREGISTERED'
+        finops_rec = (
+            f'Active {sinfo.get("category_label")} ({req_cnt:,} requests, {bill_h:,.1f} billable instance-hrs) '
+            'not registered in Gemini Enterprise.'
+        )
+        finops_cmd = f'gcloud run services describe {svc_name} --project={project} --region={region}'
+
+      unregistered_runtimes.append({
+          'agent_id': f'run-{svc_name}',
+          'resource_name': sinfo.get('resource_name') or f'projects/{project}/locations/{region}/services/{svc_name}',
+          'display_name': svc_name,
+          'description': f'{sinfo.get("category_label")} ({sinfo.get("cpu") or "1"} vCPU, {sinfo.get("memory") or "512Mi"}, min={min_inst})',
+          'engine_id': 'unregistered',
+          'engine_key': 'unregistered',
+          'engine_display_name': 'Standalone / Not in GE App',
+          'assistant_id': 'standalone',
+          'location': region,
+          'type': cat,
+          'type_label': AGENT_TYPE_LABELS.get(cat, 'Cloud Run Service (Not in GE)'),
+          'state': state_str,
+          'sharing_scope': sinfo.get('ingress') or 'UNREGISTERED_STANDALONE',
+          'created': sinfo.get('created'),
+          'updated': sinfo.get('updated'),
+          'starter_prompts': 0,
+          'backend': {
+              'kind': 'cloud_run',
+              'service': svc_name,
+              'project': project,
+              'region': region,
+              'url': sinfo.get('uri'),
+              'min_instances': min_inst,
+              'max_instances': sinfo.get('max_instances'),
+              'cpu': sinfo.get('cpu'),
+              'memory': sinfo.get('memory'),
+          },
+          'telemetry_scope': 'service',
+          'metrics': {
+              'requests': req_cnt,
+              'errors_4xx': err_4xx,
+              'errors_5xx': err_5xx,
+              'error_rate_pct': round(err_5xx / req_cnt * 100, 2) if req_cnt else None,
+              'latency_p50_ms': s_lat.get('p50'),
+              'latency_p95_ms': s_lat.get('p95'),
+              'llm_calls': None,
+              'input_tokens': None,
+              'output_tokens': None,
+              'cached_tokens': None,
+              'conversations': None,
+              'last_activity': sinfo.get('updated'),
+              'vcpu_hours': None,
+              'memory_gib_hours': None,
+              'billable_instance_hours': bill_h,
+              'est_token_cost_usd': None,
+              'est_infra_cost_usd': round(bill_h * 0.024, 4),
+          },
+          'registration': {
+              'status': 'UNREGISTERED_STANDALONE',
+              'finops_status': finops_status,
+              'evidence': f"Cloud Run service '{svc_name}' ({region}) is not registered as a Gemini Enterprise agent.",
+              'checked_at': checked_at,
+              'action': {'summary': finops_rec, 'delete_command': finops_cmd},
+          },
+          'finops_status': finops_status,
+          'finops_recommendation': finops_rec,
+          'finops_action_command': finops_cmd,
+          'data_sources': ['Cloud Run Admin API v2', 'Cloud Monitoring: run.googleapis.com/*'],
+          'notes': [finops_rec],
+      })
+
+      # Also surface MCP Server and Skill Backend Cloud Run services in the Skills & MCP inventory
+      if cat in ('MCP_SERVER', 'SKILL_BACKEND'):
+        trace_skills_mcp.append({
+            'name': svc_name,
+            'kind': 'MCP_SERVER_RUNTIME' if cat == 'MCP_SERVER' else 'SKILL_BACKEND_RUNTIME',
+            'calls': req_cnt,
+            'traces_count': req_cnt,
+            'co_occurring_input_tokens': 0,
+            'co_occurring_output_tokens': 0,
+            'avg_latency_ms': s_lat.get('p50'),
+            'latency_p95_ms': s_lat.get('p95'),
+            'billable_instance_hours': bill_h,
+            'min_instances': min_inst,
+            'uri': sinfo.get('uri'),
+            'engines': [f'cloud_run:{region}/{svc_name}'],
+            'engine_names': [f'Cloud Run ({region})'],
+            'models': [],
+            'registration_scope': 'UNREGISTERED_STANDALONE',
+            'last_activity': sinfo.get('updated'),
+        })
+
+    gke_raw = unreg_results.get(('discover_gke', project)) or unreg_results.get(('gke_workloads', project)) or {'clusters': [], 'workloads': []}
+    if isinstance(gke_raw, list):
+      gke_data = {'clusters': [], 'workloads': gke_raw}
+    else:
+      gke_data = gke_raw
+    gke_clusters = list(gke_data.get('clusters') or [])
+    gke_workloads = list(gke_data.get('workloads') or [])
+    for gw in gke_workloads:
+      cname = gw.get('cluster_name') or 'gke-cluster'
+      ns = gw.get('namespace') or 'default'
+      cont = gw.get('container_name') or 'workload'
+      loc = gw.get('location') or 'us-central1'
+      mode = gw.get('cluster_mode') or 'Standard'
+      core_h = float(gw.get('cpu_core_hours') or 0.0)
+      mem_g = float(gw.get('memory_gib') or 0.0)
+      finops_rec = (
+          f'GKE {mode} container workload {ns}/{cont} on cluster {cname} ({loc}): '
+          f'{core_h:,.2f} CPU core-hrs, {mem_g:,.2f} GiB avg memory. Not registered in GE App.'
+      )
+      finops_cmd = (
+          f'gcloud container clusters get-credentials {cname} --project={project} --location={loc} '
+          f'&& kubectl top pods -n {ns}'
+      )
+      unregistered_runtimes.append({
+          'agent_id': f'gke-{cname}-{ns}-{cont}',
+          'resource_name': f'projects/{project}/locations/{loc}/clusters/{cname}/namespaces/{ns}/containers/{cont}',
+          'display_name': f'{cname}/{cont}',
+          'description': f'GKE {mode} Workload ({ns}/{cont} on {cname}, {gw.get("node_count") or 0} nodes)',
+          'engine_id': 'unregistered',
+          'engine_key': 'unregistered',
+          'engine_display_name': 'Standalone / Not in GE App',
+          'assistant_id': 'standalone',
+          'location': loc,
+          'type': 'GKE_WORKLOAD',
+          'type_label': AGENT_TYPE_LABELS['GKE_WORKLOAD'],
+          'state': 'ACTIVE_GKE_WORKLOAD',
+          'sharing_scope': 'GKE_CLUSTER',
+          'created': None,
+          'updated': checked_at,
+          'starter_prompts': 0,
+          'backend': {
+              'kind': 'gke_workload',
+              'cluster_name': cname,
+              'cluster_mode': mode,
+              'namespace': ns,
+              'container_name': cont,
+              'project': project,
+              'location': loc,
+          },
+          'telemetry_scope': 'container',
+          'metrics': {
+              'requests': None,
+              'errors_4xx': None,
+              'errors_5xx': None,
+              'error_rate_pct': None,
+              'latency_p50_ms': None,
+              'latency_p95_ms': None,
+              'llm_calls': None,
+              'input_tokens': None,
+              'output_tokens': None,
+              'cached_tokens': None,
+              'conversations': None,
+              'last_activity': checked_at,
+              'vcpu_hours': core_h,
+              'memory_gib_hours': mem_g,
+              'billable_instance_hours': None,
+              'est_token_cost_usd': None,
+              'est_infra_cost_usd': round(core_h * 0.0445 + mem_g * 0.0049, 4),
+          },
+          'registration': {
+              'status': 'UNREGISTERED_STANDALONE',
+              'finops_status': 'ACTIVE_GKE_WORKLOAD',
+              'evidence': f'Running on GKE cluster {cname} ({ns}/{cont}); not registered in Gemini Enterprise.',
+              'checked_at': checked_at,
+              'action': {'summary': finops_rec, 'delete_command': finops_cmd},
+          },
+          'finops_status': 'ACTIVE_GKE_WORKLOAD',
+          'finops_recommendation': finops_rec,
+          'finops_action_command': finops_cmd,
+          'data_sources': ['GKE Clusters API', 'Cloud Monitoring: kubernetes.io/container/*'],
+          'notes': [finops_rec],
+      })
+
+    # Enrich trace_skills_mcp with human-readable engine_names
+    for item in trace_skills_mcp:
+      if 'engine_names' not in item:
+        item['engine_names'] = [engine_name_by_id.get(eid, eid) for eid in (item.get('engines') or [])]
+    trace_skills_mcp.sort(key=lambda r: (-int(r.get('calls') or 0), str(r.get('name') or '')))
+
+    def _sort_key(rt: dict[str, Any]) -> tuple[Any, ...]:
+      m = rt.get('metrics') or {}
+      req = int(m.get('requests') or 0)
+      llm = int(m.get('llm_calls') or 0)
+      tok = int(m.get('input_tokens') or 0) + int(m.get('output_tokens') or 0)
+      is_gke = 1 if rt.get('type') == 'GKE_WORKLOAD' else 0
+      alloc = float(m.get('billable_instance_hours') or 0.0) + float(m.get('vcpu_hours') or 0.0)
+      active_tier = 2 if (req > 0 or llm > 0) else (1 if is_gke else 0)
+      return (-active_tier, -tok, -req, -llm, -alloc, str(rt.get('display_name') or ''))
+
+    unregistered_runtimes.sort(key=_sort_key)
+
+    total_unreg_requests = sum(int(r['metrics'].get('requests') or 0) for r in unregistered_runtimes)
+    total_unreg_llm_calls = sum(int(r['metrics'].get('llm_calls') or 0) for r in unregistered_runtimes)
+    total_unreg_in_tok = sum(int(r['metrics'].get('input_tokens') or 0) for r in unregistered_runtimes)
+    total_unreg_out_tok = sum(int(r['metrics'].get('output_tokens') or 0) for r in unregistered_runtimes)
+    total_unreg_cache_tok = sum(int(r['metrics'].get('cached_tokens') or 0) for r in unregistered_runtimes)
+    total_unreg_cost = sum(float(r['metrics'].get('est_token_cost_usd') or 0.0) for r in unregistered_runtimes)
+    total_unreg_vcpu = sum(
+        float(r['metrics'].get('vcpu_hours') or 0.0)
+        for r in unregistered_runtimes
+        if r.get('type') == 'ADK_STANDALONE'
+    )
+    total_unreg_mem = sum(
+        float(r['metrics'].get('memory_gib_hours') or 0.0)
+        for r in unregistered_runtimes
+        if r.get('type') == 'ADK_STANDALONE'
+    )
+    total_unreg_billable = sum(
+        float(r['metrics'].get('billable_instance_hours') or 0.0)
+        for r in unregistered_runtimes
+    )
+    total_gke_cpu = sum(float(w.get('cpu_core_hours') or 0.0) for w in gke_workloads)
+    total_gke_mem = sum(float(w.get('memory_gib') or 0.0) for w in gke_workloads)
+
+    unregistered_summary = {
+        'total_unregistered_runtimes': len(unregistered_runtimes),
+        'unregistered_reasoning_engines': count_re,
+        'active_unregistered_reasoning_engines': count_active_re,
+        'zombie_reasoning_engines': count_zombie_re,
+        'unregistered_cloud_run_services': count_run,
+        'mcp_cloud_run_services': count_mcp_run,
+        'always_on_cloud_run_services': count_always_on_run,
+        'gke_clusters_count': len(gke_clusters),
+        'gke_workloads_count': len(gke_workloads),
+        'discovered_skills_and_mcp_count': len(trace_skills_mcp),
+        'unregistered_requests': total_unreg_requests,
+        'unregistered_llm_calls': total_unreg_llm_calls,
+        'unregistered_input_tokens': total_unreg_in_tok,
+        'unregistered_output_tokens': total_unreg_out_tok,
+        'unregistered_cached_tokens': total_unreg_cache_tok,
+        'unregistered_est_token_cost_usd': round(total_unreg_cost, 4),
+        'zombie_vcpu_hours': round(zombie_vcpu_hours, 2),
+        'zombie_memory_gib_hours': round(zombie_mem_gib_hours, 2),
+        'unregistered_vcpu_hours': round(total_unreg_vcpu, 2),
+        'unregistered_memory_gib_hours': round(total_unreg_mem, 2),
+        'unregistered_billable_instance_hours': round(total_unreg_billable, 2),
+        'gke_cpu_core_hours': round(total_gke_cpu, 2),
+        'gke_memory_gib': round(total_gke_mem, 2),
+        'discovery_status': 'ok' if self.discover_unregistered else 'trace_only',
+    }
+    return {
+        'unregistered_runtimes': unregistered_runtimes,
+        'gke_workloads': {'clusters': gke_clusters, 'workloads': gke_workloads},
+        'skills_and_mcp': trace_skills_mcp,
+        'unregistered_summary': unregistered_summary,
     }
 
   def _apply_telemetry(self, agent: dict[str, Any], results: dict[tuple[str, ...], Any]) -> None:
@@ -1475,6 +2436,21 @@ def summarize_fleet(payload: dict[str, Any]) -> str:
     elif scope == 'none':
       parts.append('inventory only (no per-project runtime telemetry)')
     lines.append('- ' + '; '.join(parts))
+  unreg = payload.get('unregistered_summary') or {}
+  if unreg.get('total_unregistered_runtimes'):
+    lines.append(
+        f"- Unregistered / Standalone Runtimes (NOT in GE App): {unreg.get('total_unregistered_runtimes', 0)} total "
+        f"({unreg.get('unregistered_reasoning_engines', 0)} Agent Engines [{unreg.get('zombie_reasoning_engines', 0)} zombie/idle "
+        f"holding {unreg.get('zombie_memory_gib_hours', 0.0):,.1f} GiB-hrs], "
+        f"{unreg.get('unregistered_cloud_run_services', 0)} Cloud Run services [{unreg.get('mcp_cloud_run_services', 0)} MCP], "
+        f"{unreg.get('gke_workloads_count', 0)} GKE workloads across {unreg.get('gke_clusters_count', 0)} clusters); "
+        f"{unreg.get('unregistered_requests', 0):,} requests, {_fmt_tokens(unreg.get('unregistered_input_tokens'))} in / "
+        f"{_fmt_tokens(unreg.get('unregistered_output_tokens'))} out tokens ({unreg.get('unregistered_llm_calls', 0):,} LLM calls)"
+    )
+  skills_mcp = payload.get('skills_and_mcp') or []
+  if skills_mcp:
+    top_tools = ', '.join(f"{s.get('name')} ({s.get('calls', 0):,})" for s in skills_mcp[:5])
+    lines.append(f"- Discovered Skills, Sub-Agents & MCP Tools ({len(skills_mcp)}): {top_tools}")
   usage_totals = (payload.get('model_usage') or {}).get('totals') or {}
   if usage_totals:
     line = (
@@ -1490,3 +2466,4 @@ def summarize_fleet(payload: dict[str, Any]) -> str:
   if payload.get('errors'):
     lines.append('- Unavailable sources: ' + '; '.join(str(e.get('source')) for e in payload['errors']))
   return '\n'.join(lines)
+

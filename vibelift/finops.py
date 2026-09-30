@@ -72,11 +72,17 @@ def build_token_economics(fleet: Mapping[str, Any] | None) -> dict[str, Any]:
         'cache_read_share_pct': m.get('cache_read_share_pct'),
         'cost_per_1k_calls_usd': round(cost / calls * 1000, 4) if cost is not None and calls else None,
     })
-  # Per agent: each runtime once (shared runtimes are registered in several apps).
+  # Per agent: each runtime once (shared runtimes are registered in several apps),
+  # plus active standalone/unregistered runtimes that emitted token telemetry.
   from vibelift.fleet import runtime_backend_key  # pylint: disable=g-import-not-at-top
   seen: set[str] = set()
   agents = []
-  for a in fleet.get('agents') or []:
+  all_agent_sources = [
+      (a, 'REGISTERED_IN_GE') for a in (fleet.get('agents') or [])
+  ] + [
+      (a, 'UNREGISTERED_STANDALONE') for a in (fleet.get('unregistered_runtimes') or [])
+  ]
+  for a, reg_status in all_agent_sources:
     mt = a.get('metrics') or {}
     if not mt.get('llm_calls') and not mt.get('input_tokens'):
       continue
@@ -89,25 +95,34 @@ def build_token_economics(fleet: Mapping[str, Any] | None) -> dict[str, Any]:
     agents.append({
         'display_name': a.get('display_name'),
         'engine_id': a.get('engine_id'),
+        'registration_status': reg_status,
+        'runtime_type': a.get('type'),
         'requests': req,
         'llm_calls': int(mt.get('llm_calls') or 0),
         'input_tokens': int(mt.get('input_tokens') or 0),
         'output_tokens': int(mt.get('output_tokens') or 0),
+        'cached_tokens': int(mt.get('cached_tokens') or 0),
+        'est_token_cost_usd': mt.get('est_token_cost_usd'),
         'models': (a.get('backend') or {}).get('models') or [],
-        'token_source': mt.get('token_source'),
+        'token_source': mt.get('token_source') or ('Cloud Trace / Logging: gen_ai.*' if reg_status == 'UNREGISTERED_STANDALONE' else None),
         'tokens_per_request': round(tok / req) if req else None,
         'llm_calls_per_request': round(int(mt.get('llm_calls') or 0) / req, 2) if req else None,
     })
   agents.sort(key=lambda r: -(r['input_tokens'] + r['output_tokens']))
   no_telemetry = []
   seen_nt: set[str] = set()
-  for a in fleet.get('agents') or []:
+  for a, reg_status in all_agent_sources:
     mt = a.get('metrics') or {}
     key = runtime_backend_key(dict(a))
-    if mt.get('requests') and mt.get('input_tokens') is None and key not in seen and key not in seen_nt:
+    if mt.get('requests') and not mt.get('input_tokens') and key not in seen and key not in seen_nt:
       seen_nt.add(key)
-      no_telemetry.append({'display_name': a.get('display_name'), 'requests': int(mt.get('requests') or 0),
-                           'runs_on': (a.get('backend') or {}).get('kind')})
+      no_telemetry.append({
+          'display_name': a.get('display_name'),
+          'requests': int(mt.get('requests') or 0),
+          'runs_on': (a.get('backend') or {}).get('kind'),
+          'registration_status': reg_status,
+          'runtime_type': a.get('type'),
+      })
   ge = fleet.get('ge_assistant_usage') if isinstance(fleet.get('ge_assistant_usage'), Mapping) else None
   ge_rows = []
   if ge:
@@ -135,8 +150,12 @@ def build_token_economics(fleet: Mapping[str, Any] | None) -> dict[str, Any]:
       'agents_without_token_telemetry': sorted(no_telemetry, key=lambda r: -r['requests']),
       'ge_assistant': ge_rows,
       'ge_assistant_status': 'LIVE' if ge else 'UNAVAILABLE',
+      'unregistered_summary': fleet.get('unregistered_summary') or {},
+      'skills_and_mcp': fleet.get('skills_and_mcp') or [],
+      'gke_workloads': fleet.get('gke_workloads') or {'clusters': [], 'workloads': []},
       'agents_note': ('Per-agent tokens come from OpenTelemetry gen_ai data the agent exports: Cloud Logging '
-                      'inference events, else Cloud Trace spans. Model cost is project-wide.'),
+                      'inference events, else Cloud Trace spans (including standalone Agent Engines not registered in GE). '
+                      'Model cost is project-wide.'),
       'source': 'Cloud Monitoring: aiplatform publisher token_count + model_invocation_count; list prices',
   }
 
@@ -292,4 +311,9 @@ def build_live_finops(fleet: Mapping[str, Any] | None) -> dict[str, Any]:
       'spend_drift': build_spend_drift(usage, fleet.get('model_usage_previous')),
       'what_if_models': [m.get('model') for m in (usage or {}).get('models') or [] if m.get('est_cost_usd') is not None],
       'rate_card_models': sorted(((usage or {}).get('rate_cards') or {}).keys()),
+      'unregistered_summary': fleet.get('unregistered_summary') or {},
+      'unregistered_runtimes': fleet.get('unregistered_runtimes') or [],
+      'gke_workloads': fleet.get('gke_workloads') or {'clusters': [], 'workloads': []},
+      'skills_and_mcp': fleet.get('skills_and_mcp') or [],
   }
+

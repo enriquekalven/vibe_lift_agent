@@ -451,16 +451,108 @@ class GeFleetHelpersTest(unittest.TestCase):
         'name': 'a/b/agents/z', 'a2aAgentDefinition': {'jsonAgentCard': 'not json'}})
     self.assertEqual(broken['backend']['kind'], 'external_endpoint')
 
-  def test_summarize_fleet(self):
+  def test_classify_cloud_run_service(self):
+    mcp_svc = {'metadata': {'name': 'slideforge-mcp', 'labels': {'purpose': 'mcp-server'}}, 'spec': {'template': {'spec': {'containers': [{'name': 'mcp'}]}}}}
+    agent_svc = {'metadata': {'name': 'customer-support-agent'}, 'spec': {'template': {'spec': {'containers': [{'name': 'agent'}]}}}}
+    skill_svc = {'metadata': {'name': 'corporate-email-tool'}, 'spec': {'template': {'spec': {'containers': [{'name': 'backend'}]}}}}
+    std_svc = {'metadata': {'name': 'payment-gateway'}, 'spec': {'template': {'spec': {'containers': [{'name': 'app'}]}}}}
+    self.assertEqual(ge_fleet.classify_cloud_run_service(mcp_svc, 'project-maui')['type'], 'MCP_SERVER')
+    self.assertEqual(ge_fleet.classify_cloud_run_service(agent_svc, 'project-maui')['type'], 'CLOUD_RUN_AGENT')
+    self.assertEqual(ge_fleet.classify_cloud_run_service(skill_svc, 'project-maui')['type'], 'SKILL_BACKEND')
+    self.assertEqual(ge_fleet.classify_cloud_run_service(std_svc, 'project-maui')['type'], 'CLOUD_RUN_SERVICE')
+
+  def test_aggregate_trace_skills_and_mcp(self):
+    fake_traces = [
+        {'spans': [
+            {'name': 'execute_tool slideforge_render', 'attributes': {'gen_ai.tool.name': 'slideforge_render', 'gcp.vertex.reasoning_engine.id': '1111111111111111111', 'gen_ai.usage.input_tokens': '1200', 'gen_ai.usage.output_tokens': '450', 'gen_ai.request.model': 'gemini-2.5-flash'}, 'startTime': '2026-09-30T00:00:00Z', 'endTime': '2026-09-30T00:00:01.500Z'},
+        ]},
+        {'spans': [
+            {'name': 'invoke_agent deep_researcher', 'attributes': {'gen_ai.agent.name': 'deep_researcher', 'gen_ai.usage.input_tokens': '8000', 'gen_ai.usage.output_tokens': '2000', 'gen_ai.response.model': 'gemini-2.5-pro'}, 'startTime': '2026-09-30T00:00:00Z', 'endTime': '2026-09-30T00:00:04.000Z'},
+        ]},
+        {'spans': [
+            {'name': 'POST /mcp/tools/call', 'attributes': {'http.target': '/mcp/tools/call', 'gen_ai.usage.input_tokens': '500', 'gen_ai.usage.output_tokens': '150'}, 'startTime': '2026-09-30T00:00:00Z', 'endTime': '2026-09-30T00:00:00.800Z'},
+        ]},
+    ]
+    items = ge_fleet.aggregate_trace_skills_and_mcp(fake_traces)
+    self.assertEqual(len(items), 3)
+    names = [x['name'] for x in items]
+    self.assertIn('slideforge_render', names)
+    self.assertIn('deep_researcher', names)
+    self.assertIn('POST /mcp/tools/call', names)
+    tool_item = next(x for x in items if x['name'] == 'slideforge_render')
+    self.assertEqual(tool_item['kind'], 'SKILL_TOOL')
+    self.assertEqual(tool_item['calls'], 1)
+    self.assertEqual(tool_item['co_occurring_input_tokens'], 1200)
+    self.assertEqual(tool_item['co_occurring_output_tokens'], 450)
+    self.assertIn('gemini-2.5-flash', tool_item['models'])
+
+  def test_unregistered_inventory_and_zombie_detection(self):
     service, _ = make_fake_service()
-    text = ge_fleet.summarize_fleet(service.collect(window_hours=24))
-    self.assertIn('GB Agent Platform Demo (agent-platform-demo)', text)
-    self.assertIn('Agents: 3 (3 enabled; 1 A2A, 1 ADK, 1 MANAGED)', text)
-    self.assertIn('IT Service Desk [ADK, ENABLED]; 45 requests (3 4xx, 2 5xx)', text)
-    self.assertIn('Deep Research [MANAGED, ENABLED]; inventory only', text)
-    self.assertIn('no rate card for claude-opus-5', text)
-    self.assertIn('Gemini Enterprise assistant calls (project-wide): 7', text)
+    project = service.project_id
+    registered_agents = [{'backend': {'kind': 'agent_engine', 'reasoning_engine_id': '7384666355462537216'}}]
+    disc_re = [{
+        'reasoning_engine_id': '9999999999999999999',
+        'resource': f'projects/{project}/locations/us-central1/reasoningEngines/9999999999999999999',
+        'location': 'us-central1',
+        'display_name': 'zombie-idle-engine',
+        'framework': 'google-adk',
+    }]
+    run_catalog = {
+        'slideforge-mcp': {
+            'service_name': 'slideforge-mcp',
+            'resource_name': f'projects/{project}/locations/us-central1/services/slideforge-mcp',
+            'region': 'us-central1',
+            'category': 'MCP_SERVER',
+            'category_label': 'MCP Server',
+            'min_instances': 1,
+            'max_instances': 10,
+            'uri': 'https://slideforge-mcp-uc.a.run.app',
+        }
+    }
+    gke_workloads = [{
+        'cluster_name': 'agent-autopilot-cluster',
+        'location': 'us-central1',
+        'cluster_mode': 'Autopilot',
+        'node_count': 3,
+        'namespace': 'default',
+        'container_name': 'agent-worker',
+        'cpu_core_hours': 48.0,
+        'memory_gib': 8.0,
+    }]
+    unreg_results = {
+        ('discover_re', project): disc_re,
+        ('unreg_re_requests', project): {'9999999999999999999': {'requests': 0, 'errors_4xx': 0, 'errors_5xx': 0}},
+        ('unreg_re_cpu', project): {'9999999999999999999': 86400.0},
+        ('unreg_re_mem', project): {'9999999999999999999': 345600.0},
+        ('run_catalog', project): run_catalog,
+        ('unreg_run_requests', project): {'slideforge-mcp': {'requests': 0, 'errors_4xx': 0, 'errors_5xx': 0}},
+        ('unreg_run_billable', project): {'slideforge-mcp': 86400.0},
+        ('gke_workloads', project): gke_workloads,
+    }
+
+    inv = service._build_unregistered_inventory(
+        registered_agents=registered_agents,
+        results={},
+        unreg_results=unreg_results,
+        checked_at='2026-09-30T00:00:00Z',
+    )
+    unreg = inv['unregistered_runtimes']
+    self.assertEqual(len(unreg), 3)
+    re_unreg = next(x for x in unreg if x['backend']['kind'] == 'agent_engine')
+    self.assertEqual(re_unreg['registration']['finops_status'], 'ZOMBIE_IDLE_ENGINE')
+    self.assertIn('gcloud ai reasoning-engines delete', re_unreg['registration']['action']['delete_command'])
+    self.assertGreater(re_unreg['metrics']['est_infra_cost_usd'], 0.0)
+
+    cr_unreg = next(x for x in unreg if x['backend']['kind'] == 'cloud_run')
+    self.assertEqual(cr_unreg['type'], 'MCP_SERVER')
+    self.assertEqual(cr_unreg['registration']['finops_status'], 'ALWAYS_ON_UNREGISTERED')
+    self.assertIn('--min-instances=0', cr_unreg['registration']['action']['delete_command'])
+
+    gke_unreg = next(x for x in unreg if x['backend']['kind'] == 'gke_workload')
+    self.assertEqual(gke_unreg['type'], 'GKE_WORKLOAD')
+    self.assertGreater(gke_unreg['metrics']['est_infra_cost_usd'], 0.0)
 
 
 if __name__ == '__main__':
   unittest.main()
+

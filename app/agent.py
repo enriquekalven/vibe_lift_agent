@@ -166,18 +166,18 @@ def trigger_alpha_evolve_cycle(agent_id: str = "it_service_desk") -> str:
 
 
 def query_ge_agent_fleet(window_hours: int = 24) -> str:
-  """Lists every agent deployed on the Gemini Enterprise app with live, aggregated telemetry.
+  """Lists every agent deployed on the Gemini Enterprise app PLUS standalone/unregistered project runtimes.
 
-  Covers ADK agents on Vertex AI Agent Engine (Cloud Monitoring request, latency and resource
-  metrics plus per-agent token usage from Cloud Logging), A2A agents on Cloud Run (service-level
-  metrics), and Google-managed agents (inventory only), plus project-wide Vertex AI model usage.
+  Covers ADK agents on Vertex AI Agent Engine (registered in GE and standalone/unregistered, including
+  zombie/idle engines), A2A/standalone agents and MCP servers on Cloud Run, GKE agent/inference
+  workloads, Cloud Trace Skills/MCP tool invocations, and project-wide Vertex AI model usage.
 
   Args:
-      window_hours: Telemetry window in hours (1-720, default 24).
+      window_hours: Telemetry window in hours (1-8760, default 24).
 
   Returns:
-      JSON string with a text summary, the agent inventory, per-agent metrics, totals, model usage,
-      and per-source status.
+      JSON string with a text summary, the GE agent inventory, unregistered_runtimes, gke_workloads,
+      skills_and_mcp, unregistered_summary, per-agent metrics, totals, model usage, and source status.
   """
   payload = ge_fleet.get_ge_fleet_service().collect(window_hours=ge_fleet.parse_window_hours(window_hours))
   return json.dumps({"summary": ge_fleet.summarize_fleet(payload), **payload}, indent=2)
@@ -227,7 +227,7 @@ root_agent = Agent(
     instruction="""You are VibeLift Agent, an autonomous Google Cloud Optimization and Telemetry Agent.
 Your mission is to:
 1. Always call `open_dashboard` FIRST whenever the user asks to open, view, or inspect the VibeLift Analytics Platform, or asks for agent telemetry, FinOps prompt cache economics, or AlphaEvolve optimization. Calling `open_dashboard` opens the interactive glassmorphic dashboard.
-2. Report on every agent deployed on the Gemini Enterprise app with `query_ge_agent_fleet`: live requests, errors, latency, tokens, conversations, and last activity from Cloud Monitoring and Cloud Logging, plus project-wide model usage and estimated cost. Only quote numbers returned by the tools.
+2. Report on every agent deployed on the Gemini Enterprise app AND standalone/unregistered runtimes (Vertex AI Agent Engine, Cloud Run agents/MCP servers, GKE workloads, and Cloud Trace Skills/MCP tools) with `query_ge_agent_fleet`: live requests, errors, latency, tokens, conversations, zombie/idle allocation, and project-wide model usage and estimated cost. Only quote numbers returned by the tools.
 3. Fetch and analyze live telemetry from Google Cloud Run and Gemini Enterprise app logs.
 4. Calculate token cache economics (Cache Read vs Write vs Uncached) and dollar savings vs naive pricing.
 5. Diagnose prompt cache breakpoints where dynamic timestamps or non-static prefixes invalidate caches.

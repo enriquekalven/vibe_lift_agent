@@ -540,9 +540,67 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       .container { padding: 0 12px 28px 12px; }
       .panel { padding: 14px 14px; }
     }
+    @media print {
+      @page {
+        size: A4 landscape;
+        margin: 12mm 10mm;
+      }
+      body {
+        background: #ffffff !important;
+        color: #0f172a !important;
+        font-size: 11px !important;
+      }
+      .action-bar, .tab-bar, .fleet-controls, .verify-chip, #exportPdfBtn, #syncGcpBtn,
+      #telemetryValidatorDrawer, #anomalyBanner, #chatDock, #chatDrawer,
+      .scope-select, button {
+        display: none !important;
+      }
+      .app-bar {
+        border-bottom: 2px solid #0f172a !important;
+        padding-bottom: 8px !important;
+        margin-bottom: 12px !important;
+      }
+      #printExportHeader {
+        display: block !important;
+        margin-bottom: 16px;
+        padding: 10px 14px;
+        background: #f8fafc;
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+      }
+      .panel {
+        box-shadow: none !important;
+        border: 1px solid #cbd5e1 !important;
+        break-inside: avoid;
+        margin-bottom: 16px !important;
+      }
+      .table-scroll {
+        overflow: visible !important;
+        max-height: none !important;
+      }
+      table {
+        width: 100% !important;
+        font-size: 10px !important;
+        border-collapse: collapse !important;
+      }
+      th, td {
+        padding: 5px 8px !important;
+        border: 1px solid #e2e8f0 !important;
+      }
+      .kpi-card {
+        border: 1px solid #cbd5e1 !important;
+        break-inside: avoid;
+      }
+      .badge {
+        border: 1px solid #94a3b8 !important;
+        print-color-adjust: exact;
+        -webkit-print-color-adjust: exact;
+      }
+    }
   </style>
 </head>
 <body>
+  <div id="printExportHeader" style="display:none;"></div>
   <header class="app-bar">
     <div class="brand-row">
       <img
@@ -583,6 +641,9 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <span id="activeGenBadge" class="badge badge-blue adv-only">ACTIVE CONFIG</span>
       <button class="btn verify-chip" onclick="toggleTelemetryValidatorDrawer()" id="toggleTelemetryValidatorBtn" title="See which data source backs each number">
         Data check: <span id="telemetryValidatorSummaryBadge" class="mono">checking&hellip;</span>
+      </button>
+      <button class="btn" id="exportPdfBtn" onclick="exportDashboardPdf()" title="Export filtered view to executive PDF report">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" style="vertical-align:text-bottom;margin-right:4px;"><path d="M19 8H5c-1.66 0-3 1.34-3 3v6h4v4h12v-4h4v-6c0-1.66-1.34-3-3-3zm-3 11H8v-5h8v5zm3-7c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1zm-1-9H6v4h12V3z"/></svg> Export PDF
       </button>
       <button class="btn" id="syncGcpBtn" onclick="syncGcpTelemetry()" title="Sync GCP Telemetry (Cloud Monitoring, BigQuery, Gemini Enterprise)">
         Refresh
@@ -909,6 +970,34 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
         <div id="execCleanup"></div>
       </div>
+      <div class="panel" id="execUnregisteredPanel" style="margin-top:14px;">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Standalone &amp; Unregistered Project Runtimes (Agent Engine, Cloud Run, GKE &amp; MCP)</span>
+            <span class="badge badge-yellow" id="execUnregisteredBadge">Scanning&hellip;</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Runtimes deployed in the project that are <strong>not registered</strong> in any Gemini Enterprise app. Includes standalone Vertex AI ReasoningEngines, Cloud Run MCP servers / agents / skill backends, and GKE agent workloads. Zombie or idle runtimes still accrue vCPU &amp; memory allocation cost.
+          </div>
+        </div>
+        <div class="kpi-grid" id="execUnregisteredKpis" style="margin-bottom:12px;"></div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Standalone Runtime / Cluster</th>
+                <th>Kind &amp; Region</th>
+                <th>Status &amp; FinOps Signal</th>
+                <th>Requests</th>
+                <th>LLM Calls &amp; Tokens</th>
+                <th>Compute Allocation &amp; Est. Cost</th>
+                <th>FinOps Admin Control (Scale-to-Zero / Cleanup / Register in GE)</th>
+              </tr>
+            </thead>
+            <tbody id="execUnregisteredBody"></tbody>
+          </table>
+        </div>
+      </div>
     </section>
 
     <!-- TAB 0: LIVE GEMINI ENTERPRISE AGENT FLEET (real inventory joined with real telemetry) -->
@@ -948,6 +1037,63 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           </table>
         </div>
         <div id="fleetErrors" class="fleet-errors hidden"></div>
+      </div>
+
+      <div class="panel" id="fleetUnregisteredPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Non-GE Standalone Runtimes (Agent Engine, Cloud Run, GKE) &amp; Zombie FinOps Control</span>
+            <span class="badge badge-yellow" id="fleetUnregisteredBadge">Scanning&hellip;</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Full project-wide inventory of agents, MCP servers, skill backends, and GKE workloads deployed outside Gemini Enterprise apps, with live Cloud Monitoring vCPU/GiB allocation, Cloud Trace token telemetry, and copyable FinOps remediation &amp; GE registration commands.
+          </div>
+        </div>
+        <div class="kpi-grid" id="fleetUnregisteredKpis" style="margin-bottom:12px;"></div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Standalone Runtime / Cluster</th>
+                <th>Kind &amp; Region</th>
+                <th>Status &amp; FinOps Signal</th>
+                <th>Requests</th>
+                <th>LLM Calls &amp; Tokens</th>
+                <th>Compute Allocation &amp; Est. Cost</th>
+                <th>FinOps Admin Control (Scale-to-Zero / Cleanup / Register in GE)</th>
+              </tr>
+            </thead>
+            <tbody id="fleetUnregisteredBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel" id="fleetSkillsMcpPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Live Discovered Skills, Sub-Agents &amp; MCP Tool Servers (Cloud Trace + Cloud Run)</span>
+            <span class="badge badge-blue" id="fleetSkillsMcpBadge">Live Telemetry</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Discovered from <span class="mono">execute_tool</span>, <span class="mono">invoke_agent</span>, and <span class="mono">/mcp</span> Cloud Trace spans plus deployed Cloud Run MCP &amp; Skill services.
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Skill / Sub-Agent / MCP Server</th>
+                <th>Category</th>
+                <th>Parent Agent / Runtime</th>
+                <th>Invocations</th>
+                <th>Avg Latency</th>
+                <th>Co-occurring Tokens (In / Out)</th>
+                <th>Models &amp; FinOps Guidance</th>
+              </tr>
+            </thead>
+            <tbody id="fleetSkillsMcpBody"></tbody>
+          </table>
+        </div>
       </div>
 
       <div class="panel adv-only">
@@ -1417,6 +1563,35 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           </table>
         </div>
         <div class="live-note" id="liveDriftNote"></div>
+      </div>
+
+      <div class="panel live-only" id="liveUnregisteredFinopsPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Unregistered Runtime Spend, Zombie Compute Waste &amp; Skill/MCP Tokenomics</span>
+            <span id="liveUnregFinopsBadge" class="badge badge-yellow">&mdash;</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Token and infrastructure cost from standalone Agent Engines, Cloud Run MCP/Skill services, and GKE clusters not registered in Gemini Enterprise apps.
+          </div>
+        </div>
+        <div class="kpi-grid" id="liveUnregFinopsKpis" style="margin-bottom:12px;"></div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Skill / Sub-Agent / MCP Server</th>
+                <th>Category</th>
+                <th>Parent Agent / Runtime</th>
+                <th>Invocations</th>
+                <th>Avg Latency</th>
+                <th>Co-occurring Tokens (In / Out)</th>
+                <th>Models &amp; FinOps Guidance</th>
+              </tr>
+            </thead>
+            <tbody id="liveSkillsMcpBody"></tbody>
+          </table>
+        </div>
       </div>
 
       <div class="panel live-only adv-only" id="liveWhatIfPanel">
@@ -4243,9 +4418,13 @@ async def handle_agent_turn(message_envelope):
 
     const SOURCE_LABELS = {
       inventory: 'GE agent inventory',
+      reasoning_engines_inventory: 'Vertex AI ReasoningEngines',
+      cloud_run_inventory: 'Cloud Run services',
+      gke_inventory: 'GKE clusters & workloads',
       agent_engine_metrics: 'Agent Engine metrics',
       agent_token_logs: 'Agent token logs',
       agent_token_traces: 'Agent token traces',
+      skills_and_mcp_traces: 'Skills & MCP traces',
       ge_assistant_tokens: 'GE assistant token traces',
       cloud_run_metrics: 'Cloud Run metrics',
       model_usage: 'Vertex AI model usage',
@@ -4271,13 +4450,16 @@ async def handle_agent_turn(message_envelope):
       return {global: 'Global', us: 'US (multi-region)', eu: 'EU (multi-region)'}[loc] || String(loc || '').toUpperCase();
     }
     function engineMatchesScope(engineKey, scope) {
-      if (!scope || scope === 'all') return true;
+      if (!scope || scope === 'all' || scope === 'project_all') return true;
+      if (scope === 'unregistered') return String(engineKey).indexOf('/unregistered') >= 0;
       if (scope.indexOf('loc:') === 0) return String(engineKey).split('/')[0] === scope.slice(4);
       if (scope.indexOf('eng:') === 0) return engineKey === scope.slice(4);
       return true;
     }
     function geScopeLabel(scope) {
       if (!scope || scope === 'all') return 'all apps in all regions';
+      if (scope === 'project_all') return 'all project runtimes (Gemini Enterprise + standalone Agent Engine, Cloud Run & GKE)';
+      if (scope === 'unregistered') return 'standalone runtimes not registered in any Gemini Enterprise app';
       if (scope.indexOf('loc:') === 0) return 'all apps in ' + geRegionLabel(scope.slice(4));
       const key = scope.slice(4);
       const eng = ((geRawFleet && geRawFleet.engines) || []).find(function(e) {
@@ -4292,13 +4474,21 @@ async def handle_agent_turn(message_envelope):
         return {key: e.engine_key || ((e.location || 'global') + '/' + e.engine_id), loc: e.location || 'global',
                 name: e.display_name || e.engine_id, n: e.agents_count};
       });
+      const unregCount = (fleet.unregistered_runtimes || []).length;
+      const totalProjectCount = (fleet.agents || []).length + unregCount;
       const locs = [];
       engines.forEach(function(e) { if (locs.indexOf(e.loc) < 0) locs.push(e.loc); });
       locs.sort(function(a, b) { return a === 'global' ? -1 : (b === 'global' ? 1 : a.localeCompare(b)); });
       sel.replaceChildren();
-      const allOpt = el('option', null, ['All apps · all regions (' + engines.length + ' apps)']);
+      const allOpt = el('option', null, ['All GE apps · all regions (' + engines.length + ' apps)']);
       allOpt.value = 'all';
       sel.appendChild(allOpt);
+      const projOpt = el('option', null, ['All project runtimes · GE + Standalone (' + totalProjectCount + ' runtimes)']);
+      projOpt.value = 'project_all';
+      sel.appendChild(projOpt);
+      const unregOpt = el('option', null, ['Standalone / Not in GE App (' + unregCount + ' runtimes)']);
+      unregOpt.value = 'unregistered';
+      sel.appendChild(unregOpt);
       locs.forEach(function(loc) {
         const inLoc = engines.filter(function(e) { return e.loc === loc; });
         const grp = document.createElement('optgroup');
@@ -4322,11 +4512,20 @@ async def handle_agent_turn(message_envelope):
       if (!fleet || !Array.isArray(fleet.agents)) return fleet;
       const out = Object.assign({}, fleet, {__scoped: true});
       if (geScope === 'all') return out;
-      const agents = fleet.agents.filter(function(a) { return engineMatchesScope(agentEngineKey(a), geScope); });
+      let agents = [];
+      if (geScope === 'unregistered') {
+        agents = (fleet.unregistered_runtimes || []).slice();
+        out.engines = [{engine_id: 'unregistered', display_name: 'Standalone / Non-GE Runtimes', location: 'project'}];
+      } else if (geScope === 'project_all') {
+        agents = (fleet.agents || []).concat(fleet.unregistered_runtimes || []);
+        out.engines = (fleet.engines || []).concat([{engine_id: 'unregistered', display_name: 'Standalone Runtimes', location: 'project'}]);
+      } else {
+        agents = fleet.agents.filter(function(a) { return engineMatchesScope(agentEngineKey(a), geScope); });
+        out.engines = (fleet.engines || []).filter(function(e) {
+          return engineMatchesScope(e.engine_key || ((e.location || 'global') + '/' + e.engine_id), geScope);
+        });
+      }
       out.agents = agents;
-      out.engines = (fleet.engines || []).filter(function(e) {
-        return engineMatchesScope(e.engine_key || ((e.location || 'global') + '/' + e.engine_id), geScope);
-      });
       // Recompute totals, counting each runtime once (same rule as the backend).
       const rtKey = function(a) {
         const b = a.backend || {};
@@ -4722,6 +4921,20 @@ async def handle_agent_turn(message_envelope):
       const broken = agents.filter(isBrokenRegistration);
       if (broken.length) items.push({sev: 2, text: broken.length + ' agent registration(s) point at a backend that no longer exists, so people who pick them get errors: ' +
         broken.slice(0, 4).map(function(a) { return a.display_name || a.agent_id; }).join(', ') + (broken.length > 4 ? '…' : '') + '. See Clean up below.'});
+      const rawFl = geRawFleet || fleet;
+      const unregSum = (rawFl && rawFl.unregistered_summary) || {};
+      if (Number(unregSum.total_unregistered_runtimes || 0) > 0) {
+        items.push({
+          sev: Number(unregSum.zombie_runtimes_count || 0) > 0 ? 2 : 1,
+          text: fmtInt(unregSum.total_unregistered_runtimes) + ' deployed runtime(s) in project (' +
+            fmtInt(unregSum.unregistered_agent_engines || 0) + ' Agent Engine, ' +
+            fmtInt(unregSum.unregistered_cloud_run || 0) + ' Cloud Run, ' +
+            fmtInt(unregSum.unregistered_gke_workloads || 0) + ' GKE) are NOT registered in any Gemini Enterprise app (' +
+            fmtInt(unregSum.zombie_runtimes_count || 0) + ' zombie/idle; est. $' +
+            Number((unregSum.total_est_token_cost_usd || 0) + (unregSum.total_est_infra_cost_usd || 0)).toFixed(2) +
+            ' token + compute spend). See Standalone & Unregistered Project Runtimes below.'
+        });
+      }
       runtimes.forEach(function(rt) {
         const mm = m(rt.agent);
         const r = Number(mm.requests || 0), c = Number(mm.llm_calls || 0);
@@ -4779,7 +4992,175 @@ async def handle_agent_turn(message_envelope):
           ]));
         });
       }
+      renderUnregisteredAndSkills(rawFl);
       notifyHostSizeChanged();
+    }
+
+    function fillUnregisteredTable(tbody, unreg) {
+      if (!tbody) return;
+      tbody.replaceChildren();
+      if (!unreg.length) {
+        tbody.appendChild(emptyRow(7, 'No standalone or unregistered runtimes found in this project.'));
+        return;
+      }
+      unreg.forEach(function(rt) {
+        const m = rt.metrics || {};
+        const b = rt.backend || {};
+        const reg = rt.registration || {};
+        const act = reg.action || {};
+        const finSt = String(reg.finops_status || 'STANDALONE');
+        const isZombie = finSt.indexOf('ZOMBIE') >= 0 || finSt.indexOf('ALWAYS_ON') >= 0;
+        const stCls = isZombie ? 'badge-red' : (finSt === 'ACTIVE_UNREGISTERED' ? 'badge-green' : 'badge-yellow');
+        const subId = b.reasoning_engine_id || b.service || (b.cluster_name ? (b.cluster_name + '/' + b.namespace + '/' + b.container_name) : '') || rt.agent_id;
+        let allocStr = '—';
+        if (m.cpu_alloc_vcpu_hours != null || m.mem_alloc_gib_hours != null) {
+          allocStr = (m.cpu_alloc_vcpu_hours || 0) + ' vCPU-h · ' + (m.mem_alloc_gib_hours || 0) + ' GiB-h';
+        } else if (m.billable_instance_hours != null) {
+          allocStr = m.billable_instance_hours + ' inst-h (min=' + (b.min_instances || 0) + ', max=' + (b.max_instances || 0) + ')';
+        } else if (b.cpu_core_hours != null || b.avg_memory_gib != null) {
+          allocStr = (b.cpu_core_hours || 0) + ' core-h · ' + (b.avg_memory_gib || 0) + ' GiB';
+        }
+        const costParts = [];
+        if (m.est_infra_cost_usd != null) costParts.push('Infra: $' + Number(m.est_infra_cost_usd).toFixed(2));
+        if (m.est_token_cost_usd != null && m.est_token_cost_usd > 0) costParts.push('Tokens: $' + Number(m.est_token_cost_usd).toFixed(4));
+
+        const cmdNodes = [];
+        if (act.summary) cmdNodes.push(el('div', 'kpi-sub', [act.summary]));
+        if (act.command) {
+          const btnFix = el('button', 'btn', ['Copy FinOps Cmd']);
+          btnFix.style.padding = '2px 7px';
+          btnFix.style.fontSize = '11px';
+          btnFix.addEventListener('click', function() { copyText(act.command, btnFix); });
+          cmdNodes.push(el('div', 'cleanup-cmd', [el('code', null, [act.command]), btnFix]));
+        }
+        if (act.register_ge_command) {
+          const btnReg = el('button', 'btn', ['Copy GE Register']);
+          btnReg.style.padding = '2px 7px';
+          btnReg.style.fontSize = '11px';
+          btnReg.addEventListener('click', function() { copyText(act.register_ge_command, btnReg); });
+          cmdNodes.push(el('div', 'cleanup-cmd', [el('code', null, [act.register_ge_command]), btnReg]));
+        }
+
+        tbody.appendChild(el('tr', null, [
+          el('td', null, [
+            el('div', 'fleet-agent-name', [rt.display_name || rt.agent_id]),
+            el('div', 'fleet-agent-app mono', [subId]),
+            rt.description ? el('div', 'fleet-agent-desc', [rt.description]) : null,
+          ]),
+          el('td', null, [
+            badge(rt.type_label || rt.type || 'Runtime', 'badge-blue'),
+            el('div', 'kpi-sub mono', [(b.kind || '') + ' · ' + (rt.location || b.location || b.region || 'us-central1')]),
+          ]),
+          el('td', null, [
+            badge(finSt.replace(/_/g, ' '), stCls),
+            el('div', 'kpi-sub', [reg.evidence || 'Not registered in any GE app']),
+          ]),
+          el('td', 'mono', [
+            fmtInt(m.requests),
+            m.errors_5xx ? el('div', 'kpi-sub', [fmtInt(m.errors_5xx) + ' 5xx']) : (m.latency_p95_ms != null ? el('div', 'kpi-sub', ['p95 ' + fmtMs(m.latency_p95_ms)]) : null),
+          ]),
+          el('td', 'mono', [
+            fmtInt(m.llm_calls) + ' calls',
+            el('div', 'kpi-sub', [m.input_tokens != null ? (fmtTokens(m.input_tokens) + ' in / ' + fmtTokens(m.output_tokens) + ' out') : 'no gen_ai tokens']),
+          ]),
+          el('td', 'mono', [
+            el('div', null, [allocStr]),
+            el('div', 'kpi-sub', [costParts.join(' · ') || '—']),
+          ]),
+          el('td', null, cmdNodes),
+        ]));
+      });
+    }
+
+    function fillSkillsMcpTable(tbody, skills) {
+      if (!tbody) return;
+      tbody.replaceChildren();
+      if (!skills.length) {
+        tbody.appendChild(emptyRow(7, 'No skills, sub-agents, or MCP servers discovered in this window.'));
+        return;
+      }
+      skills.forEach(function(sk) {
+        const k = String(sk.kind || 'SKILL_OR_TOOL');
+        const bCls = k === 'MCP_SERVER' ? 'badge-green' : (k === 'SUB_AGENT' ? 'badge-yellow' : 'badge-blue');
+        tbody.appendChild(el('tr', null, [
+          el('td', null, [
+            el('strong', 'mono', [sk.name || '—']),
+            sk.endpoint_uri ? el('div', 'kpi-sub mono', [sk.endpoint_uri]) : (sk.source ? el('div', 'kpi-sub', [sk.source]) : null),
+          ]),
+          el('td', null, [badge(k, bCls)]),
+          el('td', 'mono', [sk.parent_agent_name || (sk.parent_engines || []).join(', ') || 'Standalone']),
+          el('td', 'mono', [
+            fmtInt(sk.calls),
+            sk.errors ? el('div', 'kpi-sub', [fmtInt(sk.errors) + ' errors']) : null,
+          ]),
+          el('td', 'mono', [sk.avg_latency_ms != null ? fmtMs(sk.avg_latency_ms) : '—']),
+          el('td', 'mono', [
+            sk.co_occurring_input_tokens != null
+              ? (fmtTokens(sk.co_occurring_input_tokens) + ' / ' + fmtTokens(sk.co_occurring_output_tokens))
+              : '—'
+          ]),
+          el('td', null, [
+            el('div', 'mono', [(sk.models || []).join(', ') || '—']),
+            sk.finops_note ? el('div', 'kpi-sub', [sk.finops_note]) : null,
+          ]),
+        ]));
+      });
+    }
+
+    function renderUnregisteredAndSkills(fleet) {
+      if (!fleet || typeof fleet !== 'object') return;
+      const unreg = Array.isArray(fleet.unregistered_runtimes) ? fleet.unregistered_runtimes : [];
+      const usum = fleet.unregistered_summary || {};
+      const skills = Array.isArray(fleet.skills_and_mcp) ? fleet.skills_and_mcp : [];
+      const totUnreg = usum.total_unregistered_runtimes != null ? usum.total_unregistered_runtimes : unreg.length;
+      const zombies = usum.zombie_runtimes_count || 0;
+      const totCost = Number(usum.total_est_token_cost_usd || 0) + Number(usum.total_est_infra_cost_usd || 0);
+      const badgeText = fmtInt(totUnreg) + ' standalone · ' + fmtInt(zombies) + ' zombie/idle · Est. $' + totCost.toFixed(2);
+
+      ['execUnregisteredBadge', 'fleetUnregisteredBadge', 'liveUnregFinopsBadge'].forEach(function(id) {
+        const b = document.getElementById(id);
+        if (b) {
+          b.textContent = badgeText;
+          b.className = 'badge ' + (zombies > 0 ? 'badge-red' : 'badge-yellow');
+        }
+      });
+
+      ['execUnregisteredKpis', 'fleetUnregisteredKpis', 'liveUnregFinopsKpis'].forEach(function(id) {
+        const grid = document.getElementById(id);
+        if (!grid) return;
+        grid.replaceChildren(
+          kpiCard(
+            'Standalone / Non-GE Runtimes',
+            fmtInt(totUnreg),
+            fmtInt(usum.unregistered_agent_engines || 0) + ' Agent Engine · ' +
+            fmtInt(usum.unregistered_cloud_run || 0) + ' Cloud Run · ' +
+            fmtInt(usum.unregistered_gke_workloads || 0) + ' GKE'
+          ),
+          kpiCard(
+            'Zombie / Idle Runtimes (0 req)',
+            fmtInt(zombies),
+            'Holding vCPU/GiB allocation or min-instances with 0 traffic'
+          ),
+          kpiCard(
+            'Standalone Traffic & Tokens',
+            fmtInt(usum.total_requests || 0) + ' req · ' + fmtInt(usum.total_llm_calls || 0) + ' LLM calls',
+            fmtTokens(usum.total_input_tokens || 0) + ' in / ' + fmtTokens(usum.total_output_tokens || 0) + ' out'
+          ),
+          kpiCard(
+            'Est. Unregistered Spend',
+            '$' + totCost.toFixed(2),
+            'Tokens: $' + Number(usum.total_est_token_cost_usd || 0).toFixed(4) + ' · Compute: $' + Number(usum.total_est_infra_cost_usd || 0).toFixed(2)
+          )
+        );
+      });
+
+      fillUnregisteredTable(document.getElementById('execUnregisteredBody'), unreg);
+      fillUnregisteredTable(document.getElementById('fleetUnregisteredBody'), unreg);
+
+      const skBadge = document.getElementById('fleetSkillsMcpBadge');
+      if (skBadge) skBadge.textContent = fmtInt(skills.length) + ' discovered skills, sub-agents & MCPs';
+      fillSkillsMcpTable(document.getElementById('fleetSkillsMcpBody'), skills);
+      fillSkillsMcpTable(document.getElementById('liveSkillsMcpBody'), skills);
     }
 
     function isBrokenRegistration(a) {
@@ -4823,6 +5204,13 @@ async def handle_agent_turn(message_envelope):
       if (isBrokenRegistration(a)) {
         const b = badge(r.status === 'NO_BACKEND' ? 'no backend' : 'backend deleted', 'badge-red');
         b.title = String(r.evidence || '') + ((r.action || {}).summary ? ' ' + r.action.summary : '');
+        return b;
+      }
+      if (r.status === 'UNREGISTERED_STANDALONE') {
+        const finSt = String(r.finops_status || '');
+        const isZombie = finSt.indexOf('ZOMBIE') >= 0 || finSt.indexOf('ALWAYS_ON') >= 0;
+        const b = badge(isZombie ? 'standalone · zombie/idle' : 'not in GE app', isZombie ? 'badge-red' : 'badge-yellow');
+        b.title = String(r.evidence || '');
         return b;
       }
       if (r.status === 'UNVERIFIED') {
@@ -4869,6 +5257,9 @@ async def handle_agent_turn(message_envelope):
     let liveFinopsFromFleet = false;
     function renderLiveFinops(lf) {
       if (!lf || typeof lf !== 'object') return;
+      if (lf.unregistered_runtimes || lf.skills_and_mcp) {
+        renderUnregisteredAndSkills(lf);
+      }
       const te = lf.token_economics || {};
       const win = windowLabel(te.window_hours);
       const tt = te.totals || {};
@@ -4882,8 +5273,11 @@ async def handle_agent_turn(message_envelope):
       if (teBody) {
         teBody.replaceChildren();
         (te.agents || []).forEach(function(r) {
+          const nameCell = r.registration_status === 'UNREGISTERED_STANDALONE'
+            ? el('td', null, [r.display_name || '—', ' ', badge('standalone', 'badge-yellow')])
+            : tdText(r.display_name || '—');
           teBody.appendChild(el('tr', null, [
-            tdText(r.display_name || '—'),
+            nameCell,
             tdText(fmtInt(r.requests), 'mono'),
             tdText(fmtInt(r.llm_calls), 'mono'),
             tdText(r.llm_calls_per_request == null ? '—' : String(r.llm_calls_per_request), 'mono'),
@@ -4897,7 +5291,10 @@ async def handle_agent_turn(message_envelope):
         (te.agents_without_token_telemetry || []).forEach(function(r) {
           const td = el('td', 'token-na', [r.runs_on === 'cloud_run' ? 'Not measured (Cloud Run reports requests only)' : 'No gen_ai token data exported']);
           td.colSpan = 7;
-          teBody.appendChild(el('tr', 'fleet-row-muted', [tdText(r.display_name || '—'), tdText(fmtInt(r.requests), 'mono'), td]));
+          const nameCell = r.registration_status === 'UNREGISTERED_STANDALONE'
+            ? el('td', null, [r.display_name || '—', ' ', badge('standalone', 'badge-yellow')])
+            : tdText(r.display_name || '—');
+          teBody.appendChild(el('tr', 'fleet-row-muted', [nameCell, tdText(fmtInt(r.requests), 'mono'), td]));
         });
         if (!teBody.children.length) {
           const td = el('td', 'fleet-empty', [te.status === 'LIVE' ? 'No agent token data in this window.' : (te.reason || 'Unavailable.')]);
@@ -5037,6 +5434,7 @@ async def handle_agent_turn(message_envelope):
         fleet = applyGeScope(fleet);
       }
       try { renderExecOverview(fleet, currentState ? currentState.user_centric : null); } catch (e) { console.warn('overview', e); }
+      try { renderUnregisteredAndSkills(geRawFleet || fleet); } catch (e) { console.warn('unregistered', e); }
       if (!fleet || !Array.isArray(fleet.agents)) return;
       lastFleet = fleet;
       const rawLf = (geRawFleet && geRawFleet.live_finops) || fleet.live_finops;
@@ -5103,6 +5501,9 @@ async def handle_agent_turn(message_envelope):
         } else if (b.kind === 'cloud_run') {
           runsOn = 'Cloud Run · ' + b.service;
           runsOnSub = b.region || '';
+        } else if (b.kind === 'gke') {
+          runsOn = 'GKE · ' + (b.cluster_name || 'cluster') + ' / ' + (b.container_name || 'workload');
+          runsOnSub = [b.namespace, b.location].filter(Boolean).join(' · ');
         } else if (b.kind === 'external_endpoint') {
           runsOn = 'External endpoint';
           runsOnSub = b.url || '';
@@ -5811,6 +6212,37 @@ async def handle_agent_turn(message_envelope):
         setFleetNotice('Could not load dashboard data from the VibeLift API.', true);
       });
     }
+    window.exportDashboardPdf = function() {
+      const geSel = document.getElementById('geScopeSelect');
+      const geScopeText = geSel ? (geSel.options[geSel.selectedIndex] ? geSel.options[geSel.selectedIndex].text : geSel.value) : 'All apps';
+      const winSel = document.getElementById('fleetWindow');
+      const winText = winSel ? (winSel.options[winSel.selectedIndex] ? winSel.options[winSel.selectedIndex].text : winSel.value) : 'Last 24 hours';
+      const proj = document.getElementById('gcpProjectText') ? document.getElementById('gcpProjectText').textContent : 'Current';
+      const activeTabBtn = document.querySelector('.tab-btn.active');
+      const activeTabName = activeTabBtn ? activeTabBtn.textContent.trim() : 'Executive FinOps';
+
+      const headerEl = document.getElementById('printExportHeader');
+      if (headerEl) {
+        while (headerEl.firstChild) {
+          headerEl.removeChild(headerEl.firstChild);
+        }
+        const titleDiv = document.createElement('div');
+        titleDiv.style.fontWeight = '700';
+        titleDiv.style.fontSize = '14px';
+        titleDiv.style.color = '#0f172a';
+        titleDiv.textContent = 'VibeLift FinOps & Agent Fleet Report — ' + activeTabName;
+        headerEl.appendChild(titleDiv);
+
+        const metaDiv = document.createElement('div');
+        metaDiv.style.fontSize = '11px';
+        metaDiv.style.color = '#475569';
+        metaDiv.style.marginTop = '4px';
+        metaDiv.textContent = 'Scope: ' + geScopeText + ' | Window: ' + winText + ' | GCP Project: ' + proj + ' | Exported: ' + new Date().toLocaleString();
+        headerEl.appendChild(metaDiv);
+      }
+      window.print();
+    };
+
     scheduleFleetRefresh();
   </script>
 </body>
