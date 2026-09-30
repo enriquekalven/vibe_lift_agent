@@ -131,7 +131,14 @@ class LiveUserAnalyticsTest(unittest.TestCase):
     bq = {'power_users_ldap': users, 'otel_total_prompt_tokens': 5000, 'otel_total_output_tokens': 70}
     tcb = alpha_evolve_optimizer.build_user_centric_analytics(None, live_fleet=fleet, live_bq=bq)['token_category_breakdown']
     self.assertEqual((tcb['observed_gcp_prompt_tokens'], tcb['observed_gcp_output_tokens'],
-                      tcb['observed_gcp_cached_tokens'], tcb['observed_gcp_cache_hit_pct']), (5000, 70, 0, 0.0))
+                      tcb['observed_gcp_cached_tokens'], tcb['observed_gcp_cache_hit_pct']), (5000, 70, None, None))
+    self.assertNotIn('foreground_prompt_tokens_m', tcb)   # no modelled demo figures in live payloads
+    self.assertNotIn('thinking_reduction_pct', tcb)
+    # No fleet payload and no BigQuery totals: unmeasured stays None instead of a fabricated 0.
+    tcb = alpha_evolve_optimizer.build_user_centric_analytics(
+        None, live_fleet=None, live_bq={'power_users_ldap': users})['token_category_breakdown']
+    self.assertIsNone(tcb['observed_gcp_prompt_tokens'])
+    self.assertIsNone(tcb['observed_gcp_cache_hit_pct'])
 
   def test_alerts_derived_from_fleet_once_per_runtime(self):
     alerts = alpha_evolve_optimizer.build_live_runaway_alerts(self._fleet())

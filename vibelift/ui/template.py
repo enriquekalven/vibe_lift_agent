@@ -3472,7 +3472,7 @@ async def handle_agent_turn(message_envelope):
               el('td', null, [el('strong', null, [r[0]])]),
               el('td', 'mono', [fmtTokens(r[1])]),
               el('td', 'mono', [r[0] === 'Cached input' ? orDash(tc.observed_gcp_cache_hit_pct, '% of input') : '']),
-              el('td', 'kpi-sub', ['OTel GenAI spans / fleet totals']),
+              el('td', 'kpi-sub', ['Agent runtimes (OTel gen_ai logs / spans, deduped per runtime); excludes the GE assistant']),
               el('td', null, ['']),
             ]));
           });

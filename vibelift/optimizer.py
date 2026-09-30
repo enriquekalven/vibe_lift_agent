@@ -1165,14 +1165,16 @@ def build_user_centric_analytics(
     else:
       token_src = {'in': fleet_totals.get('input_tokens'), 'out': fleet_totals.get('output_tokens'),
                    'cached': fleet_totals.get('cached_tokens')}
-    obs_in = int(token_src['in'] or 0)
-    obs_out = int(token_src['out'] or 0)
-    obs_cached = int(token_src['cached'] or 0)
+    # None (shown as a dash) when no source measured the value; never a fabricated 0.
+    obs_in, obs_out, obs_cached = (
+        int(token_src[k]) if token_src[k] is not None else None for k in ('in', 'out', 'cached'))
+    # Live mode reports only measured token categories; the modelled demo figures above are dropped.
+    token_category_breakdown = {}
     token_category_breakdown['observed_gcp_prompt_tokens'] = obs_in
     token_category_breakdown['observed_gcp_cached_tokens'] = obs_cached
     token_category_breakdown['observed_gcp_output_tokens'] = obs_out
     token_category_breakdown['observed_gcp_cache_hit_pct'] = (
-        round((obs_cached / obs_in) * 100.0, 1) if obs_in else None
+        round((obs_cached / obs_in) * 100.0, 1) if obs_in and obs_cached is not None else None
     )
     fleet_for_alerts = live_fleet if isinstance(live_fleet, Mapping) else {}
     return {
