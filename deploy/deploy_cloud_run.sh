@@ -26,6 +26,7 @@ else
     "${HOME}/.local/bin/ruff" check .
   fi
   if ! GOOGLE_APPLICATION_CREDENTIALS=/nonexistent/offline-test-credentials.json \
+      GOOGLE_CLOUD_PROJECT=test-project \
       python3 -m unittest discover -s tests -t . ; then
     echo "ERROR: tests failed; aborting deploy. Fix the failures (or set VIBELIFT_SKIP_TESTS=1 to override)." >&2
     exit 1

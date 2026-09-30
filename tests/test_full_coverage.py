@@ -721,6 +721,7 @@ class TestServerAndHttpHandlerFullCoverage(unittest.TestCase):
 
     def test_http_server_all_remaining_routes(self) -> None:
         ctrl = server.VibeLiftRuntimeController()
+        ctrl.gcp_telemetry.project_id = 'unconfigured-project'
         httpd = server.create_http_server(host='127.0.0.1', port=0, controller=ctrl)
         port = httpd.server_address[1]
         t = threading.Thread(target=httpd.serve_forever, daemon=True)

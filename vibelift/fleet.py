@@ -54,7 +54,7 @@ _MAX_PAGES = 10
 DEFAULT_ENGINE_IDS = ('agent-platform-demo', 'us/gemini-enterprise-17649552_1764955289529')
 # 'auto' discovers every Gemini Enterprise app in these locations.
 DEFAULT_DISCOVERY_LOCATIONS = ('global', 'us', 'eu')
-ALLOWED_WINDOWS_HOURS = (1, 6, 24, 168)
+ALLOWED_WINDOWS_HOURS = (1, 6, 24, 168, 720, 2160, 4320, 8760)
 
 AGENT_TYPE_LABELS = {
     'ADK': 'ADK agent on Vertex AI Agent Engine',
