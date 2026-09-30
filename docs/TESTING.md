@@ -40,12 +40,17 @@ is shown as unknown, never as an invented value. These tests enforce it.
 | Dependency pins consistent across requirements, constraints and pyproject | `DeploymentHardeningTest.test_dependency_pins_are_consistent` |
 | Dashboard renders; JS is valid; every DOM id the JS uses exists | `VibeLiftFrameworkTest.test_http_server_renders_ui_and_executes_rest_api_end_to_end`, `test_dashboard_javascript_syntax_is_valid_and_pip_configured`, `test_all_js_dom_ids_exist_in_rendered_html_and_all_state_keys_surfaced` |
 | MCP / A2A / ADK surfaces work | `test_mcp_server_sync_dispatch_coverage`, `ProductionAppTest`, `test_adk_agent_tools` |
+| GE mart: unknown tokens, model, latency and rating stay `None`; spend is never modelled | `test_ge_mart.GeMartReaderTest` (`test_usage_log_keeps_unknowns_as_none`, `test_daily_usage_tokens_none_counts_zero`); `FleetSummaryFromMartTest.test_spend_is_never_modelled` |
+| GE mart: inference tokens attached to one turn per trace (no fan-out); stage defects stay fixed | `test_ge_mart.TemplateDefectFixTest` |
+| GE mart: provisioner renders every view, stubs missing or wrong-location sources, rejects bad identifiers | `test_ge_mart.ProvisionerTest` |
+| Daily cost: `None` when billing is not connected or the day is outside the exported range; unit costs `None` on a 0 or unknown denominator | `test_ge_mart.DailyCostJoinTest` |
 
 ## Adding a test
 
 Put it in the file for the module it covers: `test_fleet.py` (collection and inventory),
 `test_live_data_sources.py` (tokens, registrations, live FinOps, validator live checks),
-`test_honest_metrics.py` (billing, judge, live analytics), `test_vibelift.py` (HTTP, MCP, UI, deploy config).
+`test_honest_metrics.py` (billing, judge, live analytics), `test_ge_mart.py` (GE mart provisioner, SQL
+templates, mart readers, daily cost join), `test_vibelift.py` (HTTP, MCP, UI, deploy config).
 Any new dashboard number should come with a test showing it is `None` (not `0`) when its source is missing.
 
 > Tests were written alongside the features, not strictly test-first. The requirement map above is the

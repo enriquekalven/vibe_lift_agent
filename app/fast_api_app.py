@@ -44,8 +44,7 @@ except Exception:  # pylint: disable=broad-except
       allow_headers=['*'],
   )
 
-from vibelift import mcp_server
-from vibelift import server
+from vibelift import mcp_server, server
 
 controller = server._global_controller
 

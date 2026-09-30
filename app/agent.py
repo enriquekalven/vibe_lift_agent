@@ -4,10 +4,10 @@ Analyzes live Google Cloud Project telemetry, monitors Gemini Enterprise logs,
 diagnoses prompt cache breakpoints, and runs closed-loop AlphaEvolve optimization.
 """
 
-from collections.abc import MutableMapping
 import json
 import os
 import sys
+from collections.abc import MutableMapping
 
 # Ensure project root is in sys.path
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -19,10 +19,9 @@ from google.adk.apps import App
 from google.adk.models import Gemini
 from google.genai import types
 
-from vibelift import optimizer as alpha_evolve_optimizer
-from vibelift import gcp_telemetry
 from vibelift import fleet as ge_fleet
-from vibelift import telemetry
+from vibelift import gcp_telemetry, telemetry
+from vibelift import optimizer as alpha_evolve_optimizer
 
 MODEL_NAME = "gemini-2.5-flash"
 
@@ -83,7 +82,7 @@ def calculate_cache_economics(
   Returns:
       JSON string with cache hit ratio, naive cost, actual cost, and net savings in USD.
   """
-  card = telemetry.RATE_CARDS.get(model, telemetry.RATE_CARDS["gemini-3.1-flash"])
+  telemetry.RATE_CARDS.get(model, telemetry.RATE_CARDS["gemini-3.1-flash"])
   uncached = max(0, prompt_token_count - cached_content_token_count)
   log = telemetry.TurnUsageLog(
       timestamp="2026-09-25T15:00:00Z",
