@@ -110,6 +110,25 @@ def _to_int(value: Any) -> int:
     return 0
 
 
+# OTel GenAI cache-READ token attributes, in preference order. Only the first present key is used so
+# alias keys emitted side by side are never summed, and cache-creation/write counts (which are billed
+# differently and are not a subset of input) are never folded into "cached" tokens.
+_CACHE_READ_KEYS = (
+    'gen_ai.usage.cache_read.input_tokens',
+    'gen_ai.usage.cache_read_input_tokens',
+    'gen_ai.usage.cached_input_tokens',
+    'gen_ai.usage.cached_tokens',
+)
+
+
+def _cache_read_tokens(labels: dict[str, Any]) -> int:
+  """Returns cache-read input tokens from one span/log label set (0 when absent)."""
+  for key in _CACHE_READ_KEYS:
+    if labels.get(key) not in (None, ''):
+      return _to_int(labels.get(key))
+  return 0
+
+
 def _env_list(name: str, default: tuple[str, ...]) -> list[str]:
   raw = os.environ.get(name, '')
   values = [v.strip() for v in raw.split(',') if v.strip()]
@@ -283,9 +302,7 @@ def aggregate_trace_usage(traces: list[dict[str, Any]], engine_ids: list[str]) -
       st['llm_calls'] += 1
       st['input_tokens'] += _to_int(labels.get('gen_ai.usage.input_tokens'))
       st['output_tokens'] += _to_int(labels.get('gen_ai.usage.output_tokens'))
-      for key, value in labels.items():
-        if key.startswith('gen_ai.usage.') and 'cache' in key:
-          st['cached_tokens'] += _to_int(value)
+      st['cached_tokens'] += _cache_read_tokens(labels)
       conv = labels.get('gen_ai.conversation.id') or labels.get('gcp.vertex.agent.session_id')
       if conv:
         st['_conversations'].add(conv)
@@ -499,11 +516,16 @@ def _estimate_token_cost_usd(
     models: list[str] | None,
     rate_cards: dict[str, dict[str, float]],
 ) -> float | None:
+  # OTel gen_ai.usage.input_tokens INCLUDES cache-read tokens, so the cached share is billed once at
+  # the cached rate and only the remainder at the full input rate (never input + cached on top).
   in_tok = int(input_tokens or 0)
   out_tok = int(output_tokens or 0)
   cache_tok = int(cached_tokens or 0)
   if not (in_tok or out_tok or cache_tok):
     return 0.0
+  if in_tok:
+    cache_tok = min(cache_tok, in_tok)
+  uncached_in = max(in_tok - cache_tok, 0)
   card = None
   for m in models or []:
     if m in rate_cards:
@@ -512,7 +534,7 @@ def _estimate_token_cost_usd(
   if card is None:
     card = rate_cards.get('gemini-2.5-flash') or {'input': 0.30, 'output': 2.50, 'cached_read': 0.075}
   return round(
-      in_tok / 1e6 * card.get('input', 0.30)
+      uncached_in / 1e6 * card.get('input', 0.30)
       + out_tok / 1e6 * card.get('output', 2.50)
       + cache_tok / 1e6 * card.get('cached_read', 0.075),
       4,
@@ -551,9 +573,7 @@ def aggregate_ge_assistant_usage(traces: list[dict[str, Any]]) -> dict[str, Any]
       st['llm_calls'] += 1
       st['input_tokens'] += _to_int(labels.get('gen_ai.usage.input_tokens'))
       st['output_tokens'] += _to_int(labels.get('gen_ai.usage.output_tokens'))
-      for k, value in labels.items():
-        if k.startswith('gen_ai.usage.') and 'cache' in k:
-          st['cached_tokens'] += _to_int(value)
+      st['cached_tokens'] += _cache_read_tokens(labels)
       if labels.get('gen_ai.conversation.id'):
         st['_conversations'].add(labels['gen_ai.conversation.id'])
       model = labels.get('gen_ai.response.model') or labels.get('gen_ai.request.model')
@@ -1266,9 +1286,7 @@ class GeminiEnterpriseFleetService:
         s['llm_calls'] += 1
         s['input_tokens'] += _to_int(labels.get('gen_ai.usage.input_tokens'))
         s['output_tokens'] += _to_int(labels.get('gen_ai.usage.output_tokens'))
-        for key, value in labels.items():
-          if key.startswith('gen_ai.usage.') and 'cache' in key:
-            s['cached_tokens'] += _to_int(value)
+        s['cached_tokens'] += _cache_read_tokens(labels)
         if labels.get('gen_ai.conversation.id'):
           s['_conversations'].add(labels['gen_ai.conversation.id'])
         model = labels.get('gen_ai.response.model') or labels.get('gen_ai.request.model')

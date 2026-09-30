@@ -120,6 +120,19 @@ class LiveUserAnalyticsTest(unittest.TestCase):
     self.assertEqual(cohorts['global/app-a']['sessions_7d'], 57)
     self.assertEqual(cohorts['us/app-b']['primary_agent'], 'US')
 
+  def test_token_breakdown_uses_one_source(self):
+    fleet = dict(self._fleet(), totals={'input_tokens': 1000, 'output_tokens': 50, 'cached_tokens': 400})
+    users = [{'user_ldap': 'a', 'status': 'LIVE_HUMAN_PRINCIPAL', 'sessions_7d': 1}]
+    uc = alpha_evolve_optimizer.build_user_centric_analytics(None, live_fleet=fleet, live_bq={'power_users_ldap': users})
+    tcb = uc['token_category_breakdown']
+    self.assertEqual((tcb['observed_gcp_prompt_tokens'], tcb['observed_gcp_output_tokens'],
+                      tcb['observed_gcp_cached_tokens'], tcb['observed_gcp_cache_hit_pct']), (1000, 50, 400, 40.0))
+    # A BigQuery prompt total without a cached total must not borrow the fleet's cached count.
+    bq = {'power_users_ldap': users, 'otel_total_prompt_tokens': 5000, 'otel_total_output_tokens': 70}
+    tcb = alpha_evolve_optimizer.build_user_centric_analytics(None, live_fleet=fleet, live_bq=bq)['token_category_breakdown']
+    self.assertEqual((tcb['observed_gcp_prompt_tokens'], tcb['observed_gcp_output_tokens'],
+                      tcb['observed_gcp_cached_tokens'], tcb['observed_gcp_cache_hit_pct']), (5000, 70, 0, 0.0))
+
   def test_alerts_derived_from_fleet_once_per_runtime(self):
     alerts = alpha_evolve_optimizer.build_live_runaway_alerts(self._fleet())
     kinds = [a['alert_id'].split('-')[0] for a in alerts]

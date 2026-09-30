@@ -138,6 +138,17 @@ class SessionTokenDrilldownTest(unittest.TestCase):
     self.assertEqual(s2['turn_detail'], [])
     self.assertFalse(s2['turn_detail_complete'])
 
+  def test_duplicate_session_rows_are_not_double_counted(self):
+    sessions = [ge_mart.session_from_row(r, 'project-maui') for r in _SESSION_ROWS]
+    turns = ge_mart.group_session_turns(_TURN_ROWS)
+    single = finops.build_session_token_drilldown(sessions, turns)
+    doubled = finops.build_session_token_drilldown(sessions + [dict(s) for s in sessions], turns)
+    self.assertEqual(doubled['session_count'], single['session_count'])
+    self.assertEqual(doubled['totals'], single['totals'])
+    self.assertEqual(doubled['users'], single['users'])
+    # Totals always equal the sum of the per-user rollups.
+    self.assertEqual(doubled['totals']['total_tokens'], sum(u['total_tokens'] or 0 for u in doubled['users']))
+
   def test_empty_and_bad_inputs(self):
     dd = finops.build_session_token_drilldown(None, None)
     self.assertEqual(dd['session_count'], 0)

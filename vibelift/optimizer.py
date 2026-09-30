@@ -1157,9 +1157,17 @@ def build_user_centric_analytics(
     if isinstance(live_skills, list) and live_skills:
       skill_mcp_breakdown = list(live_skills)
     fleet_totals = live_fleet.get('totals') if isinstance(live_fleet, Mapping) and isinstance(live_fleet.get('totals'), Mapping) else {}
-    obs_in = int(live_bq.get('otel_total_prompt_tokens') or fleet_totals.get('input_tokens') or 0)
-    obs_out = int(live_bq.get('otel_total_output_tokens') or fleet_totals.get('output_tokens') or 0)
-    obs_cached = int(live_bq.get('otel_total_cached_tokens') or fleet_totals.get('cached_tokens') or 0)
+    # Take prompt, output and cached tokens from ONE source so the cache-hit ratio never divides one
+    # source's cached count by another source's prompt count (and categories are never mixed).
+    if live_bq.get('otel_total_prompt_tokens') is not None:
+      token_src = {'in': live_bq.get('otel_total_prompt_tokens'), 'out': live_bq.get('otel_total_output_tokens'),
+                   'cached': live_bq.get('otel_total_cached_tokens')}
+    else:
+      token_src = {'in': fleet_totals.get('input_tokens'), 'out': fleet_totals.get('output_tokens'),
+                   'cached': fleet_totals.get('cached_tokens')}
+    obs_in = int(token_src['in'] or 0)
+    obs_out = int(token_src['out'] or 0)
+    obs_cached = int(token_src['cached'] or 0)
     token_category_breakdown['observed_gcp_prompt_tokens'] = obs_in
     token_category_breakdown['observed_gcp_cached_tokens'] = obs_cached
     token_category_breakdown['observed_gcp_output_tokens'] = obs_out

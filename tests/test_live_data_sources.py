@@ -65,6 +65,48 @@ class GeAssistantTraceTokensTest(unittest.TestCase):
     self.assertEqual(out['totals']['llm_calls'], 0)
 
 
+_CARD = {'m': {'input': 1.0, 'output': 10.0, 'cached_read': 0.25}}
+
+
+class TokenAccountingNoDoubleCountTest(unittest.TestCase):
+  """OTel input_tokens already include cache reads; cached tokens must never be counted twice."""
+
+  def test_cost_bills_cached_share_once(self):
+    # 1M input of which 400k were cache reads, 100k output:
+    # 600k * $1 + 400k * $0.25 + 100k * $10 = 0.6 + 0.1 + 1.0 = $1.70 (not $2.20 = input billed in full + cache).
+    self.assertEqual(ge_fleet._estimate_token_cost_usd(1_000_000, 100_000, 400_000, ['m'], _CARD), 1.7)
+
+  def test_cost_without_cache_and_with_bad_cache_value(self):
+    self.assertEqual(ge_fleet._estimate_token_cost_usd(1_000_000, 0, 0, ['m'], _CARD), 1.0)
+    # A cached count larger than input is clamped to input (never negative uncached tokens).
+    self.assertEqual(ge_fleet._estimate_token_cost_usd(1_000_000, 0, 5_000_000, ['m'], _CARD), 0.25)
+    self.assertEqual(ge_fleet._estimate_token_cost_usd(0, 0, 0, ['m'], _CARD), 0.0)
+
+  def test_cache_read_uses_one_key_and_ignores_cache_writes(self):
+    labels = {'gen_ai.usage.input_tokens': '14146',
+              'gen_ai.usage.cache_read.input_tokens': '9932',
+              'gen_ai.usage.cache_read_input_tokens': '9932',       # alias of the same count
+              'gen_ai.usage.cache_creation.input_tokens': '4000'}   # cache WRITE, not a cache hit
+    self.assertEqual(ge_fleet._cache_read_tokens(labels), 9932)
+    self.assertEqual(ge_fleet._cache_read_tokens({'gen_ai.usage.cached_tokens': '7'}), 7)
+    self.assertEqual(ge_fleet._cache_read_tokens({'gen_ai.usage.cache_creation.input_tokens': '4000'}), 0)
+    self.assertEqual(ge_fleet._cache_read_tokens({}), 0)
+
+  def test_trace_and_ge_aggregators_count_cache_reads_once(self):
+    extra = {'gen_ai.usage.cache_read.input_tokens': '60', 'gen_ai.usage.cache_read_input_tokens': '60',
+             'gen_ai.usage.cache_creation.input_tokens': '25'}
+    tr = _trace(100, 10)
+    for sp in tr['spans'][1:]:
+      sp['labels'].update(extra)
+    st = ge_fleet.aggregate_trace_usage([tr], [RE])[RE]
+    self.assertEqual((st['llm_calls'], st['input_tokens'], st['cached_tokens']), (1, 100, 60))
+    ge = _ge_trace(1000, 20)
+    ge['spans'][1]['labels'].update(extra)
+    out = ge_fleet.aggregate_ge_assistant_usage([ge])
+    self.assertEqual(out['by_engine']['us/ge-app-1']['cached_tokens'], 60)
+    self.assertEqual(out['totals']['cached_tokens'], 60)
+
+
 def _agent(requests):
   return {'type': 'ADK', 'display_name': 'my-capital-agent', 'data_sources': [], 'notes': [],
           'backend': {'kind': 'agent_engine', 'resource': RESOURCE, 'reasoning_engine_id': RE,

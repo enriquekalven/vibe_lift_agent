@@ -342,8 +342,13 @@ def build_session_token_drilldown(
 
   by_session: dict[str, dict[str, Any]] = {}
   users: dict[str, dict[str, Any]] = {}
+  kept: list[Mapping[str, Any]] = []
   for s in sessions:
     key = str(s.get('session_key') or f"{s.get('engine_key') or ''}|{s.get('session_id') or ''}")
+    if key in by_session:
+      # A session row seen twice would double count its tokens in the user rollup and totals.
+      continue
+    kept.append(s)
     turns = [dict(t) for t in session_turns.get(key) or [] if isinstance(t, Mapping)]
     turn_count = int(s.get('turns') or 0)
     by_session[key] = {
@@ -385,7 +390,7 @@ def build_session_token_drilldown(
       'source': 'vibelift_mart.fct_sessions + vibelift_mart.fct_turns (token counts only; no prompt text)',
       'session_count': len(by_session),
       'user_count': len(user_rows),
-      'totals': {k: _sum_known([s.get(k) for s in sessions]) for k in SESSION_TOKEN_KEYS},
+      'totals': {k: _sum_known([s.get(k) for s in kept]) for k in SESSION_TOKEN_KEYS},
       'users': user_rows,
       'sessions': by_session,
   }
