@@ -175,6 +175,35 @@ EXTRA_ENV=""
 if [[ -n "${VIBELIFT_BILLING_EXPORT_TABLE:-}" ]]; then
   EXTRA_ENV=";VIBELIFT_BILLING_EXPORT_TABLE=${VIBELIFT_BILLING_EXPORT_TABLE}"
 fi
+# `gcloud run deploy --source` builds with Cloud Build, which runs as the Compute Engine default service
+# account. Orgs that enforce iam.automaticIamGrantsForDefaultServiceAccounts (Argolis, and every org
+# created after May 3, 2024) give that account no roles, so the build fails unless it holds
+# roles/run.builder (https://cloud.google.com/run/docs/deploying-source-code).
+BUILD_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+if ! gcloud iam service-accounts describe "${BUILD_SA}" --project="${PROJECT_ID}" &>/dev/null; then
+  echo "Enabling the Compute Engine API so the default service account used by Cloud Build exists..."
+  gcloud services enable compute.googleapis.com --project="${PROJECT_ID}"
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    gcloud iam service-accounts describe "${BUILD_SA}" --project="${PROJECT_ID}" &>/dev/null && break
+    sleep 5
+  done
+fi
+HAS_BUILDER="$(gcloud projects get-iam-policy "${PROJECT_ID}" --flatten='bindings[].members' \
+    --filter="bindings.role=roles/run.builder AND bindings.members=serviceAccount:${BUILD_SA}" \
+    --format='value(bindings.role)' 2>/dev/null || true)"
+if [[ -z "${HAS_BUILDER}" ]]; then
+  echo "Granting roles/run.builder to the Cloud Build service account ${BUILD_SA}..."
+  if gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+      --member="serviceAccount:${BUILD_SA}" --role="roles/run.builder" \
+      --condition=None --quiet >/dev/null; then
+    echo "Waiting 60s for the new build permission to propagate..."
+    sleep 60
+  else
+    warn "could not grant roles/run.builder to ${BUILD_SA}; the source build may fail with PERMISSION_DENIED."
+    IAM_FAILURES=$((IAM_FAILURES + 1))
+  fi
+fi
+
 echo "Building and deploying container to Cloud Run..."
 gcloud run deploy "${SERVICE_NAME}" \
     --source . \
@@ -196,6 +225,9 @@ gcloud run deploy "${SERVICE_NAME}" \
 # The service is private, so Gemini Enterprise needs permission to call /mcp. The Discovery Engine
 # service agent is the identity granted roles/run.invoker on the verified deployment.
 DE_SERVICE_AGENT="service-${PROJECT_NUMBER}@gcp-sa-discoveryengine.iam.gserviceaccount.com"
+# The service agent is created lazily; make sure it exists before binding it (no-op when it does).
+gcloud beta services identity create --service=discoveryengine.googleapis.com \
+    --project="${PROJECT_ID}" &>/dev/null || true
 echo "Granting roles/run.invoker on ${SERVICE_NAME} to ${DE_SERVICE_AGENT}..."
 if ! gcloud run services add-iam-policy-binding "${SERVICE_NAME}" \
     --project="${PROJECT_ID}" \

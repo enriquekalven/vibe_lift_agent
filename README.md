@@ -273,7 +273,7 @@ flowchart LR
 ### 0. Prerequisites
 
 **Tools on your machine**
-- [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) with `bq` (bundled), logged in: `gcloud auth login` and `gcloud auth application-default login`.
+- [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) with `bq` (bundled), logged in: `gcloud auth login` and `gcloud auth application-default login`. In Argolis, log in both with your Argolis account (for example `admin@YOUR_LDAP.altostrat.com`) and make it active (`gcloud config set account ...`); your `@google.com` account usually has no access to Argolis projects.
 - Python 3.12+ with the project dependencies (`deploy_cloud_run.sh` runs the test suite locally before deploying, and `setup_bigquery_sink.sh` runs `provision_ge_mart.py`):
   ```bash
   python3 -m venv .venv && source .venv/bin/activate
@@ -285,7 +285,26 @@ flowchart LR
 **Google Cloud**
 - A project with billing enabled, selected with `gcloud config set project PROJECT_ID`.
 - An existing **Gemini Enterprise app** in that project (VibeLift observes and registers into it; it does not create one). Note its app ID and location (`global`, `us` or `eu`).
-- **Your permissions.** Project **Owner** is the simplest. Otherwise you need roughly: Service Usage Admin, Service Account Admin, Role Administrator (for the custom `vibeLiftGeFleetReader` role), Project IAM Admin, Cloud Run Admin, Cloud Build Editor, Artifact Registry Admin, Storage Admin (source upload bucket), Service Account User on the runtime SA, Logs Configuration Writer, BigQuery Admin, and Discovery Engine Admin (agent registration). This list has not been tested as a minimal set; if a step fails with `PERMISSION_DENIED`, the error names the missing permission.
+- **Your permissions.** Project **Owner** is the simplest. Otherwise you need roughly: Service Usage Admin, Service Account Admin, Role Administrator (for the custom `vibeLiftGeFleetReader` role), Project IAM Admin, Cloud Run Admin, Cloud Build Editor, Artifact Registry Admin, Storage Admin (source upload bucket), Service Account User on the runtime SA, Logs Configuration Writer, BigQuery Admin, Discovery Engine Admin, **Gemini Enterprise Admin** (A2A agent registration) and **Discovery Engine Editor** (custom MCP server data store). This list has not been tested as a minimal set; if a step fails with `PERMISSION_DENIED`, the error names the missing permission.
+- **Organization Policy Administrator** (`roles/orgpolicy.policyAdmin`) on the project, or someone who has it, to allow custom MCP servers (see below). In Argolis you normally administer your own organization and can grant it to yourself.
+
+**OAuth client: not needed.** VibeLift does not need an OAuth client ID or consent screen:
+- Gemini Enterprise calls the private Cloud Run service with a Google-signed ID token for its Discovery Engine service agent (`X-Serverless-Authorization` header), for both the A2A agent and the custom MCP server. `deploy_cloud_run.sh` grants that agent `roles/run.invoker` on the service. This only works with the default `*.run.app` URL, not a custom domain.
+- The dashboard reads all telemetry with its own runtime service account, never with the end user's token.
+- You and your teammates open the dashboard with `gcloud` credentials (proxy or identity token), not a browser OAuth flow.
+
+An OAuth client is only needed if you change VibeLift to act *as the signed-in user*; see [Optional: end-user OAuth](#optional-end-user-oauth-not-used-by-vibelift).
+
+**Argolis and other new organizations.** These org defaults break a naive deploy; the scripts handle the first one, the rest need you:
+
+| Org default | Effect | What to do |
+| :--- | :--- | :--- |
+| `iam.automaticIamGrantsForDefaultServiceAccounts` (enforced in orgs created after May 3, 2024) | The Compute Engine default service account, which Cloud Build uses for `gcloud run deploy --source`, has no roles, so the build fails | Handled: `deploy_cloud_run.sh` grants it `roles/run.builder` (enabling the Compute Engine API first if the account does not exist) |
+| Managed constraint *Disable custom MCP server connector for Gemini Enterprise* | The *Custom MCP Server* data store cannot be created | Turn it off for your project: *IAM & Admin > Organization Policies*, filter by that name, *Manage policy > Override parent's policy*, add a rule with enforcement **Off**, *Set policy*. Only if the project is VPC Service Controls-protected or listed in the data-connector policy's `enforcedProjects`: also add `custom_mcp` to *Restrict allowed data sources for data connectors* and your `vibe-lift-agent-PROJECT_NUMBER.REGION.run.app` host to *Restrict egress domains for data connectors*. ([docs](https://cloud.google.com/gemini/enterprise/docs/connectors/custom-mcp-server/override-constraint-for-custom-mcp-data-stores)) |
+| Domain restricted sharing (`iam.allowedPolicyMemberDomains`) | IAM grants to accounts outside your org fail | Put only principals from your Argolis domain in `VIBELIFT_INVOKERS` (for example `user:admin@YOUR_LDAP.altostrat.com`), not `@google.com` accounts. |
+
+> [!NOTE]
+> These scripts were run end to end in `project-maui` (a `google.com` project). The Argolis rows above come from Google's documentation and have not yet been run in an Argolis project. If a step fails there, the error names the missing permission or policy.
 
 ### 1. Turn on Gemini Enterprise and audit logging (console, one time)
 
@@ -342,8 +361,9 @@ The script:
 3. Creates the runtime service account `vibe-lift-runtime-sa@PROJECT_ID.iam.gserviceaccount.com`.
 4. Creates/updates the custom role `vibeLiftGeFleetReader` (`discoveryengine.engines.get`, `assistants.list`, `agents.list`, `agents.get`, `agents.manage`) so `agents.list` returns agents created by any user, without agent admin rights.
 5. Grants the runtime SA: `discoveryengine.viewer`, `vibeLiftGeFleetReader`, `aiplatform.viewer`, `aiplatform.user` (Gemini calls from the ADK agent and LLM judge), `logging.viewer`, `monitoring.viewer`, `cloudtrace.user`, `run.viewer`, `container.clusterViewer` (GKE discovery), `bigquery.dataViewer`, `bigquery.jobUser`, plus `WRITER` (Data Editor) on the `vibelift_mart` dataset's access list only (the dashboard's *Refresh Mart* button). If the mart does not exist yet, re-run the script after step 2.
-6. Deploys the private service (`--no-allow-unauthenticated`, 1 vCPU, 1 GiB, min 1 / max 10 instances) from source.
-7. Grants `roles/run.invoker` to the Discovery Engine service agent (`service-PROJECT_NUMBER@gcp-sa-discoveryengine.iam.gserviceaccount.com`) so Gemini Enterprise can call `/mcp`, and to anyone in `VIBELIFT_INVOKERS`.
+6. Grants the Cloud Build service account (Compute Engine default SA) `roles/run.builder` if it lacks it, which orgs such as Argolis require for source deploys, and waits 60 s for it to propagate.
+7. Deploys the private service (`--no-allow-unauthenticated`, 1 vCPU, 1 GiB, min 1 / max 10 instances) from source.
+8. Creates the Discovery Engine service agent if needed and grants it `roles/run.invoker` (`service-PROJECT_NUMBER@gcp-sa-discoveryengine.iam.gserviceaccount.com`) so Gemini Enterprise can call `/mcp`, and to anyone in `VIBELIFT_INVOKERS`.
 
 It is safe to re-run. Env vars are merged, so values set by hand on the service are kept.
 
@@ -365,15 +385,26 @@ GE_LOCATION=global ./deploy/register_ge_agent.sh GE_APP_ID
 
 The script checks the service with your identity token, re-applies the Discovery Engine service agent invoker binding, publishes the A2A agent with `agents-cli publish gemini-enterprise --registration-type a2a`, and prints the values for the MCP connector.
 
-Then attach the **BYO MCP connector** (side-panel dashboard) in the console, in the tools / actions / MCP section of your app. Labels change between console releases; the values are:
+The A2A registration needs the **Gemini Enterprise Admin** role. No OAuth authorization is attached; if you register in the console instead (*Agents > Add agents > Custom agent via A2A*), click **Skip & Finish** at the OAuth step.
+
+**Custom MCP server (side-panel dashboard).** In Gemini Enterprise this is a *data store*, created in the console ([docs](https://cloud.google.com/gemini/enterprise/docs/connectors/custom-mcp-server/set-up-custom-mcp-server)). First allow custom MCP servers with the org policy override in step 0, and make sure you have **Discovery Engine Editor**. Then:
+
+1. *Console > Gemini Enterprise > Data stores > Create data store*, search **Custom MCP Server**, click **Add MCP server**.
+2. Authentication: **No authentication**. The service stays private: for `*.run.app` URLs Gemini Enterprise sends a Google-signed ID token for its service agent, which step 3 made an invoker.
+3. Fill in the values below, click **Continue**, pick the same multi-region as your app, name it and click **Create**.
+4. When the data store is **Active**: open it, *Actions > Reload custom actions*, select the actions and click **Enable actions**. All actions start disabled.
+5. If the data store is not connected to your app yet, connect it (Google docs: *Connect a data store to an app and authorize Gemini Enterprise*).
 
 | Field | Value |
 | :--- | :--- |
-| Name | `vibelift-analytics-mcp` |
-| Endpoint URL | `https://vibe-lift-agent-PROJECT_NUMBER.REGION.run.app/mcp` |
-| Transport | Streamable HTTP, JSON-RPC 2.0, MCP `2025-06-18` (also accepts `2025-03-26`) |
+| Data store name | `vibelift-analytics-mcp` |
+| MCP Server URL | `https://vibe-lift-agent-PROJECT_NUMBER.REGION.run.app/mcp` (the default Cloud Run URL; a custom domain does not receive the ID token) |
+| Authentication | No authentication (no OAuth client) |
+| Location | Same multi-region as your Gemini Enterprise app (`global`, `us` or `eu`) |
+| Transport | Streamable HTTP (the only transport Gemini Enterprise supports), JSON-RPC 2.0, MCP `2025-06-18` (also accepts `2025-03-26`) |
 | UI resource | `ui://vibelift-analytics/dashboard` (`text/html;profile=mcp-app`) |
-| Auth | Keep the service private. Gemini Enterprise calls it as the Discovery Engine service agent, which step 3 granted `roles/run.invoker`. |
+
+Read-only tools declare `readOnlyHint`, so they run without a confirmation prompt. `run_alpha_evolve_generation` changes state, so Gemini Enterprise asks the user to confirm it.
 
 Exposed MCP tools:
 - `open_dashboard`: renders the VibeLift dashboard in the Gemini Enterprise right side panel (with Fullscreen and PDF export).
@@ -382,6 +413,17 @@ Exposed MCP tools:
 - `calculate_prompt_cache_economics`: prompt prefix cache hit rates and savings.
 - `run_alpha_evolve_generation`: one closed-loop optimization generation (`alpha_evolve`, `opus_critic`, `vertex_vizier`, `hybrid_ensemble`).
 - `get_vibelift_state`: active agent state, parameters and turn trajectory.
+
+#### Optional: end-user OAuth (not used by VibeLift)
+
+Skip this unless you change VibeLift to call Google APIs *as the signed-in user*. Today it would add a consent prompt and change no numbers, because every metric is read with the runtime service account. If you do need it:
+1. *APIs & Services > OAuth consent screen* (Google Auth Platform): if prompted, configure it with user type **Internal**.
+2. *APIs & Services > Credentials > Create credentials > OAuth client ID*, application type **Web application**, with these authorized redirect URIs:
+   - `https://vertexaisearch.cloud.google.com/oauth-redirect`
+   - `https://vertexaisearch.cloud.google.com/static/oauth/oauth.html`
+3. Download the JSON (client ID, client secret, auth URI, token URI). Enter these values in the A2A agent's OAuth step, or choose **OAuth 2.0** instead of *No authentication* on the MCP data store, together with the scopes your code needs.
+
+Gemini Enterprise then sends the user's token in the `Authorization` header, and the service agent's ID token still goes in `X-Serverless-Authorization`. Your code has to read the user token. See [Register and manage A2A agents](https://cloud.google.com/gemini/enterprise/docs/register-and-manage-an-a2a-agent) and [Set up a custom MCP server](https://cloud.google.com/gemini/enterprise/docs/connectors/custom-mcp-server/set-up-custom-mcp-server).
 
 ### 5. Verify
 
@@ -471,6 +513,10 @@ Operators can filter by Gemini Enterprise app, standalone runtimes and time wind
 | *Refresh Mart* button fails | Runtime SA lacks write access on `vibelift_mart` | Re-run `deploy_cloud_run.sh` after the mart exists (adds the runtime SA as `WRITER` on that dataset). |
 | Judge/ADK agent errors mentioning `aiplatform.endpoints.predict` | Runtime SA lacks `roles/aiplatform.user` | Re-run `deploy_cloud_run.sh`. |
 | Billed cost shows unknown | `VIBELIFT_BILLING_EXPORT_TABLE` unset or unreadable | See "Cost data" in step 3. |
+| Source build fails with `PERMISSION_DENIED` (for example on `storage.objects.get` or Artifact Registry) | Cloud Build service account has no roles (`iam.automaticIamGrantsForDefaultServiceAccounts`, Argolis) | Re-run `deploy_cloud_run.sh` (grants `roles/run.builder` to `PROJECT_NUMBER-compute@developer.gserviceaccount.com`); wait 2 minutes if the grant was just made. |
+| *Custom MCP Server* is missing or creation is blocked | Managed org constraint *Disable custom MCP server connector for Gemini Enterprise* | Override it for the project (step 0, Argolis table); you need `roles/orgpolicy.policyAdmin`. |
+| MCP data store stays in error, or actions do not load | Wrong URL (custom domain, missing `/mcp`), the service agent is not an invoker, or egress is restricted | Use `https://vibe-lift-agent-PROJECT_NUMBER.REGION.run.app/mcp`; re-run `register_ge_agent.sh`; if the project is VPC-SC protected, allow `custom_mcp` and the host in the data-connector policies. Then *Actions > Reload custom actions*. |
+| `VIBELIFT_INVOKERS` grant fails with a domain / organization error | Domain restricted sharing | Use principals from your own org domain (in Argolis, `@YOUR_LDAP.altostrat.com`). |
 | Deploy aborts before building | Local tests or `ruff` failed, or dependencies not installed | `pip install -r requirements.txt -c constraints.txt`, then fix the failure shown. |
 | `IAM grant(s) failed` warning at the end of a script | Your account cannot set IAM policy | Ask a project Owner to re-run the script, or apply the listed grants. |
 

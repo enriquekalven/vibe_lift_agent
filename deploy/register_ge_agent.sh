@@ -65,6 +65,8 @@ echo ""
 echo "--- Step 2: Verifying Discovery Engine IAM Invoker ---"
 DE_SA="service-${PROJECT_NUMBER}@gcp-sa-discoveryengine.iam.gserviceaccount.com"
 echo "Ensuring ${DE_SA} has roles/run.invoker on ${SERVICE_NAME}..."
+gcloud beta services identity create --service=discoveryengine.googleapis.com \
+    --project="${PROJECT_ID}" &>/dev/null || true
 if ! gcloud run services add-iam-policy-binding "${SERVICE_NAME}" \
     --project="${PROJECT_ID}" \
     --region="${REGION}" \
@@ -78,6 +80,8 @@ fi
 # 3. Register the A2A agent (the Cloud Run service publishes its card at /a2a/app/.well-known/agent-card.json).
 echo ""
 echo "--- Step 3: Registering A2A Agent with Gemini Enterprise ---"
+echo "Needs the Gemini Enterprise Admin role. No OAuth authorization is attached: VibeLift reads telemetry with"
+echo "its own runtime service account, not the end user's token (in the console, choose 'Skip & Finish')."
 GE_APP_RESOURCE="projects/${PROJECT_NUMBER}/locations/${GE_LOCATION}/collections/default_collection/engines/${GE_ENGINE_ID}"
 
 if command -v agents-cli &>/dev/null; then
@@ -96,18 +100,28 @@ else
   echo "Console > Gemini Enterprise > Apps > ${GE_ENGINE_ID} > Agents using the card URL above."
 fi
 
-# 4. The BYO MCP connector (side-panel dashboard) is attached in the console.
+# 4. The custom MCP server (side-panel dashboard) is a Gemini Enterprise *data store*, created in the console.
+#    Official steps: https://cloud.google.com/gemini/enterprise/docs/connectors/custom-mcp-server/set-up-custom-mcp-server
 echo ""
-echo "--- Step 4: BYO MCP Server Configuration (console) ---"
-echo "Attach VibeLift as a custom MCP server in your Gemini Enterprise app. Console labels change between"
-echo "releases; look for the tools / actions / MCP section of the app (Console > Gemini Enterprise > Apps >"
-echo "${GE_ENGINE_ID}) and use these values:"
-echo "     - Name:          vibelift-analytics-mcp"
-echo "     - Endpoint URL:  ${MCP_URL}"
-echo "     - Transport:     Streamable HTTP, JSON-RPC 2.0 (MCP 2025-06-18)"
-echo "     - UI Resource:   ui://vibelift-analytics/dashboard"
-echo "     - Auth:          none/Google-managed. The service is private; GE calls it as ${DE_SA},"
-echo "                      which Step 2 granted roles/run.invoker. Do not make the service public."
+echo "--- Step 4: Custom MCP server data store (console) ---"
+echo "Before you start (once per project):"
+echo "  - Org policy: 'Disable custom MCP server connector for Gemini Enterprise' blocks this by default."
+echo "    An Organization Policy Administrator turns it off for this project: Console > IAM & Admin >"
+echo "    Organization Policies > filter that name > Manage policy > Override parent's policy > rule OFF."
+echo "  - Your account needs Discovery Engine Editor (roles/discoveryengine.editor)."
+echo "Then: Console > Gemini Enterprise > Data stores > Create data store > search 'Custom MCP Server' >"
+echo "Add MCP server, and use:"
+echo "     - Authentication:  No authentication  (no OAuth client needed; see below)"
+echo "     - MCP Server URL:  ${MCP_URL}"
+echo "     - Location:        the same multi-region as your app (${GE_LOCATION})"
+echo "     - Data store name: vibelift-analytics-mcp"
+echo "  After it shows Active: open it > Actions > Reload custom actions > select the actions > Enable actions,"
+echo "  and connect the data store to app ${GE_ENGINE_ID} if it is not connected yet."
+echo "  Auth: the service stays private. For default *.run.app URLs Gemini Enterprise sends a Google-signed"
+echo "  ID token for ${DE_SA} (X-Serverless-Authorization), which Step 2 granted roles/run.invoker."
+echo "  This does not work with a custom domain. Do not make the service public."
+echo "  Read-only tools declare readOnlyHint, so they run without a confirmation prompt;"
+echo "  run_alpha_evolve_generation changes state and asks the user to confirm."
 echo "  Tools exposed by the server:"
 echo "     - open_dashboard (opens Right Side Panel with Fullscreen toggle)"
 echo "     - query_ge_agent_fleet (live multi-engine agent inventory and telemetry)"
