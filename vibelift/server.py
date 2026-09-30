@@ -454,7 +454,7 @@ class VibeLiftRuntimeController:
     telemetry.log_csat_rating(
         session_id=str(raw.get('session_id') or '6446120131357637190'),
         event_id=str(raw.get('event_id') or 'evt-9f81c204-aive'),
-        user_email=str(raw.get('user_email') or 'enriq@google.com'),
+        user_email=str(raw.get('user_email') or 'sme-demo@example.com'),
         rating=rating,
         feedback_text=str(raw.get('feedback_text') or 'Verified SME closed-loop optimization guardrail.'),
     )
@@ -466,13 +466,13 @@ class VibeLiftRuntimeController:
     active = self.optimizer.active_agent
     telemetry.log_agent_generation_event(
         session_id=str(raw.get('session_id') or '6446120131357637190'),
-        user_email=str(raw.get('user_email') or 'enriq@google.com'),
+        user_email=str(raw.get('user_email') or 'sme-demo@example.com'),
         company_name=str(raw.get('company_name') or 'Google Cloud'),
         department=str(raw.get('department') or 'Cloud AI & Agent Platform'),
         task_type=str(raw.get('task_type') or 'FLEET_OPTIMIZATION_AUDIT'),
         prompts=[str(raw.get('prompt') or 'Execute @with_analytics_logging telemetry turn')],
         outputs=[{
-            'gcs_uri': str(raw.get('gcs_uri') or f'gs://project-maui-aive-assets/{active.agent_id}_turn.json'),
+            'gcs_uri': str(raw.get('gcs_uri') or f'gs://vibelift-aive-assets/{active.agent_id}_turn.json'),
             'media_type': str(raw.get('media_type') or 'APPLICATION_JSON'),
             'mime_type': str(raw.get('mime_type') or 'application/json'),
         }],

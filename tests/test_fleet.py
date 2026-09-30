@@ -398,6 +398,25 @@ class GeFleetDiscoveryTest(unittest.TestCase):
     self.assertEqual(len(payload['agents']), 3)
     self.assertTrue(any('app discovery (us)' in e['source'] for e in payload['errors']))
 
+  def test_auto_with_no_apps_reports_error_instead_of_hardcoded_engines(self):
+    api = FakeGoogleApi()
+    listing_path = ENGINE_PATH.rsplit('/', 1)[0]
+    original = api._discovery
+
+    def discovery(path, query):
+      if path == listing_path:
+        return {'engines': []}
+      return original(path, query)
+
+    api._discovery = discovery
+    service = ge_fleet.GeminiEnterpriseFleetService(
+        project_id=PROJECT, engine_ids=['auto'], location='global', collection='default_collection', api=api)
+    service.discovery_locations = ['global']
+    payload = service.collect(window_hours=24)
+    self.assertEqual(payload['engines'], [])
+    self.assertEqual(payload['agents'], [])
+    self.assertTrue(any('No Gemini Enterprise apps found' in e['detail'] for e in payload['errors']))
+
 
 class GeFleetRuntimeDedupeTest(unittest.TestCase):
 

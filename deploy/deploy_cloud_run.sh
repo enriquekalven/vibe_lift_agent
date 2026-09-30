@@ -111,10 +111,14 @@ ROLES=(
     "roles/discoveryengine.viewer"
     "projects/${PROJECT_ID}/roles/${FLEET_ROLE_ID}"
     "roles/aiplatform.viewer"
+    # The ADK root agent and the LLM-as-judge audit call Gemini on Vertex AI (predict/generateContent).
+    "roles/aiplatform.user"
     "roles/logging.viewer"
     "roles/monitoring.viewer"
     "roles/cloudtrace.user"
     "roles/run.viewer"
+    # GKE cluster listing for the unregistered-workload discovery (read-only).
+    "roles/container.clusterViewer"
     "roles/bigquery.dataViewer"
     "roles/bigquery.jobUser"
 )
@@ -131,6 +135,23 @@ for ROLE in "${ROLES[@]}"; do
     IAM_FAILURES=$((IAM_FAILURES + 1))
   fi
 done
+
+# The dashboard's "Refresh Mart" button (POST /api/ge_mart/refresh) runs CREATE OR REPLACE TABLE
+# vibelift_mart.fct_turns, so the runtime SA needs write access on that dataset only (not project-wide).
+MART_DATASET="${VIBELIFT_GE_MART_DATASET:-vibelift_mart}"
+if bq --project_id="${PROJECT_ID}" show --format=none "${PROJECT_ID}:${MART_DATASET}" &>/dev/null; then
+  echo "Granting roles/bigquery.dataEditor on dataset ${MART_DATASET} to ${SA_EMAIL}..."
+  if ! bq add-iam-policy-binding --dataset \
+      --member="serviceAccount:${SA_EMAIL}" \
+      --role="roles/bigquery.dataEditor" \
+      "${PROJECT_ID}:${MART_DATASET}" > /dev/null; then
+    warn "could not grant dataEditor on ${MART_DATASET}; the dashboard's Refresh Mart button will fail."
+    IAM_FAILURES=$((IAM_FAILURES + 1))
+  fi
+else
+  echo "Dataset ${MART_DATASET} not found; run deploy/setup_bigquery_sink.sh, then re-run this script"
+  echo "so the runtime SA can refresh the mart from the dashboard."
+fi
 
 # Deploy container directly from source to Cloud Run. Sizing matches the verified production service.
 # "auto" discovers every Gemini Enterprise app in global/us/eu; set an explicit list to pin apps.
@@ -175,11 +196,41 @@ if ! gcloud run services add-iam-policy-binding "${SERVICE_NAME}" \
   IAM_FAILURES=$((IAM_FAILURES + 1))
 fi
 
+# Optional: let teammates open the private dashboard. Comma-separated IAM members, for example
+#   VIBELIFT_INVOKERS="user:alice@example.com,group:finops@example.com"
+if [[ -n "${VIBELIFT_INVOKERS:-}" ]]; then
+  IFS=',' read -r -a INVOKERS <<< "${VIBELIFT_INVOKERS}"
+  for MEMBER in "${INVOKERS[@]}"; do
+    MEMBER="$(echo "${MEMBER}" | xargs)"
+    [[ -z "${MEMBER}" ]] && continue
+    echo "Granting roles/run.invoker on ${SERVICE_NAME} to ${MEMBER}..."
+    if ! gcloud run services add-iam-policy-binding "${SERVICE_NAME}" \
+        --project="${PROJECT_ID}" \
+        --region="${REGION}" \
+        --member="${MEMBER}" \
+        --role="roles/run.invoker" \
+        --quiet > /dev/null; then
+      warn "could not grant roles/run.invoker to ${MEMBER}."
+      IAM_FAILURES=$((IAM_FAILURES + 1))
+    fi
+  done
+fi
+
 echo "Deployment complete!"
 echo "VibeLift Dashboard live at: ${PUBLIC_URL}"
 echo "BYO MCP App Endpoint:       ${PUBLIC_URL}/mcp"
 echo "Interactive MCP UI App:     ${PUBLIC_URL}/ui (or ui://vibelift-analytics/dashboard)"
 echo "Health check:               ${PUBLIC_URL}/health (/healthz is reserved by Cloud Run's front end)"
+echo ""
+echo "The service is private. To open the dashboard from your machine:"
+echo "  gcloud run services proxy ${SERVICE_NAME} --project=${PROJECT_ID} --region=${REGION} --port=8080"
+echo "  then browse http://localhost:8080"
+echo "Quick check with an identity token:"
+echo "  curl -H \"Authorization: Bearer \$(gcloud auth print-identity-token)\" ${PUBLIC_URL}/health"
+echo ""
+echo "Next steps (see README 'Deploy in your own GCP project'):"
+echo "  1. If not done yet: ./deploy/setup_bigquery_sink.sh, then re-run this script for the mart grant."
+echo "  2. Register in Gemini Enterprise: ./deploy/register_ge_agent.sh <GE_APP_ID>"
 if [[ "${IAM_FAILURES}" -gt 0 ]]; then
   warn "${IAM_FAILURES} IAM grant(s) failed; see the warnings above."
 fi

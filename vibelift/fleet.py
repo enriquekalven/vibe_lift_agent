@@ -52,8 +52,7 @@ _GKE = 'https://container.googleapis.com/v1'
 _HTTP_TIMEOUT_S = 25.0
 _MAX_PAGES = 10
 
-DEFAULT_ENGINE_IDS = ('agent-platform-demo', 'us/gemini-enterprise-17649552_1764955289529')
-# 'auto' discovers every Gemini Enterprise app in these locations.
+# VIBELIFT_GE_ENGINES defaults to 'auto', which discovers every Gemini Enterprise app in these locations.
 DEFAULT_DISCOVERY_LOCATIONS = ('global', 'us', 'eu')
 # Locations scanned for standalone/unregistered Vertex AI Reasoning Engines.
 DEFAULT_RE_LOCATIONS = ('us-central1', 'us-west1', 'us-east4', 'europe-west1')
@@ -1046,7 +1045,16 @@ class GeminiEnterpriseFleetService:
       return list(self.engine_ids)
     discovered = self._discover_engine_specs(errors)
     specs = list(dict.fromkeys(explicit + discovered))
-    return specs or list(DEFAULT_ENGINE_IDS)
+    if not specs:
+      # Never fall back to hard-coded engine IDs: they belong to another project.
+      errors.append({
+          'source': 'Discovery Engine app discovery',
+          'detail': ('No Gemini Enterprise apps found in locations '
+                     f'{", ".join(self.discovery_locations)}. Set VIBELIFT_GE_ENGINES to '
+                     'location/engine_id values, or check that the runtime service account '
+                     'has discoveryengine.engines.list.'),
+      })
+    return specs
 
   def _list_engine_agents(self, engine_spec: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if '/' in engine_spec:

@@ -62,7 +62,6 @@ create_dataset_if_missing() {
   if ! bq show --dataset "${PROJECT_ID}:${ds}" &>/dev/null; then
     echo "  Creating dataset ${ds} (location: ${BQ_LOCATION})..."
     bq --location="${BQ_LOCATION}" mk --dataset \
-        --label=datacloud:jetski \
         --label=app:vibelift \
         --description="${desc}" \
         "${PROJECT_ID}:${ds}"
@@ -134,6 +133,13 @@ configure_sink "sink-ge-search-activity" "ds_ge_search_raw" "${SINK_GE_SEARCH_FI
 # Sink 3: Vertex AI Agents & Reasoning Engines
 SINK_VERTEX_FILTER="protoPayload.serviceName=\"aiplatform.googleapis.com\" AND (protoPayload.methodName=~\"(ReasoningEngineExecutionService|ReasoningEngineService)\" OR (protoPayload.methodName=\"Predict\" AND protoPayload.resourceName=~\"publishers/(google/models/gemini|anthropic/models)\"))"
 configure_sink "sink-vertex-reasoning-engine" "ds_vertex_agents_raw" "${SINK_VERTEX_FILTER}"
+
+# Sink 3b: Gemini Enterprise gen_ai inference logs. This is the ONLY source of per-turn input/output/
+# cached token counts in vibelift_mart (fct_turns, fct_sessions, the session token drilldown). BigQuery
+# names the table discoveryengine_googleapis_com_gen_ai_client_inference_operation_details, which is
+# what deploy/bigquery/provision_ge_mart.py reads. Without this sink the mart has sessions but no tokens.
+SINK_INFERENCE_FILTER="logName=\"projects/${PROJECT_ID}/logs/discoveryengine.googleapis.com%2Fgen_ai.client.inference.operation.details\""
+configure_sink "sink-ge-inference-tokens" "ds_vertex_agents_raw" "${SINK_INFERENCE_FILTER}"
 
 # Sink 4: Platform Audit Logs
 SINK_AUDIT_FILTER=$(cat <<EOF
@@ -269,16 +275,23 @@ GROUP BY agent_id, model;
 
 echo ""
 echo "--- Step 4: Provisioning Curated Staging Views & Reporting Mart ---"
-if [[ -f "deploy/bigquery/provision_ge_mart.py" ]]; then
-  echo "Executing provision_ge_mart.py --apply --refresh..."
-  python3 deploy/bigquery/provision_ge_mart.py --project="${PROJECT_ID}" --apply --refresh || {
-    echo "WARNING: provision_ge_mart.py reported a notice; dry run / structure built."
-  }
+# --apply creates the curated views and mart views AND builds the materialized fct_turns table.
+# (--apply and --refresh are mutually exclusive; --refresh only rebuilds tables on a schedule.)
+# --gcloud-auth uses your gcloud login, so Application Default Credentials are not required.
+# Raw tables that do not exist yet (no logs routed so far) resolve to empty views, not errors.
+MART_STATUS="ok"
+if ! python3 deploy/bigquery/provision_ge_mart.py --project="${PROJECT_ID}" --location="${BQ_LOCATION}" \
+    --gcloud-auth --apply; then
+  MART_STATUS="failed"
+  echo "ERROR: provision_ge_mart.py failed; curated views and vibelift_mart may be incomplete." >&2
+  echo "  Needs: python3 with 'pip install -r requirements.txt' (google-cloud-bigquery), and BigQuery" >&2
+  echo "  Data Editor + Job User for your account. Re-run just this step with:" >&2
+  echo "  python3 deploy/bigquery/provision_ge_mart.py --project=${PROJECT_ID} --location=${BQ_LOCATION} --gcloud-auth --apply" >&2
 fi
 
 echo ""
 echo "=========================================================="
-echo " BigQuery Datasets, Views, Mart, & Log Sinks Ready!"
+echo " BigQuery Datasets, Views, Mart, & Log Sinks"
 echo " Datasets:"
 echo "   - \`${PROJECT_ID}.ds_ge_assistant_raw\`"
 echo "   - \`${PROJECT_ID}.ds_ge_search_raw\`"
@@ -287,13 +300,28 @@ echo "   - \`${PROJECT_ID}.ds_ge_audit_raw\`"
 echo "   - \`${PROJECT_ID}.ds_security_guardrails_raw\`"
 echo "   - \`${PROJECT_ID}.${DATASET_ID}\`"
 echo "   - \`${PROJECT_ID}.ds_ge_curated_staging\`"
-echo "   - \`${PROJECT_ID}.vibelift_mart\`"
+echo "   - \`${PROJECT_ID}.vibelift_mart\` (provisioning: ${MART_STATUS})"
 echo ""
 echo " Sinks:"
 echo "   - sink-ge-assistant-activity"
 echo "   - sink-ge-search-activity"
 echo "   - sink-vertex-reasoning-engine"
+echo "   - sink-ge-inference-tokens"
 echo "   - sink-platform-audit"
 echo "   - sink-model-armor-sdp"
 echo "   - vibelift-telemetry-sink"
 echo "=========================================================="
+echo ""
+echo "Manual steps this script cannot do (see README 'Deploy in your own GCP project'):"
+echo "  1. Turn on user activity logging in each Gemini Enterprise app (Console > Gemini Enterprise >"
+echo "     your app > settings/observability). Without it the gemini_enterprise_user_activity and"
+echo "     gen_ai.client.inference.operation.details logs are never written and the mart stays empty."
+echo "  2. Enable Data Access audit logs for discoveryengine.googleapis.com (IAM & Admin > Audit Logs)"
+echo "     if you want read/assist calls in ds_ge_audit_raw. Admin Activity logs are always on."
+echo "  3. Sinks only capture NEW log entries. After real GE traffic, rebuild the mart table with:"
+echo "     python3 deploy/bigquery/provision_ge_mart.py --project=${PROJECT_ID} --location=${BQ_LOCATION} --gcloud-auth --refresh"
+echo "  4. Keep fct_turns fresh with a BigQuery scheduled query using the DDL printed by:"
+echo "     python3 deploy/bigquery/provision_ge_mart.py --project=${PROJECT_ID} --print-refresh"
+if [[ "${MART_STATUS}" != "ok" ]]; then
+  exit 1
+fi

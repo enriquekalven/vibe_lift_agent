@@ -155,7 +155,7 @@ long agent reply the gap can exceed two minutes (171 s was observed on stage). `
 Unmatched audit calls become `AUDIT_ONLY` turns only when they failed. Those failures (quota,
 permission, agent errors) may exist only in the audit log.
 
-Validation results:
+Validation results (example runs in two reference projects; your numbers will differ):
 
 | Check | `gemini-enterprise-stage` (90d) | `project-maui` (30d) |
 |---|---|---|
@@ -169,10 +169,13 @@ Validation results:
 
 ## Known gaps
 
-- **project-maui has no inference or Model Armor sink.** `v_agentic_operations_curated` and
-  `v_model_armor_curated` return no rows there, so GE turns have no tokens. To fill this, add a log
-  sink that routes `gen_ai_client_inference_operation_details` and Model Armor logs into the US
-  datasets `ds_vertex_agents_raw` and `ds_security_guardrails_raw`.
+- **Tokens need the inference sink.** Per-turn tokens come only from the
+  `discoveryengine.googleapis.com/gen_ai.client.inference.operation.details` log, routed to
+  `ds_vertex_agents_raw` by the `sink-ge-inference-tokens` sink in `deploy/setup_bigquery_sink.sh`.
+  Projects set up before that sink existed (project-maui at the time of the table above) have
+  sessions but `NULL` tokens until the sink is created; sinks only capture new entries.
+- Model Armor rows need the `sink-model-armor-sdp` sink and Model Armor logging enabled. The
+  `armor` source is commented out in `provision_ge_mart.py` until that table exists.
 - `sre_triage_agent_telemetry` is in `us-east1` and cannot be joined from the US views. VibeLift
   still reads it separately.
 - Cost is project-level AI spend (every AI service in the project). The billing export has no

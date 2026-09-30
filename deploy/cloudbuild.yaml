@@ -19,6 +19,9 @@
 #            vibe-lift-runtime-sa@PROJECT_ID.iam.gserviceaccount.com \
 #            --member="serviceAccount:${CB_SA}" --role=roles/iam.serviceAccountUser
 #      Without these grants, use _DEPLOY=false and deploy the pushed image with gcloud run deploy.
+#   3. The deploy step merges env vars (--update-env-vars) and does not set VIBELIFT_GE_ENGINES,
+#      VIBELIFT_BILLING_EXPORT_TABLE or VIBELIFT_MONITORED_SERVICES. Values set by deploy_cloud_run.sh (or
+#      by hand) are kept; set them there, not here.
 steps:
   - id: build
     name: 'gcr.io/cloud-builders/docker'

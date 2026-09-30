@@ -2147,7 +2147,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="add-param-form adv-only" style="margin-top:0;margin-bottom:12px;">
           <div class="field-group">
             <label>User Email / LDAP</label>
-            <input id="csatEmailInput" type="text" value="enriq@google.com" />
+            <input id="csatEmailInput" type="text" value="" placeholder="user@your-company.com" />
           </div>
           <div class="field-group">
             <label>Session ID</label>
@@ -3009,7 +3009,7 @@ async def handle_agent_turn(message_envelope):
       const ratEl = document.getElementById('csatRatingSelect');
       const fbEl = document.getElementById('csatFeedbackInput');
       const payload = {
-        user_email: emailEl ? emailEl.value : 'enriq@google.com',
+        user_email: emailEl ? emailEl.value : '',
         session_id: sessEl ? sessEl.value : '6446120131357637190',
         rating: ratEl ? parseInt(ratEl.value, 10) : 5,
         feedback_text: fbEl ? fbEl.value : 'Verified SME closed-loop optimization guardrail.',
@@ -3045,7 +3045,7 @@ async def handle_agent_turn(message_envelope):
 
     function emitLiveAiveUsageEvent() {
       triggerApi('/api/aive_log', {
-        user_email: 'enriq@google.com',
+        user_email: 'sme-demo@example.com',
         task_type: 'SME_CONTROL_PLANE_AUDIT',
         prompt: 'Verify closed-loop CSAT + tokenomics guardrail',
         total_tokens: 18900,

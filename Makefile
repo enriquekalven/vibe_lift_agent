@@ -27,7 +27,7 @@ smoke:
 ci: lint coverage smoke
 
 playground:
-	USE_UVICORN=1 PORT=8080 $(PYTHON) server.py
+	PORT=8080 $(PYTHON) -m vibelift.server --port=8080
 
 deploy:
 	./deploy/deploy_cloud_run.sh
