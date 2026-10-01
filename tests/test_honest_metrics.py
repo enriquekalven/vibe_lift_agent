@@ -14,7 +14,7 @@ class BillingExportTest(unittest.TestCase):
 
   def test_not_connected_without_table(self):
     with mock.patch.dict(os.environ, {billing_export.BILLING_TABLE_ENV: ''}):
-      reader = billing_export.BillingExportReader('project-maui', lambda: 'tok')
+      reader = billing_export.BillingExportReader('example-project', lambda: 'tok')
       out = reader.get()
     self.assertEqual(out['status'], 'NOT_CONNECTED')
     self.assertEqual(out['sku_ledger'], [])
@@ -23,11 +23,11 @@ class BillingExportTest(unittest.TestCase):
 
   def test_sql_rejects_injection(self):
     with self.assertRaises(ValueError):
-      billing_export.build_billing_sql('p-roject.ds.t`; DROP TABLE x; --', 'project-maui')
+      billing_export.build_billing_sql('p-roject.ds.t`; DROP TABLE x; --', 'example-project')
     with self.assertRaises(ValueError):
       billing_export.build_billing_sql('proj-ect.ds.tbl', "x' OR 1=1 --")
-    sql = billing_export.build_billing_sql('billing-proj.billing.gcp_billing_export_v1_ABC', 'project-maui')
-    self.assertIn("project.id = 'project-maui'", sql)
+    sql = billing_export.build_billing_sql('billing-proj.billing.gcp_billing_export_v1_ABC', 'example-project')
+    self.assertIn("project.id = 'example-project'", sql)
 
   def test_summarize_rows_totals(self):
     rows = [
@@ -55,7 +55,7 @@ class JudgeFallbackTest(unittest.TestCase):
     ]
 
   def test_fallback_reports_error_and_failures(self):
-    state = {'gcp_project': 'project-maui'}
+    state = {'gcp_project': 'example-project'}
     with mock.patch.object(telemetry_validator, '_get_access_token', return_value=(None, 'ADC: no creds')):
       out = telemetry_validator.run_llm_as_judge_audit(state, self._checks(fail=True))
     self.assertEqual(out['judge_error'], 'ADC: no creds')
@@ -64,7 +64,7 @@ class JudgeFallbackTest(unittest.TestCase):
     self.assertNotIn('All observed', out['executive_finding'])
 
   def test_llm_cannot_override_failed_check(self):
-    state = {'gcp_project': 'project-maui'}
+    state = {'gcp_project': 'example-project'}
     with mock.patch.object(telemetry_validator, '_get_access_token', return_value=('tok', None)), \
          mock.patch.object(telemetry_validator, '_call_vertex_judge',
                            return_value=({'verdict': 'VERIFIED_GROUNDED', 'grounding_score_100': 97,
@@ -75,7 +75,7 @@ class JudgeFallbackTest(unittest.TestCase):
     self.assertIsNone(out['judge_error'])
 
   def test_missing_score_is_not_invented(self):
-    state = {'gcp_project': 'project-maui'}
+    state = {'gcp_project': 'example-project'}
     with mock.patch.object(telemetry_validator, '_get_access_token', return_value=('tok', None)), \
          mock.patch.object(telemetry_validator, '_call_vertex_judge',
                            return_value=({'verdict': 'VERIFIED_GROUNDED', 'executive_finding': 'x'}, None)):
@@ -212,7 +212,7 @@ class BlindspotRemediationTest(unittest.TestCase):
 
   def test_cloud_run_services_never_invent_cpu_memory_or_cost(self):
     from vibelift import gcp_telemetry
-    svc = gcp_telemetry.GoogleCloudTelemetryService(project_id='project-maui', region='us-central1')
+    svc = gcp_telemetry.GoogleCloudTelemetryService(project_id='example-project', region='us-central1')
     with mock.patch.object(svc, '_get_access_token', return_value=None), \
          mock.patch.object(svc, '_query_bigquery_rest', return_value=[
              {'service_name': 'vibe-lift-agent', 'latest_rev': 'vibe-lift-agent-00099',
@@ -244,7 +244,7 @@ class BlindspotRemediationTest(unittest.TestCase):
 
   def test_mart_tool_names_extracted_into_live_skills_and_decorator_events(self):
     from vibelift import gcp_telemetry
-    svc = gcp_telemetry.GoogleCloudTelemetryService(project_id='project-maui', region='us-central1')
+    svc = gcp_telemetry.GoogleCloudTelemetryService(project_id='example-project', region='us-central1')
     def fake_bq(sql, timeout_s=7.0):
       if 'tool_names' in sql and 'fct_turns' in sql and 'RECENT_SESSIONS' not in sql.upper():
         return [{
@@ -253,7 +253,7 @@ class BlindspotRemediationTest(unittest.TestCase):
             'turn_kind': 'AGENT_CALL',
             'ts': '2026-09-30T10:00:00Z',
             'session_id': 's-1',
-            'user_email': 'enriq@google.com',
+            'user_email': 'user-a@example.com',
             'engine_key': 'global/app-1',
             'agent_name': 'sre-agent',
             'model_name': 'gemini-2.5-flash',
@@ -323,13 +323,13 @@ class BlindspotRemediationTest(unittest.TestCase):
     with tempfile.TemporaryDirectory() as tmpdir:
       with mock.patch.dict(os.environ, {'VIBELIFT_STATE_DIR': tmpdir}):
         store1 = sme_eval.SmeEvaluationStore()
-        store1.submit_rating(persona_id='finops_lead', reviewer_ldap='enriq', overall_rating=5, notes='Persisted')
-        telemetry.log_csat_rating('sess-1', 'evt-1', 'enriq@google.com', 5, 'Great')
+        store1.submit_rating(persona_id='finops_lead', reviewer_ldap='user-a', overall_rating=5, notes='Persisted')
+        telemetry.log_csat_rating('sess-1', 'evt-1', 'user-a@example.com', 5, 'Great')
         # New store instance should reload the persisted SME rating from VIBELIFT_STATE_DIR
         store2 = sme_eval.SmeEvaluationStore()
         ratings = store2.list_ratings('finops_lead')
         self.assertEqual(len(ratings), 1)
-        self.assertEqual(ratings[0]['reviewer_ldap'], 'enriq')
+        self.assertEqual(ratings[0]['reviewer_ldap'], 'user-a')
         self.assertTrue(os.path.isfile(os.path.join(tmpdir, 'csat_rating.jsonl')))
         store2.clear()
         self.assertEqual(len(store2.list_ratings()), 0)

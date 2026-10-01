@@ -19,11 +19,11 @@ _FAKE_FLEET, _ = ge_fleet_test.make_fake_service()
 
 _SESSION_ROWS = [
     {'engine_key': 'global/eng-1', 'session_id': 's-1', 'session_end': '2026-09-29T12:00:00Z',
-     'user_email': 'enriq@google.com', 'agent_name': 'sre_agent', 'turns': '3', 'chat_turns': '3',
+     'user_email': 'user-a@example.com', 'agent_name': 'sre_agent', 'turns': '3', 'chat_turns': '3',
      'input_tokens': '12000', 'output_tokens': '1500', 'cached_input_tokens': '9000',
      'reasoning_tokens': '300', 'total_tokens': '13500'},
     {'engine_key': 'global/eng-1', 'session_id': 's-2', 'session_end': '2026-09-29T13:00:00Z',
-     'user_email': 'enriq@google.com', 'agent_name': 'sre_agent', 'turns': '1',
+     'user_email': 'user-a@example.com', 'agent_name': 'sre_agent', 'turns': '1',
      'input_tokens': '1000', 'output_tokens': '100', 'cached_input_tokens': None,
      'reasoning_tokens': None, 'total_tokens': '1100'},
     {'engine_key': 'global/eng-2', 'session_id': 's-9', 'session_end': '2026-09-28T09:00:00Z',
@@ -34,7 +34,7 @@ _SESSION_ROWS = [
 
 _TURN_ROWS = [
     {'engine_key': 'global/eng-1', 'session_id': 's-1', 'turn_id': 't-1', 'turn_kind': 'CHAT',
-     'turn_status': 'SUCCESS', 'ts': '2026-09-29T11:50:00Z', 'user_email': 'enriq@google.com',
+     'turn_status': 'SUCCESS', 'ts': '2026-09-29T11:50:00Z', 'user_email': 'user-a@example.com',
      'model_name': 'gemini-2.5-flash', 'input_tokens': '4000', 'output_tokens': '500',
      'cached_input_tokens': '3000', 'reasoning_tokens': '100', 'total_tokens': '4500',
      'llm_calls': '1', 'tool_call_count': '1', 'tool_names': 'fetch_logs'},
@@ -53,9 +53,9 @@ class SessionTurnsSqlTest(unittest.TestCase):
 
   def test_builder_targets_mart_and_clamps(self):
     sql = ge_mart.build_session_turns_sql(
-        'project-maui', days=10**9, session_limit=10**9, turns_per_session=10**9, limit=10**9)
-    self.assertIn('FROM `project-maui.vibelift_mart.fct_sessions`', sql)
-    self.assertIn('FROM `project-maui.vibelift_mart.fct_turns` AS t', sql)
+        'example-project', days=10**9, session_limit=10**9, turns_per_session=10**9, limit=10**9)
+    self.assertIn('FROM `example-project.vibelift_mart.fct_sessions`', sql)
+    self.assertIn('FROM `example-project.vibelift_mart.fct_turns` AS t', sql)
     self.assertIn('INTERVAL 400 DAY', sql)
     self.assertIn('LIMIT 500', sql)       # session limit clamp
     self.assertIn('<= 500', sql)          # turns-per-session clamp
@@ -66,8 +66,8 @@ class SessionTurnsSqlTest(unittest.TestCase):
       self.assertNotIn(forbidden, sql)
 
   def test_builder_uses_same_session_selection_as_recent_sessions(self):
-    sess_sql = ge_mart.build_recent_sessions_sql('project-maui', days=30, limit=50)
-    turn_sql = ge_mart.build_session_turns_sql('project-maui', days=30, session_limit=50)
+    sess_sql = ge_mart.build_recent_sessions_sql('example-project', days=30, limit=50)
+    turn_sql = ge_mart.build_session_turns_sql('example-project', days=30, session_limit=50)
     for clause in ('INTERVAL 30 DAY', 'ORDER BY session_end DESC', 'LIMIT 50'):
       self.assertIn(clause, sess_sql)
       self.assertIn(clause, turn_sql)
@@ -96,7 +96,7 @@ class SessionTurnMapperTest(unittest.TestCase):
     grouped = ge_mart.group_session_turns(_TURN_ROWS)
     self.assertEqual(list(grouped), ['global/eng-1|s-1'])
     self.assertEqual([t['turn_id'] for t in grouped['global/eng-1|s-1']], ['t-1', 't-2', 't-3'])
-    sess = ge_mart.session_from_row(_SESSION_ROWS[0], 'project-maui')
+    sess = ge_mart.session_from_row(_SESSION_ROWS[0], 'example-project')
     self.assertEqual(sess['session_key'], 'global/eng-1|s-1')
     self.assertEqual(ge_mart.session_key(None, 's-1'), '|s-1')
 
@@ -104,7 +104,7 @@ class SessionTurnMapperTest(unittest.TestCase):
 class SessionTokenDrilldownTest(unittest.TestCase):
 
   def _drilldown(self):
-    sessions = [ge_mart.session_from_row(r, 'project-maui') for r in _SESSION_ROWS]
+    sessions = [ge_mart.session_from_row(r, 'example-project') for r in _SESSION_ROWS]
     return finops.build_session_token_drilldown(sessions, ge_mart.group_session_turns(_TURN_ROWS))
 
   def test_user_rollup_sums_known_values_only(self):
@@ -112,19 +112,19 @@ class SessionTokenDrilldownTest(unittest.TestCase):
     self.assertEqual(dd['session_count'], 3)
     self.assertEqual(dd['user_count'], 2)
     users = {u['user_email']: u for u in dd['users']}
-    enriq = users['enriq@google.com']
-    self.assertEqual(enriq['sessions'], 2)
-    self.assertEqual(enriq['turns'], 4)
-    self.assertEqual(enriq['input_tokens'], 13000)
-    self.assertEqual(enriq['output_tokens'], 1600)
-    self.assertEqual(enriq['cached_input_tokens'], 9000)   # s-2 unknown is skipped, not zero
-    self.assertEqual(enriq['total_tokens'], 14600)
-    self.assertEqual(enriq['avg_total_tokens_per_session'], 7300)
-    self.assertEqual(enriq['last_activity'], '2026-09-29T13:00:00Z')
+    user_a = users['user-a@example.com']
+    self.assertEqual(user_a['sessions'], 2)
+    self.assertEqual(user_a['turns'], 4)
+    self.assertEqual(user_a['input_tokens'], 13000)
+    self.assertEqual(user_a['output_tokens'], 1600)
+    self.assertEqual(user_a['cached_input_tokens'], 9000)   # s-2 unknown is skipped, not zero
+    self.assertEqual(user_a['total_tokens'], 14600)
+    self.assertEqual(user_a['avg_total_tokens_per_session'], 7300)
+    self.assertEqual(user_a['last_activity'], '2026-09-29T13:00:00Z')
     ops = users['ops@example.com']
     self.assertIsNone(ops['total_tokens'])                  # nothing measured stays None
     self.assertIsNone(ops['avg_total_tokens_per_session'])
-    self.assertEqual(dd['users'][0]['user_email'], 'enriq@google.com')  # sorted by tokens
+    self.assertEqual(dd['users'][0]['user_email'], 'user-a@example.com')  # sorted by tokens
     self.assertEqual(dd['totals']['total_tokens'], 14600)
 
   def test_session_turn_detail_and_completeness(self):
@@ -139,7 +139,7 @@ class SessionTokenDrilldownTest(unittest.TestCase):
     self.assertFalse(s2['turn_detail_complete'])
 
   def test_duplicate_session_rows_are_not_double_counted(self):
-    sessions = [ge_mart.session_from_row(r, 'project-maui') for r in _SESSION_ROWS]
+    sessions = [ge_mart.session_from_row(r, 'example-project') for r in _SESSION_ROWS]
     turns = ge_mart.group_session_turns(_TURN_ROWS)
     single = finops.build_session_token_drilldown(sessions, turns)
     doubled = finops.build_session_token_drilldown(sessions + [dict(s) for s in sessions], turns)
@@ -162,7 +162,7 @@ class SessionTokenDrilldownTest(unittest.TestCase):
 class TelemetryWiringTest(unittest.TestCase):
 
   def test_insights_include_grouped_session_turns(self):
-    svc = gcp_telemetry.GoogleCloudTelemetryService('project-maui', region='us-central1')
+    svc = gcp_telemetry.GoogleCloudTelemetryService('example-project', region='us-central1')
 
     def _router(sql, *_args, **_kwargs):
       if 'recent_sessions' in sql:
@@ -181,7 +181,7 @@ class TelemetryWiringTest(unittest.TestCase):
 
 
 def _uc_with_sessions() -> dict[str, object]:
-  sessions = [ge_mart.session_from_row(r, 'project-maui') for r in _SESSION_ROWS]
+  sessions = [ge_mart.session_from_row(r, 'example-project') for r in _SESSION_ROWS]
   return {'ge_sessions': sessions, 'ge_session_turns': ge_mart.group_session_turns(_TURN_ROWS)}
 
 
@@ -191,7 +191,7 @@ class UserCentricFinopsEndpointTest(unittest.TestCase):
     ctrl = server.VibeLiftRuntimeController(fleet_service=_FAKE_FLEET)
     uc = _uc_with_sessions()
     bq = {'ge_sessions': uc['ge_sessions'], 'ge_session_turns': uc['ge_session_turns'],
-          'ge_mart_dataset': 'project-maui.vibelift_mart', 'power_users_ldap': []}
+          'ge_mart_dataset': 'example-project.vibelift_mart', 'power_users_ldap': []}
     with mock.patch.object(ctrl, '_is_live_gcp', return_value=True), \
          mock.patch.object(ctrl.gcp_telemetry, 'fetch_live_bigquery_project_insights', return_value=bq), \
          mock.patch.object(ctrl.gcp_telemetry, 'list_cloud_run_agent_services', return_value=[]), \

@@ -589,7 +589,7 @@ def vibelift_telemetry(
 
 # ---------------------------------------------------------------------------
 # BigQuery `aive_logs` Schema & `@with_analytics_logging` Decorator
-# Implements Shirish Bahirat's standardized schema (`agent_usage_log`,
+# Implements a standardized usage-log schema (`agent_usage_log`,
 # `ratings_log`, `improvement_log`) with `user_ldap` extraction and dual-write
 # to the real-time `@vibelift_telemetry` stream.
 # ---------------------------------------------------------------------------
@@ -601,14 +601,14 @@ _SEED_AIVE_USAGE_LOGS: list[dict[str, Any]] = [
         'event_id': 'evt-9f81c204-aive',
         'timestamp': '2026-09-28T22:15:00Z',
         'session_id': '6446120131357637190',
-        'user_email': 'russellmyers@google.com',
-        'user_ldap': 'russellmyers',
-        'company_name': 'Google Cloud',
-        'department': 'Cloud AI & Agent Platform',
+        'user_email': 'user-c@example.com',
+        'user_ldap': 'user-c',
+        'company_name': 'Example Corp',
+        'department': 'AI Platform Engineering',
         'task_type': 'FLEET_OPTIMIZATION_AUDIT',
         'model_name': 'gemini-2.5-flash',
         'prompts': ['Open the VibeLift dashboard and audit 5-layer OTel metrics'],
-        'outputs': [{'gcs_uri': 'gs://project-maui-aive-Search/reports/otel_5layer_audit.json', 'media_type': 'APPLICATION_JSON', 'mime_type': 'application/json'}],
+        'outputs': [{'gcs_uri': 'gs://vibelift-demo-assets/reports/otel_5layer_audit.json', 'media_type': 'APPLICATION_JSON', 'mime_type': 'application/json'}],
         'latency_ms': 640.0,
         'total_tokens': 18710,
         'thinking_tokens': 1420,
@@ -621,14 +621,14 @@ _SEED_AIVE_USAGE_LOGS: list[dict[str, Any]] = [
         'event_id': 'evt-7b42e911-aive',
         'timestamp': '2026-09-28T22:18:30Z',
         'session_id': '8821150342449201152',
-        'user_email': 'sbahirat@google.com',
-        'user_ldap': 'sbahirat',
-        'company_name': 'Google Cloud',
-        'department': 'Creative & Multimodal Agents (AIVE)',
+        'user_email': 'user-b@example.com',
+        'user_ldap': 'user-b',
+        'company_name': 'Example Corp',
+        'department': 'Creative & Multimodal Agents',
         'task_type': 'VIDEO_GENERATION',
         'model_name': 'gemini-2.5-pro',
         'prompts': ['Synthesize product launch storyboard and Veo scene prompts'],
-        'outputs': [{'gcs_uri': 'gs://project-maui-aive-assets/veo_launch_v3.mp4', 'media_type': 'VIDEO', 'mime_type': 'video/mp4'}],
+        'outputs': [{'gcs_uri': 'gs://vibelift-demo-assets/veo_launch_v3.mp4', 'media_type': 'VIDEO', 'mime_type': 'video/mp4'}],
         'latency_ms': 1120.0,
         'total_tokens': 31940,
         'thinking_tokens': 3800,
@@ -641,14 +641,14 @@ _SEED_AIVE_USAGE_LOGS: list[dict[str, Any]] = [
         'event_id': 'evt-3c19d408-aive',
         'timestamp': '2026-09-28T22:21:10Z',
         'session_id': '9854735213116306727',
-        'user_email': 'enriq@google.com',
-        'user_ldap': 'enriq',
-        'company_name': 'Google Cloud',
+        'user_email': 'user-a@example.com',
+        'user_ldap': 'user-a',
+        'company_name': 'Example Corp',
         'department': 'FinOps & Platform Architecture',
         'task_type': 'FINOPS_CACHE_ATTRIBUTION',
         'model_name': 'gemini-2.5-flash',
         'prompts': ['Verify prompt cache breakpoint and runaway thinking token caps'],
-        'outputs': [{'gcs_uri': 'gs://project-maui-aive-assets/finops_delta_gen14.json', 'media_type': 'APPLICATION_JSON', 'mime_type': 'application/json'}],
+        'outputs': [{'gcs_uri': 'gs://vibelift-demo-assets/finops_delta_gen14.json', 'media_type': 'APPLICATION_JSON', 'mime_type': 'application/json'}],
         'latency_ms': 585.0,
         'total_tokens': 22520,
         'thinking_tokens': 960,
@@ -661,14 +661,14 @@ _SEED_AIVE_USAGE_LOGS: list[dict[str, Any]] = [
         'event_id': 'evt-5a90f312-aive',
         'timestamp': '2026-09-28T22:24:45Z',
         'session_id': '13791105764600209034',
-        'user_email': 'sloona@google.com',
-        'user_ldap': 'sloona',
-        'company_name': 'Google Cloud',
+        'user_email': 'user-e@example.com',
+        'user_ldap': 'user-e',
+        'company_name': 'Example Corp',
         'department': 'Enterprise IT & Security Governance',
         'task_type': 'IT_TIER2_ESCALATION',
         'model_name': 'gemini-2.5-flash',
         'prompts': ['Resolve cross-project OAuth 2.0 consent & VPN runbook escalation'],
-        'outputs': [{'gcs_uri': 'gs://project-maui-aive-assets/it_runbook_resolution.md', 'media_type': 'TEXT', 'mime_type': 'text/markdown'}],
+        'outputs': [{'gcs_uri': 'gs://vibelift-demo-assets/it_runbook_resolution.md', 'media_type': 'TEXT', 'mime_type': 'text/markdown'}],
         'latency_ms': 690.0,
         'total_tokens': 18710,
         'thinking_tokens': 1180,
@@ -681,14 +681,14 @@ _SEED_AIVE_USAGE_LOGS: list[dict[str, Any]] = [
         'event_id': 'evt-6d12a877-aive',
         'timestamp': '2026-09-28T22:26:12Z',
         'session_id': '4419820311048291001',
-        'user_email': 'rseshadri@google.com',
-        'user_ldap': 'rseshadri',
-        'company_name': 'Google Cloud',
+        'user_email': 'user-d@example.com',
+        'user_ldap': 'user-d',
+        'company_name': 'Example Corp',
         'department': 'Executive Product Strategy',
         'task_type': 'MULTI_HOP_DEEP_RESEARCH',
         'model_name': 'gemini-2.5-pro',
         'prompts': ['Compile Q4 executive competitive battlecard with cited sources'],
-        'outputs': [{'gcs_uri': 'gs://project-maui-aive-assets/q4_strategy_synthesis.pdf', 'media_type': 'DOCUMENT', 'mime_type': 'application/pdf'}],
+        'outputs': [{'gcs_uri': 'gs://vibelift-demo-assets/q4_strategy_synthesis.pdf', 'media_type': 'DOCUMENT', 'mime_type': 'application/pdf'}],
         'latency_ms': 740.0,
         'total_tokens': 32090,
         'thinking_tokens': 4120,
@@ -706,8 +706,8 @@ _SEED_AIVE_RATINGS_LOGS: list[dict[str, Any]] = [
         'timestamp': '2026-09-28T22:16:00Z',
         'session_id': '6446120131357637190',
         'event_id': 'evt-9f81c204-aive',
-        'user_email': 'russellmyers@google.com',
-        'user_ldap': 'russellmyers',
+        'user_email': 'user-c@example.com',
+        'user_ldap': 'user-c',
         'rating': 5,
         'feedback_text': '1-click dashboard & 5-layer OTel metrics mapped cleanly.',
     },
@@ -716,8 +716,8 @@ _SEED_AIVE_RATINGS_LOGS: list[dict[str, Any]] = [
         'timestamp': '2026-09-28T22:19:00Z',
         'session_id': '8821150342449201152',
         'event_id': 'evt-7b42e911-aive',
-        'user_email': 'sbahirat@google.com',
-        'user_ldap': 'sbahirat',
+        'user_email': 'user-b@example.com',
+        'user_ldap': 'user-b',
         'rating': 5,
         'feedback_text': '@with_analytics_logging decorator captured GCS asset URIs with zero lag.',
     },
@@ -726,8 +726,8 @@ _SEED_AIVE_RATINGS_LOGS: list[dict[str, Any]] = [
         'timestamp': '2026-09-28T22:28:15Z',
         'session_id': '4419820311048291001',
         'event_id': 'evt-6d12a877-aive',
-        'user_email': 'rseshadri@google.com',
-        'user_ldap': 'rseshadri',
+        'user_email': 'user-d@example.com',
+        'user_ldap': 'user-d',
         'rating': 4,
         'feedback_text': 'Deep research synthesis strong; keep thinking token budget capped at 2,048 to preserve <750ms P95.',
     },
@@ -768,7 +768,7 @@ def log_agent_generation_event(
     agent_name: str = 'it_service_desk',
 ) -> dict[str, Any]:
   """Streams an agent generation event to `aive_logs.agent_usage_log` and real-time decorator stream."""
-  clean_email = (user_email or 'unknown@google.com').strip()
+  clean_email = (user_email or 'unknown').strip()
   user_ldap = clean_email.split('@')[0] if '@' in clean_email else (clean_email or 'unknown')
   now_iso = datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
   tok_total = max(0, int(total_tokens or 18400))
@@ -781,7 +781,7 @@ def log_agent_generation_event(
       'session_id': str(session_id or 'unknown_session'),
       'user_email': clean_email,
       'user_ldap': user_ldap,
-      'company_name': str(company_name or 'Google Cloud'),
+      'company_name': str(company_name or 'unknown'),
       'department': str(department or 'Enterprise AI'),
       'task_type': str(task_type or 'TEXT_GENERATION'),
       'model_name': str(model_name or 'gemini-2.5-pro'),
@@ -841,7 +841,7 @@ def log_csat_rating(
     feedback_text: str = '',
 ) -> dict[str, Any]:
   """Records a user CSAT rating into `aive_logs.ratings_log`."""
-  clean_email = (user_email or 'unknown@google.com').strip()
+  clean_email = (user_email or 'unknown').strip()
   user_ldap = clean_email.split('@')[0] if '@' in clean_email else clean_email
   clamped_rating = max(1, min(5, int(rating)))
   entry: dict[str, Any] = {
@@ -906,7 +906,7 @@ def with_analytics_logging(
     model_name: str = 'gemini-2.5-pro',
     agent_name: str = 'it_service_desk',
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-  """Shirish Bahirat's standardized decorator for ADK tool/generation logging to `aive_logs`."""
+  """Standardized decorator for ADK tool/generation logging to `aive_logs`."""
 
   def _decorator(func: Callable[..., Any]) -> Callable[..., Any]:
     if inspect.iscoroutinefunction(func):
@@ -915,9 +915,9 @@ def with_analytics_logging(
       async def _async_wrapper(*args: Any, **kwargs: Any) -> Any:
         t0 = time.perf_counter()
         session_id = str(kwargs.get('session_id', 'unknown_session'))
-        user_email = str(kwargs.get('user_email', 'enriq@google.com'))
-        company_name = str(kwargs.get('company_name', 'Google Cloud'))
-        department = str(kwargs.get('department', 'Cloud AI & Agent Platform'))
+        user_email = str(kwargs.get('user_email', 'unknown'))
+        company_name = str(kwargs.get('company_name', 'unknown'))
+        department = str(kwargs.get('department', 'unknown'))
         prompt_val = kwargs.get('prompt') or (args[0] if args and isinstance(args[0], str) else '')
         prompts = [str(prompt_val)] if prompt_val else []
         status = 'SUCCESS'
@@ -964,9 +964,9 @@ def with_analytics_logging(
     def _sync_wrapper(*args: Any, **kwargs: Any) -> Any:
       t0 = time.perf_counter()
       session_id = str(kwargs.get('session_id', 'unknown_session'))
-      user_email = str(kwargs.get('user_email', 'enriq@google.com'))
-      company_name = str(kwargs.get('company_name', 'Google Cloud'))
-      department = str(kwargs.get('department', 'Cloud AI & Agent Platform'))
+      user_email = str(kwargs.get('user_email', 'unknown'))
+      company_name = str(kwargs.get('company_name', 'unknown'))
+      department = str(kwargs.get('department', 'unknown'))
       prompt_val = kwargs.get('prompt') or (args[0] if args and isinstance(args[0], str) else '')
       prompts = [str(prompt_val)] if prompt_val else []
       status = 'SUCCESS'

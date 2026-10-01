@@ -46,12 +46,12 @@ class ProvisionerTest(unittest.TestCase):
       provision.render('SELECT {{ 1bad }}', {})
 
   def test_identifier_validation_rejects_injection(self):
-    for bad in ('proj.ds.t`; DROP TABLE x; --', 'proj-ect.ds', 'Project-Maui.ds.t', 'project-maui.d s.t'):
+    for bad in ('proj.ds.t`; DROP TABLE x; --', 'proj-ect.ds', 'Project-Maui.ds.t', 'example-project.d s.t'):
       with self.assertRaises(ValueError, msg=bad):
         provision.validate_table_ref(bad)
     with self.assertRaises(ValueError):
       provision.validate_dataset('ds`; --')
-    self.assertEqual(provision.validate_table_ref('`project-maui.ds_a.tbl_1`'), 'project-maui.ds_a.tbl_1')
+    self.assertEqual(provision.validate_table_ref('`example-project.ds_a.tbl_1`'), 'example-project.ds_a.tbl_1')
 
   def test_source_sql_missing_table_is_empty_stub(self):
     sql = provision.source_sql(None, None, ('jsonPayload',), 30)
@@ -60,7 +60,7 @@ class ProvisionerTest(unittest.TestCase):
 
   def test_source_sql_adapts_column_types(self):
     schema = {'timestamp': 'TIMESTAMP', 'jsonPayload': 'RECORD', 'labels': 'STRING', 'resource': 'JSON'}
-    sql = provision.source_sql('project-maui.ds.t', schema, ('jsonPayload', 'labels', 'resource', 'absent'), 999)
+    sql = provision.source_sql('example-project.ds.t', schema, ('jsonPayload', 'labels', 'resource', 'absent'), 999)
     self.assertIn('TO_JSON(`jsonPayload`) AS jsonPayload', sql)
     self.assertIn('SAFE.PARSE_JSON(`labels`) AS labels', sql)
     self.assertIn('`resource` AS resource', sql)
@@ -76,14 +76,14 @@ class ProvisionerTest(unittest.TestCase):
         return dict(_describe_all_found(ref), __location__='us-east1')
       return _describe_all_found(ref)
 
-    out = provision.resolve_sources('project-maui', 'US', 30, describe)
+    out = provision.resolve_sources('example-project', 'US', 30, describe)
     self.assertEqual(out['inference'].status, 'MISSING')
     self.assertEqual(out['search'].status, 'WRONG_LOCATION')
     self.assertIn('WHERE FALSE', out['search'].sql)
     self.assertEqual(out['assistant'].status, 'FOUND')
     self.assertNotIn('armor', out)
     with self.assertRaises(ValueError):
-      provision.resolve_sources('project-maui', 'US', 30, describe, overrides={'nope': 'a-proj.b.c'})
+      provision.resolve_sources('example-project', 'US', 30, describe, overrides={'nope': 'a-proj.b.c'})
 
   def test_model_armor_commented_out_until_enabled(self):
     self.assertNotIn('armor', provision.SOURCES)
@@ -94,36 +94,36 @@ class ProvisionerTest(unittest.TestCase):
     self.assertIn('CAST(NULL AS BOOL) AS is_guardrail_blocked', turns_code)
 
   def test_build_view_bodies_renders_all_views(self):
-    sources = provision.resolve_sources('project-maui', 'US', 30, _describe_all_found)
-    bodies = provision.build_view_bodies('project-maui', 'ds_ge_curated_staging', 'vibelift_mart', sources)
+    sources = provision.resolve_sources('example-project', 'US', 30, _describe_all_found)
+    bodies = provision.build_view_bodies('example-project', 'ds_ge_curated_staging', 'vibelift_mart', sources)
     self.assertEqual(len(bodies), len(provision.OBJECTS))
     for name, body in bodies.items():
       self.assertNotIn('{{', body, name)
       self.assertNotIn('}}', body, name)
       self.assertNotIn('gemini-enterprise-stage', _sql_code(body), name)  # no hard-coded project ids
     turns = bodies['vibelift_mart.v_fct_turns']
-    self.assertIn('`project-maui.ds_ge_curated_staging.v_user_activity_curated`', turns)
-    self.assertIn('FROM `project-maui.vibelift_mart.v_fct_turns`', bodies['vibelift_mart.fct_turns'])
+    self.assertIn('`example-project.ds_ge_curated_staging.v_user_activity_curated`', turns)
+    self.assertIn('FROM `example-project.vibelift_mart.v_fct_turns`', bodies['vibelift_mart.fct_turns'])
     self.assertIn('refreshed_at', bodies['vibelift_mart.fct_turns'])
-    self.assertIn('`project-maui.vibelift_mart.fct_turns`', bodies['vibelift_mart.agg_daily_usage'])
+    self.assertIn('`example-project.vibelift_mart.fct_turns`', bodies['vibelift_mart.agg_daily_usage'])
     # Audit window: 300 s lag / 30 s lead in ms, AUDIT_ONLY successes excluded by default.
     self.assertIn('300000', turns)
     self.assertIn('30000', turns)
 
   def test_fct_turns_is_a_partitioned_table_and_the_rest_are_views(self):
-    ddl = provision.object_ddl('project-maui', 'vibelift_mart.fct_turns', 'SELECT 1', 'd')
-    self.assertTrue(ddl.startswith('CREATE OR REPLACE TABLE `project-maui.vibelift_mart.fct_turns`'))
+    ddl = provision.object_ddl('example-project', 'vibelift_mart.fct_turns', 'SELECT 1', 'd')
+    self.assertTrue(ddl.startswith('CREATE OR REPLACE TABLE `example-project.vibelift_mart.fct_turns`'))
     self.assertIn('PARTITION BY event_date', ddl)
     self.assertIn('CLUSTER BY engine_key, user_email', ddl)
     for _, name, _ in provision.OBJECTS:
       if name != 'fct_turns':
         self.assertNotIn(name, provision.TABLES)
-        self.assertIn('CREATE OR REPLACE VIEW', provision.object_ddl('project-maui', f'd.{name}', 'SELECT 1', 'd'))
+        self.assertIn('CREATE OR REPLACE VIEW', provision.object_ddl('example-project', f'd.{name}', 'SELECT 1', 'd'))
 
   def test_view_ddl_escapes_description(self):
-    ddl = provision.view_ddl('project-maui', 'vibelift_mart.fct_turns', 'SELECT 1', 'say "hi"')
+    ddl = provision.view_ddl('example-project', 'vibelift_mart.fct_turns', 'SELECT 1', 'say "hi"')
     self.assertIn('description="say \\"hi\\""', ddl)
-    self.assertTrue(ddl.startswith('CREATE OR REPLACE VIEW `project-maui.vibelift_mart.fct_turns`'))
+    self.assertTrue(ddl.startswith('CREATE OR REPLACE VIEW `example-project.vibelift_mart.fct_turns`'))
 
   def test_inline_view_refs_for_dry_run(self):
     bodies = {'m.a': 'SELECT 1 AS x', 'm.b': 'SELECT x FROM `p-proj1.m.a`'}
@@ -184,46 +184,46 @@ class GeMartReaderTest(unittest.TestCase):
 
   def test_refs_default_and_env_override(self):
     with mock.patch.dict(os.environ, {ge_mart.MART_DATASET_ENV: '', ge_mart.CURATED_DATASET_ENV: ''}):
-      self.assertEqual(ge_mart.mart_ref('project-maui'), 'project-maui.vibelift_mart')
-      self.assertEqual(ge_mart.curated_ref('project-maui'), 'project-maui.ds_ge_curated_staging')
+      self.assertEqual(ge_mart.mart_ref('example-project'), 'example-project.vibelift_mart')
+      self.assertEqual(ge_mart.curated_ref('example-project'), 'example-project.ds_ge_curated_staging')
     with mock.patch.dict(os.environ, {ge_mart.MART_DATASET_ENV: 'bad`; --'}):
       with self.assertRaises(ValueError):
-        ge_mart.mart_ref('project-maui')
+        ge_mart.mart_ref('example-project')
     with self.assertRaises(ValueError):
       ge_mart.build_support_turns_sql("x' OR 1=1")
 
   def test_sql_limits_are_clamped(self):
-    sql = ge_mart.build_recent_turns_sql('project-maui', hours=10**9, limit=10**9, tokens_only=True)
+    sql = ge_mart.build_recent_turns_sql('example-project', hours=10**9, limit=10**9, tokens_only=True)
     self.assertIn('INTERVAL 8760 HOUR', sql)
     self.assertIn('LIMIT 500', sql)
     self.assertIn('total_tokens IS NOT NULL', sql)
     for hrs in (720, 2160, 4320, 8760):
-      self.assertIn(f'INTERVAL {hrs} HOUR', ge_mart.build_support_turns_sql('project-maui', hours=hrs))
-      self.assertIn(f'INTERVAL {hrs} HOUR', ge_mart.build_user_engine_rollup_sql('project-maui', hours=hrs))
-      self.assertIn(f'INTERVAL {hrs} HOUR', ge_mart.build_audit_principals_sql('project-maui', hours=hrs))
+      self.assertIn(f'INTERVAL {hrs} HOUR', ge_mart.build_support_turns_sql('example-project', hours=hrs))
+      self.assertIn(f'INTERVAL {hrs} HOUR', ge_mart.build_user_engine_rollup_sql('example-project', hours=hrs))
+      self.assertIn(f'INTERVAL {hrs} HOUR', ge_mart.build_audit_principals_sql('example-project', hours=hrs))
 
   def test_usage_log_keeps_unknowns_as_none(self):
     row = {'turn_id': 'ACTIVITY:abc', 'ts': '2026-09-29 10:00:00', 'turn_status': 'SUCCESS',
            'user_email': 'a@example.com', 'total_tokens': None, 'input_tokens': '', 'model_name': None}
-    log = ge_mart.usage_log_from_row(row, 'project-maui')
+    log = ge_mart.usage_log_from_row(row, 'example-project')
     self.assertEqual(log['prompts'], [])
     self.assertIsNone(log['latency_ms'])
     self.assertIsNone(log['csat_rating'])
     self.assertIsNone(log['total_tokens'])
     self.assertIsNone(log['input_tokens'])
     self.assertIsNone(log['model_name'])
-    self.assertTrue(log['outputs'][0]['gcs_uri'].startswith('bq://project-maui.'))
+    self.assertTrue(log['outputs'][0]['gcs_uri'].startswith('bq://example-project.'))
 
   def test_usage_log_parses_rest_strings(self):
     log = ge_mart.usage_log_from_row({'turn_id': 't', 'total_tokens': '38520', 'reasoning_tokens': '0'},
-                                     'project-maui')
+                                     'example-project')
     self.assertEqual(log['total_tokens'], 38520)
     self.assertEqual(log['thinking_tokens'], 0)
 
   def test_support_event_guardrail_block_is_actionable(self):
     row = {'turn_id': 'ACTIVITY:xyz', 'turn_status': 'SUCCESS', 'is_actionable_issue': 'true',
            'is_guardrail_blocked': 'true', 'guardrail_categories': 'SENSITIVE_DATA', 'status_code': '0'}
-    ev = ge_mart.support_event_from_row(row, 'project-maui')
+    ev = ge_mart.support_event_from_row(row, 'example-project')
     self.assertEqual(ev['category'], 'GUARDRAIL_BLOCK')
     self.assertEqual(ev['tier'], 'L2 Actionable')
     self.assertEqual(ev['resolution_status'], 'NEEDS_ATTENTION')
@@ -233,7 +233,7 @@ class GeMartReaderTest(unittest.TestCase):
 
   def test_support_event_success_not_actionable(self):
     ev = ge_mart.support_event_from_row({'turn_id': 'a', 'turn_status': 'SUCCESS',
-                                         'is_actionable_issue': 'false'}, 'project-maui')
+                                         'is_actionable_issue': 'false'}, 'example-project')
     self.assertFalse(ev['is_actionable_issue'])
     self.assertEqual(ev['resolution_status'], 'NO_ACTION')
     self.assertEqual(ev['resolution_action'], 'no audit record matched')
@@ -243,7 +243,7 @@ class GeMartReaderTest(unittest.TestCase):
     self.assertIsNone(ge_mart.mart_refreshed_at([{'day': '2026-09-29', 'refreshed_at': None}]))
     rows = [{'refreshed_at': '2026-09-29 10:00:00+00'}, {'refreshed_at': '2026-09-29 11:00:00+00'}]
     self.assertEqual(ge_mart.mart_refreshed_at(rows), '2026-09-29 11:00:00+00')
-    self.assertIn('MAX(refreshed_at)', ge_mart.build_daily_totals_sql('project-maui'))
+    self.assertIn('MAX(refreshed_at)', ge_mart.build_daily_totals_sql('example-project'))
 
   def test_daily_usage_tokens_none_counts_zero(self):
     out = ge_mart.daily_usage_from_row({'day': '2026-09-29', 'interactions': '5', 'failed_turns': None,
@@ -254,19 +254,19 @@ class GeMartReaderTest(unittest.TestCase):
     self.assertEqual(out['input_tokens'], 12)
 
   def test_sessions_and_refresh_ddl(self):
-    ddl = ge_mart.build_refresh_fct_turns_ddl('project-maui')
-    self.assertIn('CREATE OR REPLACE TABLE `project-maui.vibelift_mart.fct_turns`', ddl)
+    ddl = ge_mart.build_refresh_fct_turns_ddl('example-project')
+    self.assertIn('CREATE OR REPLACE TABLE `example-project.vibelift_mart.fct_turns`', ddl)
     self.assertIn('CURRENT_TIMESTAMP() AS refreshed_at', ddl)
-    self.assertIn('FROM `project-maui.vibelift_mart.v_fct_turns`', ddl)
-    sql = ge_mart.build_recent_sessions_sql('project-maui', days=10**9, limit=10**9)
-    self.assertIn('FROM `project-maui.vibelift_mart.fct_sessions`', sql)
+    self.assertIn('FROM `example-project.vibelift_mart.v_fct_turns`', ddl)
+    sql = ge_mart.build_recent_sessions_sql('example-project', days=10**9, limit=10**9)
+    self.assertIn('FROM `example-project.vibelift_mart.fct_sessions`', sql)
     self.assertIn('INTERVAL 400 DAY', sql)
     self.assertIn('LIMIT 500', sql)
     sess = ge_mart.session_from_row(
         {'session_id': 's1', 'engine_key': 'global/us-1', 'user_email': 'u@example.com',
          'turns': '4', 'chat_turns': '3', 'failed_turns': '1', 'duration_seconds': '42',
          'total_tokens': None, 'input_tokens': '100', 'agent_name': 'Helper'},
-        'project-maui',
+        'example-project',
     )
     self.assertEqual(sess['session_id'], 's1')
     self.assertEqual(sess['turns'], 4)
@@ -278,7 +278,7 @@ class GeMartReaderTest(unittest.TestCase):
     self.assertEqual(sess['agent_name'], 'Helper')
 
   def test_refresh_ge_mart_turns_executes_ddl_and_clears_caches(self):
-    service = gcp_telemetry.GoogleCloudTelemetryService('project-maui', region='us-central1')
+    service = gcp_telemetry.GoogleCloudTelemetryService('example-project', region='us-central1')
     service._cached_bq_insights = {'cached': True}
     service._cached_bq_insights_ts = 123.0
     with mock.patch.object(service, '_query_bigquery_rest',
@@ -293,7 +293,7 @@ class GeMartReaderTest(unittest.TestCase):
 class FleetSummaryFromMartTest(unittest.TestCase):
 
   def test_spend_is_never_modelled(self):
-    service = gcp_telemetry.GoogleCloudTelemetryService('project-maui', region='us-central1')
+    service = gcp_telemetry.GoogleCloudTelemetryService('example-project', region='us-central1')
     rows = [
         {'day': '2026-09-29', 'agent_name': 'helper', 'model_name': 'gemini-2.5-flash', 'interactions': '4',
          'turns_with_tokens': '1', 'input_tokens': '1000', 'cached_input_tokens': '250',
@@ -314,7 +314,7 @@ class FleetSummaryFromMartTest(unittest.TestCase):
     self.assertIsNone(by_agent[None]['avg_latency_ms'])
 
   def test_no_rows_returns_none(self):
-    service = gcp_telemetry.GoogleCloudTelemetryService('project-maui', region='us-central1')
+    service = gcp_telemetry.GoogleCloudTelemetryService('example-project', region='us-central1')
     with mock.patch.object(service, '_query_bigquery_rest', return_value=[]):
       self.assertIsNone(service.fetch_bigquery_fleet_summary())
 
@@ -366,15 +366,15 @@ class DailyCostJoinTest(unittest.TestCase):
 
   def test_daily_cost_sql_rejects_injection(self):
     with self.assertRaises(ValueError):
-      billing_export.build_daily_cost_sql('p-roject.ds.t`; DROP TABLE x; --', 'project-maui')
+      billing_export.build_daily_cost_sql('p-roject.ds.t`; DROP TABLE x; --', 'example-project')
     with self.assertRaises(ValueError):
       billing_export.build_daily_cost_sql('billing-proj.billing.t', "x' OR 1=1 --")
-    sql = billing_export.build_daily_cost_sql('billing-proj.billing.t', 'project-maui', window_days=10**6)
+    sql = billing_export.build_daily_cost_sql('billing-proj.billing.t', 'example-project', window_days=10**6)
     self.assertIn('INTERVAL 400 DAY', sql)
 
   def test_reader_not_connected_without_table(self):
     with mock.patch.dict(os.environ, {billing_export.BILLING_TABLE_ENV: ''}):
-      out = billing_export.BillingExportReader('project-maui', lambda: 'tok').get_daily_ai_costs()
+      out = billing_export.BillingExportReader('example-project', lambda: 'tok').get_daily_ai_costs()
     self.assertEqual(out['status'], 'NOT_CONNECTED')
     self.assertEqual(out['days'], [])
     self.assertIsNone(out['last_billed_day'])

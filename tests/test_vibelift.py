@@ -1018,7 +1018,7 @@ class DeploymentHardeningTest(unittest.TestCase):
 
       # Test /api/csat_rating endpoint
       csat_resp = client.post('/api/csat_rating', json={
-          'user_email': 'sme_reviewer@google.com',
+          'user_email': 'sme_reviewer@example.com',
           'session_id': '6446120131357637190',
           'rating': 5,
           'feedback_text': 'SME one-pane control plane verified.',
@@ -1030,7 +1030,7 @@ class DeploymentHardeningTest(unittest.TestCase):
 
       # Test /api/aive_log endpoint
       aive_resp = client.post('/api/aive_log', json={
-          'user_email': 'sme_reviewer@google.com',
+          'user_email': 'sme_reviewer@example.com',
           'task_type': 'CANARY_TRAFFIC_SPLIT_AUDIT',
           'total_tokens': 16200,
           'latency_ms': 495.0,
@@ -1445,15 +1445,15 @@ def handle_request(client, filings, retriever):
       val_post = client.post('/api/validate_telemetry', json={'llm_judge': False}).json()
       self.assertEqual(val_post['overall_status'], 'VERIFIED_GROUNDED')
 
-      # Simulate live project-maui BigQuery telemetry sync and verify zero fake users or fake GCS URIs
+      # Simulate live example-project BigQuery telemetry sync and verify zero fake users or fake GCS URIs
       live_bq_mock = {
-          'project_id': 'project-maui',
+          'project_id': 'example-project',
           'datasets_queried': ['ds_ge_audit_raw', 'sre_triage_agent_telemetry', 'vibelift_analytics'],
           'power_users_ldap': [
               {
-                  'user_ldap': 'enriq',
-                  'user_email': 'enriq@google.com',
-                  'department': 'GCP Agent Platform & FinOps (project-maui)',
+                  'user_ldap': 'live-user',
+                  'user_email': 'live-user@example.com',
+                  'department': 'GCP Agent Platform & FinOps (example-project)',
                   'primary_agent': 'VibeLift Analytics & FinOps',
                   'sessions_7d': 35,
                   'total_tokens_m': 0.16,
@@ -1471,10 +1471,10 @@ def handle_request(client, filings, retriever):
                   'rating_id': 'bq-audit-1',
                   'timestamp': '2026-04-17T06:03:00Z',
                   'session_id': '1405660395354341226',
-                  'user_email': 'enriq@google.com',
-                  'user_ldap': 'enriq',
+                  'user_email': 'live-user@example.com',
+                  'user_ldap': 'live-user',
                   'rating': 5,
-                  'feedback_text': 'Real BigQuery StreamAssist session in project-maui.',
+                  'feedback_text': 'Real BigQuery StreamAssist session in example-project.',
               },
           ],
           'usage_logs': [
@@ -1482,9 +1482,9 @@ def handle_request(client, filings, retriever):
                   'event_id': 'bq-span-1',
                   'timestamp': '2026-04-17T06:03:00Z',
                   'session_id': '1405660395354341226',
-                  'user_email': 'enriq@google.com',
-                  'user_ldap': 'enriq',
-                  'department': 'GCP Agent Platform & FinOps (project-maui)',
+                  'user_email': 'live-user@example.com',
+                  'user_ldap': 'live-user',
+                  'department': 'GCP Agent Platform & FinOps (example-project)',
                   'task_type': 'GE_STREAM_ASSIST',
                   'model_name': 'gemini-2.5-flash',
                   'prompt_length_chars': 240,
@@ -1495,7 +1495,7 @@ def handle_request(client, filings, retriever):
                   'background_tokens': 6778,
                   'latency_ms': 256.8,
                   'status': 'OK',
-                  'outputs': [{'gcs_uri': 'bq://project-maui.sre_triage_agent_telemetry._AllSpans/1405660395354341226'}],
+                  'outputs': [{'gcs_uri': 'bq://example-project.sre_triage_agent_telemetry._AllSpans/1405660395354341226'}],
                   'csat_rating': 5,
               },
           ],
@@ -1529,7 +1529,7 @@ def handle_request(client, filings, retriever):
           'runaway_alerts': [],
       }
       live_fleet = dict(state['ge_fleet'])
-      live_fleet['project_id'] = 'project-maui'
+      live_fleet['project_id'] = 'example-project'
       server._global_controller.optimizer.sync_from_ge_fleet(live_fleet, bq_insights=live_bq_mock)
       telemetry.set_live_aive_logs(
           usage_logs=live_bq_mock['usage_logs'],
@@ -1539,8 +1539,8 @@ def handle_request(client, filings, retriever):
 
       uc_live = server._global_controller.optimizer.get_user_centric_payload()
       live_ldaps = [u['user_ldap'] for u in uc_live['power_users_ldap']]
-      self.assertEqual(live_ldaps, ['enriq'])
-      for fake_ldap in ('sbahirat', 'russellmyers', 'rseshadri', 'sloona'):
+      self.assertEqual(live_ldaps, ['live-user'])
+      for fake_ldap in ('user-a', 'user-b', 'user-c', 'user-d', 'user-e'):
         self.assertNotIn(fake_ldap, live_ldaps)
     finally:
       telemetry.set_live_aive_logs(None, None)

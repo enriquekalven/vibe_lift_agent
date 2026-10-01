@@ -475,10 +475,10 @@ class GeFleetHelpersTest(unittest.TestCase):
     agent_svc = {'metadata': {'name': 'customer-support-agent'}, 'spec': {'template': {'spec': {'containers': [{'name': 'agent'}]}}}}
     skill_svc = {'metadata': {'name': 'corporate-email-tool'}, 'spec': {'template': {'spec': {'containers': [{'name': 'backend'}]}}}}
     std_svc = {'metadata': {'name': 'payment-gateway'}, 'spec': {'template': {'spec': {'containers': [{'name': 'app'}]}}}}
-    self.assertEqual(ge_fleet.classify_cloud_run_service(mcp_svc, 'project-maui')['type'], 'MCP_SERVER')
-    self.assertEqual(ge_fleet.classify_cloud_run_service(agent_svc, 'project-maui')['type'], 'CLOUD_RUN_AGENT')
-    self.assertEqual(ge_fleet.classify_cloud_run_service(skill_svc, 'project-maui')['type'], 'SKILL_BACKEND')
-    self.assertEqual(ge_fleet.classify_cloud_run_service(std_svc, 'project-maui')['type'], 'CLOUD_RUN_SERVICE')
+    self.assertEqual(ge_fleet.classify_cloud_run_service(mcp_svc, 'example-project')['type'], 'MCP_SERVER')
+    self.assertEqual(ge_fleet.classify_cloud_run_service(agent_svc, 'example-project')['type'], 'CLOUD_RUN_AGENT')
+    self.assertEqual(ge_fleet.classify_cloud_run_service(skill_svc, 'example-project')['type'], 'SKILL_BACKEND')
+    self.assertEqual(ge_fleet.classify_cloud_run_service(std_svc, 'example-project')['type'], 'CLOUD_RUN_SERVICE')
 
   def test_aggregate_trace_skills_and_mcp(self):
     fake_traces = [
@@ -573,8 +573,8 @@ class GeFleetHelpersTest(unittest.TestCase):
 
   def test_project_alias_normalization_deduplicates_project_number(self):
     service, _ = make_fake_service()
-    service._record_project_alias('projects/697625214430/locations/global/collections/default_collection/engines/my-app')
-    self.assertEqual(service._canonical_project('697625214430'), service.project_id)
+    service._record_project_alias('projects/123456789012/locations/global/collections/default_collection/engines/my-app')
+    self.assertEqual(service._canonical_project('123456789012'), service.project_id)
     self.assertEqual(service._canonical_project('other-project-999'), 'other-project-999')
 
   def test_trace_cache_shares_30d_cap_and_falls_back_on_429(self):

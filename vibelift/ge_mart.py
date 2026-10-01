@@ -19,8 +19,12 @@ from typing import Any
 
 CURATED_DATASET_ENV = 'VIBELIFT_GE_CURATED_DATASET'
 MART_DATASET_ENV = 'VIBELIFT_GE_MART_DATASET'
+OTEL_DATASET_ENV = 'VIBELIFT_OTEL_DATASET'
 DEFAULT_CURATED_DATASET = 'ds_ge_curated_staging'
 DEFAULT_MART_DATASET = 'vibelift_mart'
+# Dataset holding the OTel GenAI table `gen_ai_client_inference_operation_details`. The default
+# matches the original reference deployment; set VIBELIFT_OTEL_DATASET to your own dataset.
+DEFAULT_OTEL_DATASET = 'sre_triage_agent_telemetry'
 
 _PROJECT_RE = re.compile(r'^[a-z][a-z0-9\-]{4,61}[a-z0-9]$')
 _DATASET_RE = re.compile(r'^[A-Za-z0-9_]{1,1024}$')
@@ -42,6 +46,10 @@ def curated_dataset_name() -> str:
 
 def mart_dataset_name() -> str:
   return _dataset_from_env(MART_DATASET_ENV, DEFAULT_MART_DATASET)
+
+
+def otel_dataset_name() -> str:
+  return _dataset_from_env(OTEL_DATASET_ENV, DEFAULT_OTEL_DATASET)
 
 
 def curated_ref(project_id: str) -> str:

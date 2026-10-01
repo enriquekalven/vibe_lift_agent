@@ -6,7 +6,7 @@ from vibelift import finops as live_finops
 from vibelift import fleet as ge_fleet
 
 RE = '4895941110288875520'
-RESOURCE = f'projects/project-maui/locations/us-central1/reasoningEngines/{RE}'
+RESOURCE = f'projects/example-project/locations/us-central1/reasoningEngines/{RE}'
 
 
 def _span(span_id, parent, name, labels):
@@ -37,7 +37,7 @@ class TraceTokensTest(unittest.TestCase):
     self.assertEqual(st['llm_calls'], 0)
 
 
-GE_RES = ('//discoveryengine.googleapis.com/projects/697625214430/locations/us/collections/default_collection/'
+GE_RES = ('//discoveryengine.googleapis.com/projects/123456789012/locations/us/collections/default_collection/'
           'engines/ge-app-1/assistants/default_assistant/agents/core_assistant')
 
 
@@ -110,7 +110,7 @@ class TokenAccountingNoDoubleCountTest(unittest.TestCase):
 def _agent(requests):
   return {'type': 'ADK', 'display_name': 'my-capital-agent', 'data_sources': [], 'notes': [],
           'backend': {'kind': 'agent_engine', 'resource': RESOURCE, 'reasoning_engine_id': RE,
-                      'project': 'project-maui', 'location': 'us-central1'},
+                      'project': 'example-project', 'location': 'us-central1'},
           'metrics': {'requests': None, 'errors_4xx': None, 'errors_5xx': None, 'llm_calls': None,
                       'input_tokens': None, 'output_tokens': None, 'cached_tokens': None,
                       'conversations': None, 'last_activity': None, '_req': requests}}
@@ -125,13 +125,13 @@ class TokenSourceJoinTest(unittest.TestCase):
 
   def _apply(self, logs, traces, requests=4):
     svc = ge_fleet.GeminiEnterpriseFleetService.__new__(ge_fleet.GeminiEnterpriseFleetService)
-    svc.project_id = 'project-maui'
+    svc.project_id = 'example-project'
     agent = _agent(requests)
-    results = {('re_requests', 'project-maui'): {RE: {'requests': requests, 'errors_4xx': 0, 'errors_5xx': 0}}}
+    results = {('re_requests', 'example-project'): {RE: {'requests': requests, 'errors_4xx': 0, 'errors_5xx': 0}}}
     if logs is not None:
-      results[('re_tokens', 'project-maui')] = {'by_engine': {RE: logs}}
+      results[('re_tokens', 'example-project')] = {'by_engine': {RE: logs}}
     if traces is not None:
-      results[('re_trace_tokens', 'project-maui')] = {'by_engine': {RE: traces}}
+      results[('re_trace_tokens', 'example-project')] = {'by_engine': {RE: traces}}
     svc._apply_telemetry(agent, results)
     return agent
 
@@ -158,7 +158,7 @@ class TokenSourceJoinTest(unittest.TestCase):
 class RegistrationTest(unittest.TestCase):
 
   def _agent(self, **backend):
-    return {'type': 'ADK', 'resource_name': 'projects/697625214430/locations/global/collections/default_collection/engines/e/assistants/default_assistant/agents/123',
+    return {'type': 'ADK', 'resource_name': 'projects/123456789012/locations/global/collections/default_collection/engines/e/assistants/default_assistant/agents/123',
             'backend': dict({'kind': 'agent_engine', 'resource': RESOURCE, 'location': 'us-central1'}, **backend)}
 
   def test_404_is_backend_not_found_with_cleanup_command(self):
@@ -166,7 +166,7 @@ class RegistrationTest(unittest.TestCase):
     self.assertEqual(reg['status'], 'BACKEND_NOT_FOUND')
     self.assertIn('HTTP 404', reg['evidence'])
     self.assertIn('curl -X DELETE', reg['action']['delete_command'])
-    self.assertIn('discoveryengine.googleapis.com/v1alpha/projects/697625214430/locations/global', reg['action']['delete_command'])
+    self.assertIn('discoveryengine.googleapis.com/v1alpha/projects/123456789012/locations/global', reg['action']['delete_command'])
 
   def test_lookup_failure_is_unverified_not_dead(self):
     reg = ge_fleet.assess_registration(self._agent(), {('re_meta', RESOURCE): None}, 't')

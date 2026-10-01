@@ -56,7 +56,7 @@ class SmeEvalFrameworkTest(unittest.TestCase):
     ctrl = server.VibeLiftRuntimeController(fleet_service=_FAKE_FLEET)
     base = ctrl.get_state_payload(include_fleet=True)
     live_fleet = dict(base['ge_fleet'])
-    live_fleet['project_id'] = 'project-maui'
+    live_fleet['project_id'] = 'example-project'
     live_fleet['live_finops'] = ctrl._live_finops(live_fleet)
 
     bq_insights = {
@@ -94,14 +94,14 @@ class SmeEvalFrameworkTest(unittest.TestCase):
             {
                 'session_id': 'sess-001',
                 'engine_id': 'gemini-enterprise',
-                'user_pseudo_id': 'enriq@google.com',
+                'user_pseudo_id': 'user-a@example.com',
                 'turns': 5,
                 'total_tokens': 4200,
             }
         ],
     }
     live_state = dict(base)
-    live_state['gcp_project'] = 'project-maui'
+    live_state['gcp_project'] = 'example-project'
     live_state['live_data'] = True
     live_state['ge_fleet'] = live_fleet
     live_state['tokenomics_cockpit'] = None
@@ -112,7 +112,7 @@ class SmeEvalFrameworkTest(unittest.TestCase):
         'mart_dataset': 'vibelift_mart',
         'curated_dataset': 'ds_ge_curated_staging',
         'refreshed_at': '2026-09-29T22:00:00Z',
-        'refresh_cli': 'python3 deploy/bigquery/provision_ge_mart.py --project project-maui --refresh',
+        'refresh_cli': 'python3 deploy/bigquery/provision_ge_mart.py --project example-project --refresh',
         'billing_status': 'NOT_CONNECTED',
         'days': [
             {
@@ -130,11 +130,11 @@ class SmeEvalFrameworkTest(unittest.TestCase):
         'status': 'NOT_CONNECTED',
     }
     live_state['user_centric'] = {
-        'collection_mode': 'LIVE GCP TELEMETRY (project-maui BigQuery vibelift_mart)',
+        'collection_mode': 'LIVE GCP TELEMETRY (example-project BigQuery vibelift_mart)',
         'source': 'BigQuery vibelift_mart (fct_turns, fct_sessions, agg_daily_usage)',
         'power_users_ldap': [
             {
-                'user_ldap': 'enriq@google.com',
+                'user_ldap': 'user-a@example.com',
                 'status': 'LIVE_HUMAN_PRINCIPAL',
                 'source_tables': ['vibelift_mart.fct_turns'],
                 'department': 'GCP Principal [vibelift_mart.fct_turns]',
@@ -172,10 +172,10 @@ class SmeEvalFrameworkTest(unittest.TestCase):
                 'event_id': 'evt-live-1',
                 'session_id': 'sess-001',
                 'timestamp': '2026-09-29T21:55:00Z',
-                'user_email': 'enriq@google.com',
+                'user_email': 'user-a@example.com',
                 'task_type': 'STREAM_ASSIST',
                 'prompts': [],
-                'outputs': [{'gcs_uri': 'bq://project-maui.vibelift_mart.fct_turns#evt-live-1'}],
+                'outputs': [{'gcs_uri': 'bq://example-project.vibelift_mart.fct_turns#evt-live-1'}],
                 'total_tokens': 1200,
                 'model_name': 'gemini-2.5-flash',
                 'latency_ms': 510.0,
@@ -211,7 +211,7 @@ class SmeEvalFrameworkTest(unittest.TestCase):
     ctrl = server.VibeLiftRuntimeController(fleet_service=_FAKE_FLEET)
     res1 = ctrl.submit_sme_rating({
         'persona_id': 'finops_lead',
-        'reviewer': 'finops-sme@google.com',
+        'reviewer': 'finops-sme@example.com',
         'overall_rating': 5,
         'verdict': 'APPROVED',
         'task_completed': True,
@@ -220,7 +220,7 @@ class SmeEvalFrameworkTest(unittest.TestCase):
     self.assertEqual(res1['status'], 'recorded')
     res2 = ctrl.submit_sme_rating({
         'persona_id': 'finops_lead',
-        'reviewer': 'billing-auditor@google.com',
+        'reviewer': 'billing-auditor@example.com',
         'overall_rating': 4,
         'verdict': 'APPROVED_WITH_NOTES',
         'task_completed': True,
@@ -270,7 +270,7 @@ class SmeEvalFrameworkTest(unittest.TestCase):
 
     rate_res = client.post('/api/sme_eval/rate', json={
         'persona_id': 'sre_platform',
-        'reviewer': 'sre-oncall@google.com',
+        'reviewer': 'sre-oncall@example.com',
         'overall_rating': 5,
         'verdict': 'APPROVED',
         'notes': 'Cloud Run + GE fleet latency p95 and L1/L2 support stream verified.',

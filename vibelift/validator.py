@@ -1,7 +1,7 @@
 """Deterministic & LLM-as-a-Judge Telemetry Grounding Validator for VibeLift.
 
 Verifies every tab and metric in `/api/state` against live Google Cloud telemetry
-(`project-maui` BigQuery, Cloud Monitoring v3, Cloud Logging v2, and Discovery
+(the configured project's BigQuery, Cloud Monitoring v3, Cloud Logging v2, and Discovery
 Engine v1alpha) to guarantee zero fabricated users, zero fake GCS URIs, and
 explicit provenance tagging across all 6 dashboard tabs.
 """
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 # Fake GCS URIs from the old demo seed data that must never appear in Live GCP mode.
 # (User rows are validated by BigQuery provenance, not by a name blocklist.)
-BANNED_MOCK_GCS_PREFIX_IN_LIVE_MODE = 'gs://project-maui-aive-assets/'
+BANNED_MOCK_GCS_PREFIX_IN_LIVE_MODE = 'gs://vibelift-demo-assets/'
 
 
 def _is_live_gcp_mode(state: Mapping[str, Any], ge_fleet: Mapping[str, Any] | None = None) -> bool:
@@ -164,7 +164,7 @@ def validate_dashboard_state(
       metric_or_panel='turns & turn_summary (Prompt Cache Forensics)',
       passed=(len(turns) == summary_turns and len(turns) > 0),
       provenance='OBSERVED_GCP_TELEMETRY' if live_mode else 'INTERACTIVE_WHAT_IF_SIMULATOR',
-      source_dataset='project-maui.sre_triage_agent_telemetry.gen_ai_client_inference_operation_details',
+      source_dataset='<otel dataset>.gen_ai_client_inference_operation_details',
       evidence=f'Verified {len(turns)} turn records synchronized with turn_summary.total_turns={summary_turns}.',
   )
 
@@ -241,7 +241,7 @@ def validate_dashboard_state(
         metric_or_panel='user_centric.power_users_ldap',
         passed=no_mock_users,
         provenance='OBSERVED_GCP_TELEMETRY',
-        source_dataset='project-maui.ds_ge_audit_raw.cloudaudit_googleapis_com_data_access + sre_triage_agent_telemetry',
+        source_dataset='ds_ge_audit_raw.cloudaudit_googleapis_com_data_access + <otel dataset>',
         evidence=(
             f'All {len(user_ldaps)} users trace to BigQuery audit/OTel rows ({", ".join(user_ldaps)}).'
             if no_mock_users
@@ -275,9 +275,9 @@ def validate_dashboard_state(
         metric_or_panel='aive_logs.usage_logs & ratings_logs',
         passed=(len(fake_uris) == 0 and len(usage_logs) > 0),
         provenance='OBSERVED_GCP_TELEMETRY',
-        source_dataset='project-maui.sre_triage_agent_telemetry + ds_ge_audit_raw + vibelift_analytics',
+        source_dataset='<otel dataset> + ds_ge_audit_raw + vibelift_analytics',
         evidence=(
-            f'Verified {len(usage_logs)} real BigQuery telemetry events with authentic bq://project-maui URIs.'
+            f'Verified {len(usage_logs)} real BigQuery telemetry events with authentic bq:// URIs.'
             if len(fake_uris) == 0
             else f'FLAGGED: Found mocked GCS URIs in live mode: {fake_uris}'
         ),
@@ -324,7 +324,7 @@ def validate_dashboard_state(
       metric_or_panel='cloud_run_services / gcp_services',
       passed=len(services) > 0,
       provenance='OBSERVED_GCP_TELEMETRY',
-      source_dataset='project-maui.vibelift_analytics.run_googleapis_com_requests_* + Cloud Monitoring',
+      source_dataset='vibelift_analytics.run_googleapis_com_requests_* + Cloud Monitoring',
       evidence=f'Verified {len(services)} Cloud Run agent services with active revision telemetry.',
   )
 
@@ -381,8 +381,8 @@ def validate_dashboard_state(
       'checks': checks,
       'provenance_summary': {
           'OBSERVED_GCP_TELEMETRY': (
-              'Direct measurements from project-maui Discovery Engine v1alpha, Cloud Monitoring v3, '
-              'and BigQuery (ds_ge_audit_raw, sre_triage_agent_telemetry, vibelift_analytics).'
+              'Direct measurements from the project\'s Discovery Engine v1alpha, Cloud Monitoring v3, '
+              'and BigQuery (ds_ge_audit_raw, OTel GenAI dataset, vibelift_analytics).'
           ),
           'DERIVED_FROM_LIVE_TELEMETRY': (
               'Deterministic rate-card calculations, cache break-even formulas (N* = 1 + S / 0.9*P_in), '
@@ -533,7 +533,7 @@ def run_llm_as_judge_audit(
 ) -> dict[str, Any]:
   """Calls Vertex AI Gemini as an independent LLM-as-a-Judge auditor, with a rule-based fallback."""
 
-  project_id = str(state.get('gcp_project') or os.environ.get('GOOGLE_CLOUD_PROJECT') or 'project-maui')
+  project_id = str(state.get('gcp_project') or os.environ.get('GOOGLE_CLOUD_PROJECT') or 'UNCONFIGURED-PROJECT')
   fleet = as_mapping(state.get('ge_fleet'))
   uc = as_mapping(state.get('user_centric'))
   aive = as_mapping(state.get('aive_logs'))

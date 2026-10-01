@@ -521,11 +521,15 @@ class GoogleCloudTelemetryService:
       self._cached_live_turns = turns
       return turns
 
-    # 1b. Secondary BigQuery Source: real OTel GenAI turns in sre_triage_agent_telemetry
-    otel_rows = self._query_bigquery_rest(f"""
+    # 1b. Secondary BigQuery Source: real OTel GenAI turns in the OTel dataset (VIBELIFT_OTEL_DATASET)
+    try:
+      otel_ds = ge_mart.otel_dataset_name()
+    except ValueError:
+      otel_ds = ''
+    otel_rows = [] if not otel_ds else self._query_bigquery_rest(f"""
       SELECT
         CAST(timestamp AS STRING) AS ts,
-        COALESCE(labels.gen_ai_agent_name, 'sre_triage_root_agent') AS agent_name,
+        COALESCE(labels.gen_ai_agent_name, 'root_agent') AS agent_name,
         labels.user_id AS user_id,
         COALESCE(labels.gen_ai_conversation_id, 'conv') AS conv_id,
         COALESCE(labels.gen_ai_usage_input_tokens, '0') AS input_tokens,
@@ -533,7 +537,7 @@ class GoogleCloudTelemetryService:
         COALESCE(labels.gen_ai_system_instructions_ref, '') AS sys_ref,
         COALESCE(labels.gen_ai_input_messages_ref, '') AS in_ref,
         COALESCE(labels.gen_ai_output_messages_ref, '') AS out_ref
-      FROM `{self.project_id}.sre_triage_agent_telemetry.gen_ai_client_inference_operation_details`
+      FROM `{self.project_id}.{otel_ds}.gen_ai_client_inference_operation_details`
       WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
       ORDER BY timestamp DESC
       LIMIT {int(max_results)}
@@ -561,7 +565,7 @@ class GoogleCloudTelemetryService:
               candidates_token_count=out_tok,
               thoughts_token_count=0,
               status_code=200,
-              tool_called='sre_triage.gen_ai_inference',
+              tool_called='otel.gen_ai_inference',
               evolution_generation=14,
           )
       )
@@ -689,7 +693,6 @@ class GoogleCloudTelemetryService:
     Rows come from <otel dataset>.gen_ai_client_inference_operation_details; only turns with at least
     one content ref are returned. Cached for 60 seconds.
     """
-    import re
     import time
 
     if not self.project_id or self.project_id in (UNCONFIGURED_PROJECT_ID, 'test-project'):
@@ -698,8 +701,9 @@ class GoogleCloudTelemetryService:
     cached_ts = float(getattr(self, '_cached_prompt_turns_ts', 0.0))
     if cached is not None and not force_refresh and time.monotonic() - cached_ts < 60.0:
       return list(cached)
-    otel_ds = (os.environ.get('VIBELIFT_OTEL_DATASET') or 'sre_triage_agent_telemetry').strip()
-    if not re.fullmatch(r'[A-Za-z0-9_]{1,1024}', otel_ds):
+    try:
+      otel_ds = ge_mart.otel_dataset_name()
+    except ValueError:
       return []
     rows = self._query_bigquery_rest(f"""
       SELECT
@@ -819,7 +823,7 @@ class GoogleCloudTelemetryService:
       non_blocking: bool = False,
       window_hours: int | None = None,
   ) -> dict[str, Any] | None:
-    """Queries real BigQuery telemetry datasets in project-maui for user, session, tool, and turn grounding."""
+    """Queries real BigQuery telemetry datasets in the project for user, session, tool, and turn grounding."""
     import concurrent.futures
     import threading
     import time
@@ -863,7 +867,10 @@ class GoogleCloudTelemetryService:
     except ValueError:
       return self._cached_bq_insights
 
-    otel_ds = (os.environ.get('VIBELIFT_OTEL_DATASET') or 'sre_triage_agent_telemetry').strip() or 'sre_triage_agent_telemetry'
+    try:
+      otel_ds = ge_mart.otel_dataset_name()
+    except ValueError:
+      return self._cached_bq_insights
     analytics_ds = (os.environ.get('VIBELIFT_ANALYTICS_DATASET') or 'vibelift_analytics').strip() or 'vibelift_analytics'
 
     queries = {
@@ -976,7 +983,7 @@ class GoogleCloudTelemetryService:
       out_tok = ge_mart.int_or_none(row.get('output_tokens'))
       out_uri = str(row.get('output_gcs_uri') or row.get('input_gcs_uri') or row.get('sys_gcs_uri') or '')
       evt_id = str(row.get('event_id') or f'otel-{idx + 1}')
-      source_table = f'{p}.sre_triage_agent_telemetry.gen_ai_client_inference_operation_details'
+      source_table = f'{p}.{otel_ds}.gen_ai_client_inference_operation_details'
       live_usage_logs.append({
           'event_id': evt_id,
           'timestamp': str(row.get('ts') or ''),
@@ -984,7 +991,7 @@ class GoogleCloudTelemetryService:
           'user_email': uid if uid and '@' in uid else None,
           'user_ldap': uid,
           'company_name': f'Google Cloud ({p})',
-          'department': f"ReasoningEngine {row.get('engine_id')} (sre_triage_agent_telemetry)",
+          'department': f"ReasoningEngine {row.get('engine_id')} ({otel_ds})",
           'task_type': 'OTEL_GENAI_INFERENCE',
           'agent_name': str(row.get('agent_name') or '') or None,
           'model_name': None,  # not in these OTel labels
@@ -1137,7 +1144,7 @@ class GoogleCloudTelemetryService:
       st['observed_tokens'] += (u['in_tok'] + u['out_tok'])
       st['tokens_reported'] = True
       st['methods'].add('gen_ai.client.inference')
-      st['source_tables'].add('sre_triage_agent_telemetry')
+      st['source_tables'].add(otel_ds)
       if u['last_ts'] > st['last_seen']:
         st['last_seen'] = u['last_ts']
 
@@ -1194,7 +1201,7 @@ class GoogleCloudTelemetryService:
           'anomaly_status': role_tag,
       })
 
-    # 3. Build real skill_mcp_breakdown & decorator_events from sre_triage tools, ds_ge_audit_raw, and Cloud Run requests
+    # 3. Build real skill_mcp_breakdown & decorator_events from OTel tool definitions, ds_ge_audit_raw, and Cloud Run requests
     live_skills_mcp: list[dict[str, Any]] = []
     live_decorator_events: list[dict[str, Any]] = []
 
@@ -1211,12 +1218,12 @@ class GoogleCloudTelemetryService:
           'prompt_tokens_m': round(total_sre_in / 1_000_000.0, 4),
           'cache_hit_pct': None,
           'context_bloat_pct': None,
-          'optimization_applied': f'Declared on {total_sre_turns} recent inference turns (sre_triage_agent_telemetry)',
+          'optimization_applied': f'Declared on {total_sre_turns} recent inference turns ({otel_ds})',
           'monthly_saved_usd': None,
       })
       live_decorator_events.append({
           'timestamp': str(sre_turns[0].get('ts') if sre_turns else 'Live BQ'),
-          'agent_name': 'sre_triage_root_agent',
+          'agent_name': str(sre_turns[0].get('agent_name') or 'root_agent') if sre_turns else 'root_agent',
           'handler_name': tname,
           'protocol': 'OpenTelemetry gen_ai.client.inference',
           'model': None,
@@ -1228,7 +1235,7 @@ class GoogleCloudTelemetryService:
           'context_bloat_pct': None,
           'idle_ratio_pct': None,
           'skill_or_mcp': f'adk_tool://{tname}',
-          'user_cohort': 'sre_triage_agent_telemetry (BigQuery)',
+          'user_cohort': f'{otel_ds} (BigQuery)',
           'status': 'OTel span (BigQuery)',
       })
 
@@ -1390,7 +1397,7 @@ class GoogleCloudTelemetryService:
     bq_fleet = self.fetch_bigquery_fleet_summary()
 
     summary_stats = telemetry.summarize_log_stream(live_turns)
-    otel_ds = (os.environ.get('VIBELIFT_OTEL_DATASET') or 'sre_triage_agent_telemetry').strip() or 'sre_triage_agent_telemetry'
+    otel_ds = ge_mart.otel_dataset_name()
     analytics_ds = (os.environ.get('VIBELIFT_ANALYTICS_DATASET') or 'vibelift_analytics').strip() or 'vibelift_analytics'
 
     return {

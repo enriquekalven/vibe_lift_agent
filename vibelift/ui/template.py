@@ -798,7 +798,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
                   <option value="security_governance">Security, Governance &amp; Data Privacy Auditor</option>
                   <option value="cfo_exec">VP Engineering / Executive Sponsor</option>
                 </select>
-                <input id="smeEvalReviewerInput" type="text" placeholder="SME Reviewer (e.g. ldap@google.com)" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;min-width:190px;" />
+                <input id="smeEvalReviewerInput" type="text" placeholder="SME Reviewer (e.g. reviewer@example.com)" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;min-width:190px;" />
                 <select id="smeEvalRatingSelect" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;">
                   <option value="5">5 / 5 &mdash; Exceeds Expectations</option>
                   <option value="4">4 / 5 &mdash; Meets Expectations</option>
@@ -3415,7 +3415,7 @@ async def handle_agent_turn(message_envelope):
         } catch (e) {}
       }
       if (currentState && currentState.aive_logs && Array.isArray(currentState.aive_logs.ratings_logs)) {
-        const ldap = String(payload.user_email || 'enriq').split('@')[0];
+        const ldap = String(payload.user_email || 'unknown').split('@')[0];
         currentState.aive_logs.ratings_logs.unshift({
           rating_id: 'rat-live',
           timestamp: 'Just now',
@@ -3592,7 +3592,7 @@ async def handle_agent_turn(message_envelope):
       try {
         const payload = {
           persona_id: personaEl ? personaEl.value : activeSmePersonaId,
-          reviewer: (reviewerEl && reviewerEl.value.trim()) ? reviewerEl.value.trim() : 'sme-reviewer@google.com',
+          reviewer: (reviewerEl && reviewerEl.value.trim()) ? reviewerEl.value.trim() : 'anonymous_sme',
           overall_rating: ratingEl ? parseInt(ratingEl.value, 10) : 5,
           verdict: verdictEl ? verdictEl.value : 'APPROVED',
           task_completed: true,

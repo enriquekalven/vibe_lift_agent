@@ -85,9 +85,9 @@ class TestBillingExportFullCoverage(unittest.TestCase):
         self.assertIn('No billed usage', str(empty_res['message']))
 
     def test_billing_export_reader_get_and_daily_costs(self) -> None:
-        table = 'project-maui.billing_ds.gcp_billing_export_v1_012345'
+        table = 'example-project.billing_ds.gcp_billing_export_v1_012345'
         with mock.patch.dict(os.environ, {billing_export.BILLING_TABLE_ENV: table}):
-            reader = billing_export.BillingExportReader('project-maui', lambda: 'fake-token')
+            reader = billing_export.BillingExportReader('example-project', lambda: 'fake-token')
             bq_rows = [
                 {
                     'service': 'Vertex AI',
@@ -116,10 +116,10 @@ class TestBillingExportFullCoverage(unittest.TestCase):
                 self.assertIs(daily1, daily2)
 
     def test_billing_export_reader_non_blocking_and_errors(self) -> None:
-        table = 'project-maui.billing_ds.gcp_billing_export_v1_012345'
+        table = 'example-project.billing_ds.gcp_billing_export_v1_012345'
         with mock.patch.dict(os.environ, {billing_export.BILLING_TABLE_ENV: table}):
             # 1. No token available -> ERROR status
-            reader_no_tok = billing_export.BillingExportReader('project-maui', lambda: None)
+            reader_no_tok = billing_export.BillingExportReader('example-project', lambda: None)
             res_no_tok = reader_no_tok.get(non_blocking=False)
             self.assertEqual(res_no_tok['status'], 'ERROR')
             self.assertIn('No Google Cloud credentials', str(res_no_tok['message']))
@@ -128,7 +128,7 @@ class TestBillingExportFullCoverage(unittest.TestCase):
             self.assertEqual(daily_no_tok['status'], 'ERROR')
 
             # 2. Non-blocking initial call returns LOADING and spawns background thread
-            reader_nb = billing_export.BillingExportReader('project-maui', lambda: 'tok')
+            reader_nb = billing_export.BillingExportReader('example-project', lambda: 'tok')
             with mock.patch.object(reader_nb, '_refresh'), mock.patch.object(reader_nb, '_refresh_daily'):
                 loading1 = reader_nb.get(non_blocking=True)
                 self.assertEqual(loading1['status'], 'LOADING')
@@ -141,7 +141,7 @@ class TestBillingExportFullCoverage(unittest.TestCase):
                 self.assertEqual(dloading2['status'], 'LOADING')
 
             # 3. _run with jobComplete=False
-            reader_inc = billing_export.BillingExportReader('project-maui', lambda: 'tok')
+            reader_inc = billing_export.BillingExportReader('example-project', lambda: 'tok')
             with mock.patch('urllib.request.urlopen', return_value=_MockHttpResponse({'jobComplete': False})):
                 res_inc = reader_inc.get(non_blocking=False)
                 self.assertEqual(res_inc['status'], 'ERROR')
@@ -163,7 +163,7 @@ class TestBillingExportFullCoverage(unittest.TestCase):
                 self.assertIn('BigQuery HTTP 500', str(err_msg))
 
             # 5. Exception inside _refresh and _refresh_daily
-            reader_exc = billing_export.BillingExportReader('project-maui', lambda: 'tok')
+            reader_exc = billing_export.BillingExportReader('example-project', lambda: 'tok')
             with mock.patch.object(reader_exc, '_query', side_effect=RuntimeError('boom')):
                 reader_exc._refresh(table)
                 self.assertEqual(reader_exc._cache['status'], 'ERROR')
@@ -179,7 +179,7 @@ class TestBillingExportFullCoverage(unittest.TestCase):
                 {'day': '2026-09-27', 'gross_usd': '10.0', 'credits_usd': '-1.0', 'service': 'Vertex AI', 'currency': 'USD'},
                 {'day': '2026-09-29', 'gross_usd': '12.0', 'credits_usd': '-2.0', 'service': 'Gemini Enterprise', 'currency': 'USD'},
             ],
-            'project-maui.ds.tbl',
+            'example-project.ds.tbl',
         )
         self.assertEqual(len(summary['days']), 2)
         joined = billing_export.join_daily_usage_with_cost(
@@ -225,7 +225,7 @@ class TestGcpTelemetryFullCoverage(unittest.TestCase):
             self.assertEqual(gcp_telemetry.get_current_gcp_region(), 'europe-west1')
 
     def test_bigquery_client_and_access_token_fallbacks(self) -> None:
-        svc = gcp_telemetry.GoogleCloudTelemetryService(project_id='project-maui', region='us-central1')
+        svc = gcp_telemetry.GoogleCloudTelemetryService(project_id='example-project', region='us-central1')
         # bigquery_client property
         _ = svc.bigquery_client
 
@@ -240,7 +240,7 @@ class TestGcpTelemetryFullCoverage(unittest.TestCase):
         fake_creds.valid = False
         fake_creds.token = 'adc-refreshed-token'
         with mock.patch.object(gcp_telemetry, 'google_auth') as m_auth, mock.patch.object(gcp_telemetry, 'GoogleAuthRequest', return_value='req'):
-            m_auth.default.return_value = (fake_creds, 'project-maui')
+            m_auth.default.return_value = (fake_creds, 'example-project')
             tok = svc._get_access_token()
             self.assertEqual(tok, 'adc-refreshed-token')
             fake_creds.refresh.assert_called_once()
@@ -258,7 +258,7 @@ class TestGcpTelemetryFullCoverage(unittest.TestCase):
                 self.assertIsNone(svc._get_access_token())
 
     def test_query_bigquery_rest_and_cloud_run_services(self) -> None:
-        svc = gcp_telemetry.GoogleCloudTelemetryService(project_id='project-maui', region='us-central1')
+        svc = gcp_telemetry.GoogleCloudTelemetryService(project_id='example-project', region='us-central1')
         svc._cli_token = 'valid-token'
         svc._cli_token_ts = time.monotonic()
 
@@ -278,7 +278,7 @@ class TestGcpTelemetryFullCoverage(unittest.TestCase):
         # list_cloud_run_agent_services: live Admin API + BQ enrichment
         admin_resp = {
             'uri': 'https://vibe-lift-agent-xyz.a.run.app',
-            'latestReadyRevision': 'projects/project-maui/locations/us-central1/services/vibe-lift-agent/revisions/vibe-lift-agent-00018',
+            'latestReadyRevision': 'projects/example-project/locations/us-central1/services/vibe-lift-agent/revisions/vibe-lift-agent-00018',
             'template': {'scaling': {'minInstanceCount': 1, 'maxInstanceCount': 5}, 'maxInstanceRequestConcurrency': 80},
             'terminalCondition': {'state': 'CONDITION_SUCCEEDED'},
         }
@@ -295,7 +295,7 @@ class TestGcpTelemetryFullCoverage(unittest.TestCase):
             self.assertTrue(len(nb_services) >= 1)
 
     def test_support_telemetry_and_fleet_summary(self) -> None:
-        svc = gcp_telemetry.GoogleCloudTelemetryService(project_id='project-maui', region='us-central1')
+        svc = gcp_telemetry.GoogleCloudTelemetryService(project_id='example-project', region='us-central1')
         mart_turn_row = {
             'turn_id': 't-100',
             'turn_source': 'ASSISTANT',
@@ -303,7 +303,7 @@ class TestGcpTelemetryFullCoverage(unittest.TestCase):
             'ts': '2026-09-29T12:00:00Z',
             'trace_id': 'tr-1',
             'session_id': 'sess-1',
-            'user_email': 'enriq@google.com',
+            'user_email': 'user-a@example.com',
             'engine_key': 'global/eng-1',
             'agent_name': 'sre_agent',
             'model_name': 'gemini-2.5-flash',
@@ -366,7 +366,7 @@ class TestGcpTelemetryFullCoverage(unittest.TestCase):
             self.assertEqual(summary['aggregate_cache_hit_ratio'], 75.0)
 
     def test_fetch_live_cloud_turns_all_three_tiers(self) -> None:
-        svc = gcp_telemetry.GoogleCloudTelemetryService(project_id='project-maui', region='us-central1')
+        svc = gcp_telemetry.GoogleCloudTelemetryService(project_id='example-project', region='us-central1')
 
         # Tier 1: GE mart turns with tokens
         mart_rows = [
@@ -396,7 +396,7 @@ class TestGcpTelemetryFullCoverage(unittest.TestCase):
             {
                 'ts': '2026-09-29T11:00:00Z',
                 'agent_name': 'sre_triage_root_agent',
-                'user_id': 'enriq@google.com',
+                'user_id': 'user-a@example.com',
                 'conv_id': 'conv-12345678',
                 'input_tokens': '8500',
                 'output_tokens': '450',
@@ -434,7 +434,7 @@ class TestGcpTelemetryFullCoverage(unittest.TestCase):
             self.assertEqual(turns3[0].prompt_token_count, 15000)
 
     def test_refresh_ge_mart_and_live_bigquery_project_insights(self) -> None:
-        svc = gcp_telemetry.GoogleCloudTelemetryService(project_id='project-maui', region='us-central1')
+        svc = gcp_telemetry.GoogleCloudTelemetryService(project_id='example-project', region='us-central1')
         svc._cli_token = 'valid-token'
         svc._cli_token_ts = time.monotonic()
 
@@ -447,20 +447,20 @@ class TestGcpTelemetryFullCoverage(unittest.TestCase):
         def _fake_bq_router(sql: str, timeout_s: float = 7.0) -> list[dict[str, object]]:
             if 'v_consolidated_audit_log' in sql:
                 return [
-                    {'principal': 'enriq@google.com', 'method_name': 'ConversationalSearchService.StreamAssist', 'engine_key': 'global/eng-1', 'call_count': '15', 'last_seen': '2026-09-29T12:00:00Z'},
-                    {'principal': 'sa@project-maui.iam.gserviceaccount.com', 'method_name': 'EngineService.GetEngine', 'engine_key': '/', 'call_count': '5', 'last_seen': '2026-09-29T11:00:00Z'},
+                    {'principal': 'user-a@example.com', 'method_name': 'ConversationalSearchService.StreamAssist', 'engine_key': 'global/eng-1', 'call_count': '15', 'last_seen': '2026-09-29T12:00:00Z'},
+                    {'principal': 'sa@example-project.iam.gserviceaccount.com', 'method_name': 'EngineService.GetEngine', 'engine_key': '/', 'call_count': '5', 'last_seen': '2026-09-29T11:00:00Z'},
                 ]
             if 'GROUP BY user_email, engine_key' in sql:
                 return [
-                    {'user_email': 'enriq@google.com', 'engine_key': 'global/eng-1', 'interactions': '12', 'sessions': '4', 'total_tokens': '48000', 'reasoning_tokens': '1200', 'last_seen': '2026-09-29T12:05:00Z'},
+                    {'user_email': 'user-a@example.com', 'engine_key': 'global/eng-1', 'interactions': '12', 'sessions': '4', 'total_tokens': '48000', 'reasoning_tokens': '1200', 'last_seen': '2026-09-29T12:05:00Z'},
                 ]
-            if 'FROM `project-maui.vibelift_mart.fct_turns`' in sql and 'GROUP BY event_date' in sql:
+            if 'FROM `example-project.vibelift_mart.fct_turns`' in sql and 'GROUP BY event_date' in sql:
                 return [
                     {'day': '2026-09-29', 'interactions': '12', 'chat_turns': '10', 'searches': '2', 'agent_calls': '5', 'sessions': '4', 'active_users': '2', 'failed_turns': '0', 'guardrail_blocks': '0', 'turns_with_tokens': '10', 'input_tokens': '40000', 'output_tokens': '8000', 'cached_input_tokens': '30000', 'reasoning_tokens': '1200', 'total_tokens': '48000', 'refreshed_at': '2026-09-29T12:00:00Z'},
                 ]
-            if 'FROM `project-maui.vibelift_mart.fct_turns`' in sql:
+            if 'FROM `example-project.vibelift_mart.fct_turns`' in sql:
                 return [
-                    {'turn_id': 't-1', 'turn_source': 'ASSISTANT', 'turn_kind': 'CHAT', 'ts': '2026-09-29T12:00:00Z', 'session_id': 's-1', 'user_email': 'enriq@google.com', 'engine_key': 'global/eng-1', 'agent_name': 'sre_agent', 'model_name': 'gemini-2.5-flash', 'api_method': 'StreamAssist', 'turn_status': 'SUCCESS', 'input_tokens': '4000', 'output_tokens': '500', 'cached_input_tokens': '3000', 'reasoning_tokens': '100', 'total_tokens': '4500', 'llm_calls': '1', 'tool_call_count': '1', 'tool_names': 'fetch_logs'},
+                    {'turn_id': 't-1', 'turn_source': 'ASSISTANT', 'turn_kind': 'CHAT', 'ts': '2026-09-29T12:00:00Z', 'session_id': 's-1', 'user_email': 'user-a@example.com', 'engine_key': 'global/eng-1', 'agent_name': 'sre_agent', 'model_name': 'gemini-2.5-flash', 'api_method': 'StreamAssist', 'turn_status': 'SUCCESS', 'input_tokens': '4000', 'output_tokens': '500', 'cached_input_tokens': '3000', 'reasoning_tokens': '100', 'total_tokens': '4500', 'llm_calls': '1', 'tool_call_count': '1', 'tool_names': 'fetch_logs'},
                 ]
             if 'agg_daily_usage' in sql:
                 return [
@@ -468,7 +468,7 @@ class TestGcpTelemetryFullCoverage(unittest.TestCase):
                 ]
             if 'fct_sessions' in sql:
                 return [
-                    {'engine_key': 'global/eng-1', 'session_id': 's-1', 'session_start': '2026-09-29T11:50:00Z', 'session_end': '2026-09-29T12:00:00Z', 'duration_seconds': '600', 'session_date': '2026-09-29', 'user_email': 'enriq@google.com', 'agent_name': 'sre_agent', 'model_names': 'gemini-2.5-flash', 'turns': '3', 'chat_turns': '3', 'failed_turns': '0', 'actionable_issues': '0', 'guardrail_blocks': '0', 'turns_with_tokens': '3', 'input_tokens': '12000', 'output_tokens': '1500', 'cached_input_tokens': '9000', 'reasoning_tokens': '300', 'total_tokens': '13500', 'llm_calls': '3', 'tool_calls': '2', 'tool_failures': '0'},
+                    {'engine_key': 'global/eng-1', 'session_id': 's-1', 'session_start': '2026-09-29T11:50:00Z', 'session_end': '2026-09-29T12:00:00Z', 'duration_seconds': '600', 'session_date': '2026-09-29', 'user_email': 'user-a@example.com', 'agent_name': 'sre_agent', 'model_names': 'gemini-2.5-flash', 'turns': '3', 'chat_turns': '3', 'failed_turns': '0', 'actionable_issues': '0', 'guardrail_blocks': '0', 'turns_with_tokens': '3', 'input_tokens': '12000', 'output_tokens': '1500', 'cached_input_tokens': '9000', 'reasoning_tokens': '300', 'total_tokens': '13500', 'llm_calls': '3', 'tool_calls': '2', 'tool_failures': '0'},
                 ]
             if 'sre_triage_agent_telemetry' in sql:
                 return [
@@ -481,7 +481,7 @@ class TestGcpTelemetryFullCoverage(unittest.TestCase):
                 ]
             if 'ds_vertex_agents_raw' in sql:
                 return [
-                    {'dataset': 'ds_vertex_agents_raw', 'principal': 'admin@google.com', 'method_name': 'ReasoningEngineService.Query', 'call_count': '9', 'last_seen': '2026-09-29T11:30:00Z'},
+                    {'dataset': 'ds_vertex_agents_raw', 'principal': 'admin@example.com', 'method_name': 'ReasoningEngineService.Query', 'call_count': '9', 'last_seen': '2026-09-29T11:30:00Z'},
                 ]
             return []
 
@@ -573,12 +573,12 @@ class TestTelemetryDecoratorsFullCoverage(unittest.TestCase):
         async def async_gen_fail(prompt: str) -> None:
             raise ValueError('async gen failed')
 
-        res1 = sync_gen('generate report', session_id='s-100', user_email='enriq@google.com')
+        res1 = sync_gen('generate report', session_id='s-100', user_email='user-a@example.com')
         self.assertEqual(res1['total_tokens'], 12345)
         with self.assertRaises(RuntimeError):
             sync_gen_fail('bad prompt')
 
-        res2 = asyncio.run(async_gen('generate video', session_id='s-200', user_email='enriq@google.com'))
+        res2 = asyncio.run(async_gen('generate video', session_id='s-200', user_email='user-a@example.com'))
         self.assertEqual(res2['total_tokens'], 23456)
         with self.assertRaises(ValueError):
             asyncio.run(async_gen_fail('bad async prompt'))
@@ -587,7 +587,7 @@ class TestTelemetryDecoratorsFullCoverage(unittest.TestCase):
             [{'event_id': 'live-evt-1', 'csat_rating': None}],
             [{'rating_id': 'live-rat-1', 'rating': 5}],
         )
-        telemetry.log_csat_rating('s-live', 'live-evt-1', 'enriq@google.com', 4, 'good')
+        telemetry.log_csat_rating('s-live', 'live-evt-1', 'user-a@example.com', 4, 'good')
         live_logs = telemetry.get_recent_aive_logs(live_only=True)
         self.assertTrue(any(r.get('event_id') == 'live-evt-1' and r.get('csat_rating') == 4 for r in live_logs['usage_logs']))
 
@@ -599,7 +599,7 @@ class TestValidatorAndSmeEvalFullCoverage(unittest.TestCase):
         ctrl = server.VibeLiftRuntimeController()
         state = ctrl.get_state_payload(include_fleet=True)
         # Force live project_id on state for run_llm_as_judge_audit
-        live_state = dict(state, gcp_project='project-maui')
+        live_state = dict(state, gcp_project='example-project')
 
         vertex_json = {
             'candidates': [{
@@ -642,47 +642,47 @@ class TestValidatorAndSmeEvalFullCoverage(unittest.TestCase):
         with mock.patch('time.sleep'):
             err_503 = urllib.error.HTTPError('https://vertex', 503, 'Unavailable', {}, io.BytesIO(b'{"error":{"status":"UNAVAILABLE"}}'))
             with mock.patch('urllib.request.urlopen', side_effect=[err_503, _MockHttpResponse(vertex_json)]):
-                parsed, err = validator._call_vertex_judge('project-maui', 'tok', 'prompt')
+                parsed, err = validator._call_vertex_judge('example-project', 'tok', 'prompt')
                 self.assertIsNotNone(parsed)
                 self.assertIsNone(err)
 
             err_400_bad = urllib.error.HTTPError('https://vertex', 400, 'Bad', {}, io.BytesIO(b'not-json'))
             with mock.patch('urllib.request.urlopen', side_effect=err_400_bad):
-                parsed, err = validator._call_vertex_judge('project-maui', 'tok', 'prompt')
+                parsed, err = validator._call_vertex_judge('example-project', 'tok', 'prompt')
                 self.assertIsNone(parsed)
 
             with mock.patch('urllib.request.urlopen', return_value=_MockHttpResponse({'candidates': [{'finishReason': 'SAFETY'}]})):
-                parsed, err = validator._call_vertex_judge('project-maui', 'tok', 'prompt')
+                parsed, err = validator._call_vertex_judge('example-project', 'tok', 'prompt')
                 self.assertIsNone(parsed)
                 self.assertIn('finishReason=SAFETY', str(err))
 
             bad_json_resp = {'candidates': [{'content': {'parts': [{'text': 'not-json'}]}}]}
             with mock.patch('urllib.request.urlopen', return_value=_MockHttpResponse(bad_json_resp)):
-                parsed, err = validator._call_vertex_judge('project-maui', 'tok', 'prompt')
+                parsed, err = validator._call_vertex_judge('example-project', 'tok', 'prompt')
                 self.assertIsNone(parsed)
                 self.assertIn('not valid JSON', str(err))
 
             list_json_resp = {'candidates': [{'content': {'parts': [{'text': '[1, 2, 3]'}]}}]}
             with mock.patch('urllib.request.urlopen', return_value=_MockHttpResponse(list_json_resp)):
-                parsed, err = validator._call_vertex_judge('project-maui', 'tok', 'prompt')
+                parsed, err = validator._call_vertex_judge('example-project', 'tok', 'prompt')
                 self.assertIsNone(parsed)
                 self.assertIn('not a JSON object', str(err))
 
             with mock.patch('urllib.request.urlopen', side_effect=OSError('timeout')):
-                parsed, err = validator._call_vertex_judge('project-maui', 'tok', 'prompt')
+                parsed, err = validator._call_vertex_judge('example-project', 'tok', 'prompt')
                 self.assertIsNone(parsed)
                 self.assertIn('OSError', str(err))
 
         # Test validator._get_access_token branches
         with mock.patch.object(validator, 'google') as m_goog, mock.patch.object(validator, 'GoogleAuthRequest', return_value='req'):
             creds = mock.MagicMock(valid=False, token='adc-tok')
-            m_goog.auth.default.return_value = (creds, 'project-maui')
+            m_goog.auth.default.return_value = (creds, 'example-project')
             tok, err = validator._get_access_token()
             self.assertEqual(tok, 'adc-tok')
 
             # ADC returns no token -> falls back to gcloud CLI
             creds_none = mock.MagicMock(valid=True, token=None)
-            m_goog.auth.default.return_value = (creds_none, 'project-maui')
+            m_goog.auth.default.return_value = (creds_none, 'example-project')
             with mock.patch('subprocess.run', return_value=mock.MagicMock(returncode=0, stdout='cli-tok\n')):
                 tok2, _ = validator._get_access_token()
                 self.assertEqual(tok2, 'cli-tok')
@@ -696,7 +696,7 @@ class TestValidatorAndSmeEvalFullCoverage(unittest.TestCase):
         store = sme_eval.SmeEvaluationStore()
         entry = store.submit_rating(
             persona_id='sre_platform',
-            reviewer_ldap='sre_reviewer@google.com',
+            reviewer_ldap='sre_reviewer@example.com',
             overall_rating=5,
             verdict='invalid_verdict_defaults_to_approved',
             task_completed=True,
@@ -788,8 +788,8 @@ class TestServerAndHttpHandlerFullCoverage(unittest.TestCase):
         )
 
         fake_insights = {
-            'ge_mart_dataset': 'project-maui.vibelift_mart',
-            'ge_curated_dataset': 'project-maui.ds_ge_curated_staging',
+            'ge_mart_dataset': 'example-project.vibelift_mart',
+            'ge_curated_dataset': 'example-project.ds_ge_curated_staging',
             'ge_mart_refreshed_at': '2026-09-29T12:00:00Z',
             'ge_daily_totals': [{'day': '2026-09-29', 'interactions': 10, 'total_tokens': 25000}],
             'ge_daily_by_app': [],
@@ -799,7 +799,7 @@ class TestServerAndHttpHandlerFullCoverage(unittest.TestCase):
             'decorator_events': [{'handler_name': 'h-1'}],
             'power_users_ldap': [],
         }
-        with mock.patch.object(ctrl.ge_fleet, 'project_id', 'project-maui'), mock.patch.object(ctrl.gcp_telemetry, 'project_id', 'project-maui'):
+        with mock.patch.object(ctrl.ge_fleet, 'project_id', 'example-project'), mock.patch.object(ctrl.gcp_telemetry, 'project_id', 'example-project'):
             with mock.patch.object(ctrl.gcp_telemetry, 'fetch_live_bigquery_project_insights', return_value=fake_insights):
                 with mock.patch.object(ctrl.gcp_telemetry, 'list_cloud_run_agent_services', return_value=[{'service_name': 'vibe-lift-agent'}]):
                     with mock.patch.object(ctrl.gcp_telemetry, 'fetch_gemini_enterprise_support_telemetry', return_value=[]):
@@ -961,7 +961,7 @@ class TestFinopsGeMartAndMcpEdgeCases(unittest.TestCase):
         # sync_from_ge_fleet with a brand-new custom agent and live_skills
         opt.sync_from_ge_fleet(
             {
-                'project_id': 'project-maui',
+                'project_id': 'example-project',
                 'agents': [
                     {
                         'agent_id': 'custom-999',
@@ -975,7 +975,7 @@ class TestFinopsGeMartAndMcpEdgeCases(unittest.TestCase):
             },
             bq_insights={
                 'live_skills_mcp': [{'resource_name': 'adk_tool://custom', 'kind': 'Tool'}],
-                'ge_sessions': [{'session_id': 's-1', 'user_email': 'enriq@google.com', 'agent_name': 'Custom', 'turns': 4, 'duration_seconds': 120, 'total_tokens': 5000, 'failed_turns': 0}],
+                'ge_sessions': [{'session_id': 's-1', 'user_email': 'user-a@example.com', 'agent_name': 'Custom', 'turns': 4, 'duration_seconds': 120, 'total_tokens': 5000, 'failed_turns': 0}],
             },
         )
         r_sess_live = opt.execute_nl2sql_telemetry_query('Show session duration from fct_sessions')

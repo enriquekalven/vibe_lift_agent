@@ -1011,10 +1011,10 @@ def build_user_centric_analytics(
 
   power_users_ldap: list[dict[str, Any]] = [
       {
-          'user_ldap': 'enriq',
-          'user_email': 'enriq@google.com',
+          'user_ldap': 'user-a',
+          'user_email': 'user-a@example.com',
           'department': 'FinOps & Platform Architecture',
-          'company_name': 'Google Cloud',
+          'company_name': 'Example Corp',
           'primary_agent': 'VibeLift Analytics & FinOps',
           'top_task_type': 'FINOPS_CACHE_ATTRIBUTION',
           'sessions_7d': 164,
@@ -1028,11 +1028,11 @@ def build_user_centric_analytics(
           'monthly_savings_usd': 6120,
       },
       {
-          'user_ldap': 'sbahirat',
-          'user_email': 'sbahirat@google.com',
-          'department': 'Creative & Multimodal Agents (AIVE)',
-          'company_name': 'Google Cloud',
-          'primary_agent': 'AIVE Creative & Video Agent',
+          'user_ldap': 'user-b',
+          'user_email': 'user-b@example.com',
+          'department': 'Creative & Multimodal Agents',
+          'company_name': 'Example Corp',
+          'primary_agent': 'Creative & Video Agent',
           'top_task_type': 'VIDEO_GENERATION',
           'sessions_7d': 128,
           'total_tokens_m': 8.4,
@@ -1045,10 +1045,10 @@ def build_user_centric_analytics(
           'monthly_savings_usd': 5640,
       },
       {
-          'user_ldap': 'russellmyers',
-          'user_email': 'russellmyers@google.com',
-          'department': 'Cloud AI & Agent Platform',
-          'company_name': 'Google Cloud',
+          'user_ldap': 'user-c',
+          'user_email': 'user-c@example.com',
+          'department': 'AI Platform Engineering',
+          'company_name': 'Example Corp',
           'primary_agent': 'VibeLift Analytics & FinOps',
           'top_task_type': 'FLEET_OPTIMIZATION_AUDIT',
           'sessions_7d': 142,
@@ -1062,10 +1062,10 @@ def build_user_centric_analytics(
           'monthly_savings_usd': 4820,
       },
       {
-          'user_ldap': 'rseshadri',
-          'user_email': 'rseshadri@google.com',
+          'user_ldap': 'user-d',
+          'user_email': 'user-d@example.com',
           'department': 'Executive Product Strategy',
-          'company_name': 'Google Cloud',
+          'company_name': 'Example Corp',
           'primary_agent': 'Deep Research',
           'top_task_type': 'MULTI_HOP_DEEP_RESEARCH',
           'sessions_7d': 96,
@@ -1079,10 +1079,10 @@ def build_user_centric_analytics(
           'monthly_savings_usd': 4410,
       },
       {
-          'user_ldap': 'sloona',
-          'user_email': 'sloona@google.com',
+          'user_ldap': 'user-e',
+          'user_email': 'user-e@example.com',
           'department': 'Enterprise IT & Security Governance',
-          'company_name': 'Google Cloud',
+          'company_name': 'Example Corp',
           'primary_agent': 'IT Service Desk',
           'top_task_type': 'IT_TIER2_ESCALATION',
           'sessions_7d': 119,
@@ -1131,7 +1131,7 @@ def build_user_centric_analytics(
           'status': 'PRUNED & CAPPED (-84% Background Burn)',
       },
       {
-          'agent_name': 'AIVE Creative & Video Agent',
+          'agent_name': 'Creative & Video Agent',
           'agent_id': 'vibelift_analytics',
           'telemetry_signal': 'aive_logs.agent_usage_log [VIDEO_GENERATION]',
           'runaway_pattern': 'Async Veo render status polling re-sent full 22k storyboard prompt on every poll',
@@ -1142,7 +1142,7 @@ def build_user_centric_analytics(
       },
   ]
 
-  # When running against live GCP project-maui with BigQuery & Cloud Monitoring telemetry:
+  # When running against a live GCP project with BigQuery & Cloud Monitoring telemetry:
   if isinstance(live_bq, Mapping) and live_bq.get('power_users_ldap'):
     live_users = live_bq.get('power_users_ldap')
     if isinstance(live_users, list) and live_users:
@@ -1189,7 +1189,7 @@ def build_user_centric_analytics(
         'annualized_savings_usd': None,
         'savings_note': 'Not measured: savings need a before/after baseline, which telemetry does not contain.',
         'collection_mode': (
-            'LIVE GCP TELEMETRY (project-maui BigQuery vibelift_mart + ds_ge_curated_staging + sre_triage_agent_telemetry + Cloud Monitoring v3)'
+            'LIVE GCP TELEMETRY (BigQuery vibelift_mart + curated GE staging + OTel GenAI spans + Cloud Monitoring v3)'
         ),
         'security_governance': {},
         'cohorts_live': True,
@@ -1214,13 +1214,12 @@ def build_user_centric_analytics(
       'total_monthly_savings_usd': total_monthly_savings,
       'annualized_savings_usd': total_monthly_savings * 12,
       'collection_mode': (
-          'LIVE GCP TELEMETRY (project-maui BigQuery vibelift_mart + ds_ge_curated_staging + sre_triage_agent_telemetry + Cloud Monitoring v3)'
+          'LIVE GCP TELEMETRY (BigQuery vibelift_mart + curated GE staging + OTel GenAI spans + Cloud Monitoring v3)'
           if (isinstance(live_bq, Mapping) and live_bq.get('power_users_ldap'))
           else '@vibelift_telemetry & @with_analytics_logging (Real-Time + BigQuery aive_logs, <10ms lag)'
       ),
       'security_governance': {
           'oauth_cross_project': 'ACTIVE (OAuth 2.0 Consent Configured Across GCP Projects)',
-          'pdd_privacy_review': 'COMPLIANT (User LDAP & Anonymized Cohort Attribution)',
           'hosting_target': 'Google Cloud Run (MCP Side-Panel & Fullscreen UI)',
       },
       'cohorts': cohorts,
@@ -1235,7 +1234,7 @@ def build_otel_5_layer_catalog(
     live_fleet: Mapping[str, Any] | None = None,
     live_bq: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-  """Builds Russell Myers' 5-Layer Standardized Parameter Catalog (26 OTel/ADK/A2A/A2UI metrics) + Watch-Outs."""
+  """Builds the 5-Layer Standardized Parameter Catalog (26 OTel/ADK/A2A/A2UI metrics) + Watch-Outs."""
   del live_bq
   layers: list[dict[str, Any]] = [
       {
@@ -1600,30 +1599,8 @@ def build_otel_5_layer_catalog(
       },
   ]
 
-  if isinstance(live_fleet, Mapping) and live_fleet.get('project_id') not in (None, '', 'test-project', 'UNCONFIGURED-PROJECT'):
-    watch_out_alarms.extend([
-        {
-            'id': 'live_re_p95_spike',
-            'title': 'Live GCP Finding 1: IT Service Desk Reasoning Engine P95 = 127.2s & 12,578 GiB-hr Pool',
-            'formula': 'aiplatform.googleapis.com/reasoning_engine/request_latencies (5389235022676918272)',
-            'baseline': '800 ms Target SLO',
-            'current': '127,232.9 ms P95 (31,593.5 ms P50) across 19 calls; 12,578.6 GiB-hrs allocated',
-            'status': 'ACTION NEEDED: Right-Size Idle RE Pools',
-            'severity': 'amber',
-        },
-        {
-            'id': 'live_cli_a2a_4xx',
-            'title': 'Live GCP Finding 2: Enterprise CLI Agent (enterprise-cli-agent-a2a) 53.6% 4xx Error Rate',
-            'formula': 'run.googleapis.com/request_count [response_code_class="4xx"]',
-            'baseline': '< 0.5% Target Error SLO',
-            'current': '53.6% 4xx Error Rate (15 errors / 28 requests in Cloud Run us-central1)',
-            'status': 'ACTION NEEDED: Fix A2A Auth/Schema Payload',
-            'severity': 'amber',
-        },
-    ])
-
   architecture_tco = {
-      'slide_title': 'Hackathon Architecture, IAM Prerequisites & Monthly Compute TCO (Slides 1–3)',
+      'slide_title': 'Architecture, IAM Prerequisites & Monthly Compute TCO',
       'architecture_flow': (
           'Gemini Enterprise Assistant (US & Global) → Streamable HTTP MCP (/mcp) & A2A Card → '
           'Cloud Run (vibe-lift-agent) → Parallel Discovery Engine v1alpha + Cloud Monitoring v3 + '
@@ -1701,12 +1678,13 @@ class VibeLiftAlphaEvolveOptimizer:
         or live_bq.get('project_id')
         or live_fl.get('project_id')
         or os.environ.get('GOOGLE_CLOUD_PROJECT')
-        or 'project-maui'
+        or 'UNCONFIGURED-PROJECT'
     )
-    proj = str(cand_proj) if str(cand_proj) != 'UNCONFIGURED-PROJECT' else 'project-maui'
+    # Placeholder only shapes the displayed SQL when no project is configured.
+    proj = str(cand_proj) if str(cand_proj) != 'UNCONFIGURED-PROJECT' else 'YOUR_PROJECT'
     mart_ds = ge_mart.mart_dataset_name()
     curated_ds = ge_mart.curated_dataset_name()
-    otel_ds = (os.environ.get('VIBELIFT_OTEL_DATASET') or 'sre_triage_agent_telemetry').strip() or 'sre_triage_agent_telemetry'
+    otel_ds = ge_mart.otel_dataset_name()
     analytics_ds = (os.environ.get('VIBELIFT_ANALYTICS_DATASET') or 'vibelift_analytics').strip() or 'vibelift_analytics'
 
     dml_tokens = ('drop ', 'delete ', 'update ', 'insert ', 'alter ', 'truncate ', 'grant ', ';')
@@ -1850,7 +1828,7 @@ class VibeLiftAlphaEvolveOptimizer:
       ldaps_str = ', '.join(str(u.get('user_ldap')) for u in users[:5])
       total_sess = sum(int(u.get('sessions_7d') or 0) for u in users)
       return {
-          'question': q_clean or 'Who are the top power users by user_ldap and department?',
+          'question': q_clean or 'Who are the top power users by user and department?',
           'intent': 'GE_POWER_USER_LDAP_LEADERBOARD',
           'generated_sql': sql,
           'sql_safety_audit': safety_audit,
@@ -2068,7 +2046,7 @@ class VibeLiftAlphaEvolveOptimizer:
         'avg_turns_to_resolution_baseline': 7.8,
         'avg_turns_to_resolution_optimized': 3.2,
         'quality_floor_csat': 4.96,
-        'billing_export_table': 'project-maui.billing_export.gcp_billing_export_resource_v1',
+        'billing_export_table': 'YOUR_PROJECT.billing_export.gcp_billing_export_resource_v1_XXXXXX',
         'total_net_invoice_usd': 1355.75,
         'total_credits_usd': 3436.80,
         'reconciliation_delta_pct': 1.04,
@@ -2736,7 +2714,6 @@ class VibeLiftAlphaEvolveOptimizer:
     }
 
     # 8. AgentOps Cockpit Static/Runtime FinOps Code Audit (FIN-01..FIN-05), Step-by-Step Waterfall & @cost_guard
-    # Ported from /Users/enriq/Documents/git/agent-ops-cockpit/src/agent_ops_cockpit/ops/auditors/finops.py & finops_roi.py
     cockpit_findings: list[dict[str, Any]] = [
         {
             'rule_id': 'FIN-01',
