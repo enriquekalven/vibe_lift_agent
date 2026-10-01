@@ -773,6 +773,46 @@ class GoogleCloudTelemetryService:
       raise GcsReadError('TOO_LARGE', f'{gcs_uri} is larger than {max_bytes:,} bytes.')
     return data.decode('utf-8', errors='replace')
 
+  def list_gcs_object_names(self, bucket: str, prefix: str = '', max_objects: int = 5000) -> set[str]:
+    """Object names under gs://bucket/prefix via one paginated objects.list (names only).
+
+    Raises:
+      GcsReadError: INVALID_URI, NOT_CONNECTED, FORBIDDEN, TOO_LARGE (more than max_objects) or ERROR.
+    """
+    import re
+    import urllib.parse
+
+    if not re.fullmatch(r'[a-z0-9][a-z0-9._-]{1,220}', str(bucket or '')):
+      raise GcsReadError('INVALID_URI', f'Not a bucket name: {str(bucket)[:120]!r}')
+    token = self._get_access_token()
+    if not token:
+      raise GcsReadError('NOT_CONNECTED', 'No Google Cloud credentials available to list Cloud Storage.')
+    names: set[str] = set()
+    page_token = ''
+    while True:
+      params = {'prefix': prefix, 'fields': 'items(name),nextPageToken', 'maxResults': '1000'}
+      if page_token:
+        params['pageToken'] = page_token
+      url = f'https://storage.googleapis.com/storage/v1/b/{bucket}/o?{urllib.parse.urlencode(params)}'
+      req = urllib.request.Request(url, headers={'Authorization': f'Bearer {token}'})
+      try:
+        with urllib.request.urlopen(req, timeout=8.0) as resp:
+          page = json.loads(resp.read(8_000_000).decode('utf-8', errors='replace') or '{}')
+      except urllib.error.HTTPError as exc:
+        reason = _gcs_error_reason(exc)
+        if exc.code in (401, 403):
+          raise GcsReadError('FORBIDDEN', f'The runtime identity cannot list gs://{bucket} '
+                             f'(needs roles/storage.objectViewer on the bucket). {reason}'.strip()) from exc
+        raise GcsReadError('ERROR', f'Cloud Storage returned HTTP {exc.code} listing gs://{bucket}. {reason}'.strip()) from exc
+      except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        raise GcsReadError('ERROR', f'Cloud Storage list failed: {exc}') from exc
+      names.update(str(item.get('name')) for item in page.get('items') or [] if item.get('name'))
+      if len(names) > max_objects:
+        raise GcsReadError('TOO_LARGE', f'gs://{bucket}/{prefix} holds more than {max_objects:,} objects.')
+      page_token = str(page.get('nextPageToken') or '')
+      if not page_token:
+        return names
+
   def fetch_live_bigquery_project_insights(
       self,
       force_refresh: bool = False,

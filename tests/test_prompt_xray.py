@@ -159,13 +159,19 @@ class PromptXrayControllerTest(unittest.TestCase):
                                                   '{"role":"user","parts":[{"content":"next","type":"text"}]}\n'),
     }
     svc = self.ctrl.gcp_telemetry
+    names = {u.split('gs://logs/', 1)[1] for u in objects}
     with mock.patch.object(self.ctrl, '_is_live_gcp', return_value=True), \
          mock.patch.dict(os.environ, {server.PROMPT_XRAY_LIVE_ENV: '1'}), \
          mock.patch.object(svc, 'fetch_prompt_snapshot_turns', return_value=self._live_rows()), \
+         mock.patch.object(svc, 'list_gcs_object_names', return_value=names) as lister, \
          mock.patch.object(svc, 'read_gcs_text', side_effect=lambda uri: objects[uri]) as reader:
       listing = self.ctrl.prompt_xray_live_turns()
       self.assertEqual(listing['status'], 'OK')
       self.assertNotIn('sys_gcs_uri', listing['turns'][0])
+      self.assertEqual([t['snapshot_available'] for t in listing['turns']], [True, True])
+      self.assertEqual(listing['snapshot_check'], {'checked': True, 'available_turns': 2, 'missing_turns': 0, 'error': None})
+      self.assertIsNone(listing['message'])
+      lister.assert_called_once_with('logs', 'completions/')
       res = self.ctrl.prompt_xray({'previous_event_id': 'e1', 'current_event_id': 'e2'})
       self.assertEqual(res['status'], prompt_xray.STATUS_APPEND_ONLY)
       self.assertEqual(res['source']['kind'], 'live_otel_gcs')
@@ -174,6 +180,33 @@ class PromptXrayControllerTest(unittest.TestCase):
       self.assertEqual({c.args[0] for c in reader.call_args_list}, set(objects))
       unknown = self.ctrl.prompt_xray({'previous_event_id': 'e1', 'current_event_id': 'gs://evil/x'})
       self.assertEqual(unknown['status'], 'ERROR')
+
+  def test_live_turns_mark_missing_and_unchecked_snapshots(self) -> None:
+    svc = self.ctrl.gcp_telemetry
+    with mock.patch.object(self.ctrl, '_is_live_gcp', return_value=True), \
+         mock.patch.dict(os.environ, {server.PROMPT_XRAY_LIVE_ENV: '1'}), \
+         mock.patch.object(svc, 'fetch_prompt_snapshot_turns', return_value=self._live_rows()):
+      # Only e2's input survives and the shared system instruction is gone: nothing is comparable.
+      with mock.patch.object(svc, 'list_gcs_object_names', return_value={'completions/e2_inputs.jsonl'}):
+        gone = self.ctrl.prompt_xray_live_turns()
+      self.assertEqual([t['snapshot_available'] for t in gone['turns']], [False, False])
+      self.assertEqual(gone['snapshot_check']['missing_turns'], 2)
+      self.assertIn('2 of 2 logged turns reference prompt snapshots that are no longer in', gone['message'])
+      # e1 complete, e2 input missing: one usable turn is still fewer than a pair.
+      with mock.patch.object(svc, 'list_gcs_object_names',
+                             return_value={'completions/sys.jsonl', 'completions/e1_inputs.jsonl'}):
+        partial = self.ctrl.prompt_xray_live_turns()
+      self.assertEqual([t['snapshot_available'] for t in partial['turns']], [False, True])
+      self.assertEqual(partial['snapshot_check']['available_turns'], 1)
+      self.assertIsNotNone(partial['message'])
+      # Listing itself fails: availability is unknown (None), never guessed.
+      with mock.patch.object(svc, 'list_gcs_object_names',
+                             side_effect=gcp_telemetry.GcsReadError('FORBIDDEN', 'cannot list gs://logs')):
+        unknown = self.ctrl.prompt_xray_live_turns()
+      self.assertEqual([t['snapshot_available'] for t in unknown['turns']], [None, None])
+      self.assertEqual(unknown['snapshot_check'],
+                       {'checked': False, 'available_turns': None, 'missing_turns': None, 'error': 'cannot list gs://logs'})
+      self.assertIn('Could not check', unknown['message'])
 
   def test_live_mode_surfaces_gcs_errors(self) -> None:
     svc = self.ctrl.gcp_telemetry
@@ -230,6 +263,32 @@ class GcsReaderTest(unittest.TestCase):
         self.svc.read_gcs_text('gs://bucket-a/obj.jsonl')
     self.assertEqual(ctx.exception.status, 'FORBIDDEN')
     self.assertIn('Cloud Storage says: sa lacks storage.objects.get', str(ctx.exception))
+
+  def test_list_object_names_paginates_and_caps(self) -> None:
+    pages = [{'items': [{'name': 'completions/a.jsonl'}], 'nextPageToken': 'p2'},
+             {'items': [{'name': 'completions/b.jsonl'}]}]
+
+    def _resp(page):
+      r = mock.MagicMock()
+      r.__enter__.return_value.read.return_value = json.dumps(page).encode()
+      return r
+
+    with mock.patch.object(self.svc, '_get_access_token', return_value='tok'), \
+         mock.patch.object(urllib.request, 'urlopen', side_effect=[_resp(p) for p in pages]) as opener:
+      names = self.svc.list_gcs_object_names('bucket-a', 'completions/')
+    self.assertEqual(names, {'completions/a.jsonl', 'completions/b.jsonl'})
+    first, second = (c.args[0].full_url for c in opener.call_args_list)
+    self.assertIn('/b/bucket-a/o?prefix=completions%2F', first)
+    self.assertIn('fields=items%28name%29%2CnextPageToken', first)
+    self.assertIn('pageToken=p2', second)
+    with mock.patch.object(self.svc, '_get_access_token', return_value='tok'), \
+         mock.patch.object(urllib.request, 'urlopen', side_effect=[_resp(pages[0])]):
+      with self.assertRaises(gcp_telemetry.GcsReadError) as ctx:
+        self.svc.list_gcs_object_names('bucket-a', 'completions/', max_objects=0)
+    self.assertEqual(ctx.exception.status, 'TOO_LARGE')
+    with self.assertRaises(gcp_telemetry.GcsReadError) as ctx:
+      self.svc.list_gcs_object_names('Bad Bucket!')
+    self.assertEqual(ctx.exception.status, 'INVALID_URI')
 
 
 class PromptXraySurfacesTest(unittest.TestCase):

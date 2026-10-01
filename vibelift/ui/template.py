@@ -2930,6 +2930,8 @@ async def handle_agent_turn(message_envelope):
       if (t.agent_name) parts.push(t.agent_name);
       if (t.conversation_id) parts.push('conv ' + String(t.conversation_id).slice(0, 8));
       parts.push(t.input_tokens == null ? 'tokens —' : fmtInt(t.input_tokens) + ' tok');
+      if (t.snapshot_available === false) parts.push('snapshot missing');
+      else if (t.snapshot_available == null) parts.push('snapshot unchecked');
       return parts.join(' · ');
     }
 
@@ -2943,18 +2945,21 @@ async def handle_agent_turn(message_envelope):
           const opt = document.createElement('option');
           opt.value = t.event_id;
           opt.textContent = pxTurnLabel(t);
+          // Snapshot confirmed gone: the X-Ray can only fail on it, so it is shown but not selectable.
+          if (t.snapshot_available === false) opt.disabled = true;
           sel.appendChild(opt);
         });
       });
-      // Default: the most recent pair of consecutive turns in the same conversation, else the two newest.
-      let curIdx = 0, prevIdx = turns.length > 1 ? 1 : 0;
-      for (let i = 0; i + 1 < turns.length; i++) {
-        if (turns[i].conversation_id && turns[i].conversation_id === turns[i + 1].conversation_id) {
+      // Default: the most recent pair of consecutive usable turns in the same conversation, else the two newest usable.
+      const usable = turns.filter(function(t) { return t.snapshot_available !== false; });
+      let curIdx = 0, prevIdx = usable.length > 1 ? 1 : 0;
+      for (let i = 0; i + 1 < usable.length; i++) {
+        if (usable[i].conversation_id && usable[i].conversation_id === usable[i + 1].conversation_id) {
           curIdx = i; prevIdx = i + 1; break;
         }
       }
-      if (turns[curIdx]) currSel.value = turns[curIdx].event_id;
-      if (turns[prevIdx]) prevSel.value = turns[prevIdx].event_id;
+      if (usable[curIdx]) currSel.value = usable[curIdx].event_id;
+      if (usable[prevIdx]) prevSel.value = usable[prevIdx].event_id;
     }
 
     async function initPromptXray() {
@@ -2992,9 +2997,12 @@ async def handle_agent_turn(message_envelope):
       document.getElementById('pxExampleBtn').classList.toggle('hidden', pxSource !== 'paste');
       if (pxSource === 'live') {
         if (!pxLive) { pxSetNotice('Loading logged turns…'); initPromptXray(); return; }
-        if (pxLive.status === 'OK') {
-          pxSetNotice((pxLive.turns || []).length + ' logged turns from ' + (pxLive.source_table || 'OTel telemetry')
-            + '. Prompts are rendered from the system instruction and input messages each turn logged to Cloud Storage.');
+        if (pxLive.status === 'OK' && !pxLive.message) {
+          const sc = pxLive.snapshot_check || {};
+          const n = (pxLive.turns || []).length;
+          const avail = sc.available_turns == null ? '' : (fmtInt(sc.available_turns) + ' of ');
+          pxSetNotice(avail + n + ' logged turns from ' + (pxLive.source_table || 'OTel telemetry')
+            + ' still have their prompt snapshots. Prompts are rendered from the system instruction and input messages each turn logged to Cloud Storage.');
         } else {
           pxSetNotice(pxLive.message || ('Logged turns unavailable (' + pxLive.status + ').'));
         }
@@ -3018,6 +3026,8 @@ async def handle_agent_turn(message_envelope):
       if (monthly > 0) body.monthly_requests = Math.round(monthly);
       if (pxSource === 'live') {
         if (!pxLive || pxLive.status !== 'OK') { pxSetSource('live'); return; }
+        const usableTurns = (pxLive.turns || []).filter(function(t) { return t.snapshot_available !== false; });
+        if (usableTurns.length < 2) { pxSetSource('live'); return; }
         body.previous_event_id = document.getElementById('pxPrevTurn').value;
         body.current_event_id = document.getElementById('pxCurrTurn').value;
         if (body.previous_event_id === body.current_event_id) { pxSetNotice('Pick two different turns.'); return; }

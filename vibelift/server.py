@@ -445,13 +445,72 @@ class VibeLiftRuntimeController:
                           'roles/storage.objectViewer on the prompt-log bucket (redeploy with '
                           'VIBELIFT_PROMPT_LOG_BUCKET=<bucket> to do both).')}
     rows = self.gcp_telemetry.fetch_prompt_snapshot_turns()
+    turns = [self._public_snapshot_turn(r) for r in rows]
+    check = self._snapshot_availability(rows)
+    for turn, row in zip(turns, rows, strict=True):
+      turn['snapshot_available'] = check['by_event'].get(str(row.get('event_id')))
+    available = sum(1 for t in turns if t['snapshot_available'] is True)
+    missing = sum(1 for t in turns if t['snapshot_available'] is False)
+    message = None if rows else 'No OTel GenAI turns with logged prompt content refs were found.'
+    if rows and check['error']:
+      message = f'Could not check which prompt snapshots still exist: {check["error"]}'
+    elif rows and available < 2:
+      message = (f'{missing} of {len(turns)} logged turns reference prompt snapshots that are no longer in '
+                 f'Cloud Storage, so fewer than two turns can be compared. Paste two prompts instead, or '
+                 f'compare again once the agent logs new turns.')
     return {
         **base,
         'status': 'OK' if rows else 'EMPTY',
         'source_table': rows[0].get('source_table') if rows else None,
-        'turns': [self._public_snapshot_turn(r) for r in rows],
-        'message': None if rows else 'No OTel GenAI turns with logged prompt content refs were found.',
+        'turns': turns,
+        'snapshot_check': {
+            'checked': check['error'] is None and bool(rows),
+            'available_turns': available if check['error'] is None else None,
+            'missing_turns': missing if check['error'] is None else None,
+            'error': check['error'],
+        },
+        'message': message,
     }
+
+  def _snapshot_availability(self, rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """{'by_event': {event_id: True/False/None}, 'error': str|None} from one listing per referenced folder."""
+    import re
+
+    def _split(uri: Any) -> tuple[str, str] | None:
+      m = re.fullmatch(r'gs://([a-z0-9][a-z0-9._-]{1,220})/(.+)', str(uri or ''))
+      return (m.group(1), m.group(2)) if m else None
+
+    folders: dict[tuple[str, str], set[str] | None] = {}
+    for row in rows:
+      for key in ('sys_gcs_uri', 'input_gcs_uri'):
+        parts = _split(row.get(key))
+        if parts:
+          folders.setdefault((parts[0], parts[1].rsplit('/', 1)[0] + '/' if '/' in parts[1] else ''), None)
+    error = None
+    for bucket, prefix in list(folders)[:5]:
+      try:
+        folders[(bucket, prefix)] = self.gcp_telemetry.list_gcs_object_names(bucket, prefix)
+      except gcp_telemetry.GcsReadError as exc:
+        error = str(exc)
+    by_event: dict[str, bool | None] = {}
+    for row in rows:
+      verdict: bool | None = True
+      for key in ('sys_gcs_uri', 'input_gcs_uri'):
+        parts = _split(row.get(key))
+        if not row.get(key):
+          continue
+        if parts is None:
+          verdict = False
+          break
+        prefix = parts[1].rsplit('/', 1)[0] + '/' if '/' in parts[1] else ''
+        names = folders.get((parts[0], prefix))
+        if names is None:
+          verdict = None
+        elif parts[1] not in names:
+          verdict = False
+          break
+      by_event[str(row.get('event_id'))] = verdict
+    return {'by_event': by_event, 'error': error}
 
   def prompt_xray(self, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Prompt Cache X-Ray on two pasted snapshots, or on two logged turns (previous/current_event_id)."""
