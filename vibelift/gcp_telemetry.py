@@ -132,6 +132,16 @@ class GcsReadError(Exception):
     self.status = status
 
 
+def _gcs_error_reason(exc: Any) -> str:
+  """Best-effort 'Cloud Storage says: ...' from an HTTPError JSON body (bounded, never raises)."""
+  try:
+    body = json.loads((exc.read(4096) or b'{}').decode('utf-8', errors='replace'))
+    msg = str(((body or {}).get('error') or {}).get('message') or '').strip()
+  except Exception:
+    return ''
+  return f'Cloud Storage says: {msg[:300]}' if msg else ''
+
+
 class GoogleCloudTelemetryService:
   """Service for aggregating live GCP telemetry from Cloud Logging and BigQuery."""
 
@@ -741,21 +751,22 @@ class GoogleCloudTelemetryService:
       raise GcsReadError('NOT_CONNECTED', 'No Google Cloud credentials available to read Cloud Storage.')
     url = (f'https://storage.googleapis.com/storage/v1/b/{bucket}/o/'
            f'{urllib.parse.quote(obj, safe="")}?alt=media')
-    req = urllib.request.Request(url, headers={
-        'Authorization': f'Bearer {token}',
-        'x-goog-user-project': self.project_id,
-    })
+    # No x-goog-user-project header: it makes Cloud Storage also require serviceusage.services.use on
+    # the quota project, which the least-privilege runtime SA does not hold (every read 403s). The
+    # prompt-log bucket is not requester-pays, so the resource project is billed as usual.
+    req = urllib.request.Request(url, headers={'Authorization': f'Bearer {token}'})
     try:
       with urllib.request.urlopen(req, timeout=8.0) as resp:
         data = resp.read(max_bytes + 1)
     except urllib.error.HTTPError as exc:
-      if exc.code == 403:
+      reason = _gcs_error_reason(exc)
+      if exc.code in (401, 403):
         raise GcsReadError('FORBIDDEN', f'The runtime identity cannot read gs://{bucket} '
-                           '(needs roles/storage.objectViewer on the bucket).') from exc
+                           f'(needs roles/storage.objectViewer on the bucket). {reason}'.strip()) from exc
       if exc.code == 404:
         raise GcsReadError('NOT_FOUND', f'{gcs_uri} no longer exists (a bucket lifecycle rule may '
                            'have deleted it).') from exc
-      raise GcsReadError('ERROR', f'Cloud Storage returned HTTP {exc.code} for {gcs_uri}.') from exc
+      raise GcsReadError('ERROR', f'Cloud Storage returned HTTP {exc.code} for {gcs_uri}. {reason}'.strip()) from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
       raise GcsReadError('ERROR', f'Cloud Storage read failed: {exc}') from exc
     if len(data) > max_bytes:

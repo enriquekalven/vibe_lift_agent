@@ -215,6 +215,21 @@ class GcsReaderTest(unittest.TestCase):
          mock.patch.object(urllib.request, 'urlopen', return_value=resp) as opener:
       self.assertEqual(self.svc.read_gcs_text('gs://bucket-a/dir/obj.jsonl'), '{"content":"ok"}')
     self.assertIn('/b/bucket-a/o/dir%2Fobj.jsonl?alt=media', opener.call_args.args[0].full_url)
+    # Regression: x-goog-user-project made GCS require serviceusage.services.use, which the
+    # least-privilege runtime SA lacks, so every live read 403'd on Cloud Run.
+    sent = {k.lower() for k in opener.call_args.args[0].headers}
+    self.assertNotIn('x-goog-user-project', sent)
+    self.assertIn('authorization', sent)
+
+  def test_forbidden_surfaces_cloud_storage_reason(self) -> None:
+    body = json.dumps({'error': {'code': 403, 'message': 'sa lacks storage.objects.get'}}).encode()
+    exc = urllib.error.HTTPError('u', 403, 'x', {}, io.BytesIO(body))
+    with mock.patch.object(self.svc, '_get_access_token', return_value='tok'), \
+         mock.patch.object(urllib.request, 'urlopen', side_effect=exc):
+      with self.assertRaises(gcp_telemetry.GcsReadError) as ctx:
+        self.svc.read_gcs_text('gs://bucket-a/obj.jsonl')
+    self.assertEqual(ctx.exception.status, 'FORBIDDEN')
+    self.assertIn('Cloud Storage says: sa lacks storage.objects.get', str(ctx.exception))
 
 
 class PromptXraySurfacesTest(unittest.TestCase):
