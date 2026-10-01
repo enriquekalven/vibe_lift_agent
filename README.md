@@ -331,7 +331,7 @@ Idempotent. It creates:
 
 | Layer | Objects |
 | :--- | :--- |
-| Raw datasets (`BQ_LOCATION`) | `ds_ge_assistant_raw`, `ds_ge_search_raw`, `ds_vertex_reasoning_engine`, `ds_ge_audit_raw`, `ds_security_guardrails_raw`, `vibelift_analytics` |
+| Raw datasets (`BQ_LOCATION`) | `ds_ge_assistant_raw`, `ds_ge_search_raw`, `ds_vertex_agents_raw`, `ds_ge_audit_raw`, `ds_security_guardrails_raw`, `vibelift_analytics` |
 | Log sinks (partitioned tables) | `sink-ge-assistant-activity`, `sink-ge-search-activity`, `sink-vertex-reasoning-engine`, **`sink-ge-inference-tokens`** (the only source of per-turn tokens), `sink-platform-audit`, `sink-model-armor-sdp`, `vibelift-telemetry-sink`. Each sink's writer identity gets `roles/bigquery.dataEditor` on the project. |
 | Raw log retention | Partition expiration of `VIBELIFT_RETENTION_DAYS` (default **90 days**) on the raw sink datasets, set on each dataset (new tables) and each existing table, by `deploy/set_log_retention.sh`. `vibelift_analytics` is not expired. |
 | Analytics tables | `vibelift_analytics.agent_turns`, `agent_eval_runs`, `alpha_evolve_generations`, `agent_registry_snapshots`, view `vw_fleet_finops_summary` |
@@ -400,7 +400,7 @@ GE_LOCATION=global python3 deploy/setup_mcp_connector.py GE_APP_ID            # 
 
 What `./deploy/register_ge_agent.sh GE_APP_ID` does:
 1. Checks the private Cloud Run service health with your identity token and ensures the Discovery Engine service agent (`service-PROJECT_NUMBER@gcp-sa-discoveryengine.iam.gserviceaccount.com`) holds `roles/run.invoker`.
-2. **Stage 4a — Deploys to the Gemini Enterprise Data Store (`deploy/setup_mcp_connector.py`):** Creates the `Custom MCP Server` connector (`collectionId=vibelift-analytics-mcp`, `mcp_server_source="BYO_MCP"`, `use_agent_gateway_egress=false`, `auth_type="NO_AUTH"`) in Gemini Enterprise Data Stores ([docs](https://cloud.google.com/gemini/enterprise/docs/connectors/custom-mcp-server/set-up-custom-mcp-server)), waits for `ACTIVE`, imports all 6 tools from `/mcp`, and enables all 6 as actions (`--tools` to choose). Rejects any connector mistakenly created with `AGENT_REGISTRY`.
+2. **Stage 4a — Deploys to the Gemini Enterprise Data Store (`deploy/setup_mcp_connector.py`):** Creates the `Custom MCP Server` connector (`collectionId=vibelift-analytics-mcp`, `mcp_server_source="BYO_MCP"`, `use_agent_gateway_egress=false`, `auth_type="NO_AUTH"`) in Gemini Enterprise Data Stores ([docs](https://cloud.google.com/gemini/enterprise/docs/connectors/custom-mcp-server/set-up-custom-mcp-server)), waits for `ACTIVE`, imports all 6 tools from `/mcp`, and enables all 6 as actions (`--tools` to choose). If a connector with that collection ID already exists but its `mcp_server_source` is not `BYO_MCP`, the script stops instead of reusing it.
 3. **Stage 4b — Registers the GE Data Store to the Gemini Enterprise App Instance:** Renames the data store (`vibelift-analytics-mcp_mcp_data`) to `VibeLift Analytics`, links it into `engines/GE_APP_ID.dataStoreIds` while keeping the app instance's existing connected data stores, and verifies the registration with a follow-up `GET`.
 4. **Optional A2A Agent Registration:** If `agents-cli` is installed, also registers the A2A agent card on the Gemini Enterprise App instance (`--registration-type a2a`, no OAuth).
 
