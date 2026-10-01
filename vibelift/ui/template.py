@@ -921,8 +921,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           <select id="optimizerDropdown" class="agent-select" onchange="onSelectOptimizer(this.value)">
             <option value="alpha_evolve">AlphaEvolve (Balanced Cost, Speed &amp; Accuracy &bull; Default)</option>
             <option value="opus_critic">Opus Critic (Prompt &amp; Tool Cleanup)</option>
-            <option value="vertex_vizier">Google Vizier (Parameter Search Tuner)</option>
-            <option value="hybrid_ensemble">Combined Mode (AlphaEvolve + Vizier + Opus Critic)</option>
+            <option value="hybrid_ensemble">Combined Mode (AlphaEvolve + Opus Critic)</option>
           </select>
         </div>
       </div>
@@ -2368,7 +2367,7 @@ async def handle_agent_turn(message_envelope):
               <div>&bull; <strong>How Data Is Collected:</strong> Lightweight Python decorator on agent messages (&lt;10ms overhead, no BigQuery router wait).</div>
               <div>&bull; <strong>Where It Runs:</strong> Hosted on Google Cloud Run with a right-side panel and fullscreen view.</div>
               <div>&bull; <strong>Security &amp; Privacy:</strong> Uses OAuth 2.0 user consent and privacy-reviewed logging for 4,000&ndash;10,000 daily users.</div>
-              <div>&bull; <strong>Optimization Methods:</strong> Works with AlphaEvolve, Opus Critic, and Google Vizier.</div>
+              <div>&bull; <strong>Optimization Methods:</strong> Works with AlphaEvolve and Opus Critic.</div>
             </div>
           </div>
         </div>
@@ -6299,8 +6298,7 @@ async def handle_agent_turn(message_envelope):
     const PLATFORM_META_LOCAL = {
       alpha_evolve: { id: 'alpha_evolve', name: 'AlphaEvolve (Cost, Speed & Quality Balance)' },
       opus_critic: { id: 'opus_critic', name: 'Opus Frontier Critic (Prompt Cleanup & Restructuring)' },
-      vertex_vizier: { id: 'vertex_vizier', name: 'Google Vizier (Automated Parameter Tuning)' },
-      hybrid_ensemble: { id: 'hybrid_ensemble', name: 'Hybrid Ensemble (AlphaEvolve + Vizier + Opus Critic)' },
+      hybrid_ensemble: { id: 'hybrid_ensemble', name: 'Hybrid Ensemble (AlphaEvolve + Opus Critic)' },
     };
 
     function applyEmbeddedMutation(endpoint, payload) {

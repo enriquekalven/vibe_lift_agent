@@ -779,22 +779,12 @@ OPTIMIZER_PLATFORMS: dict[str, dict[str, str]] = {
             'and shrink large JSON tool definitions.'
         ),
     },
-    'vertex_vizier': {
-        'id': 'vertex_vizier',
-        'name': 'Google Vizier (Numeric Parameter Tuner)',
-        'badge': 'Numeric Setting Tuner',
-        'description': (
-            'Google parameter tuning service that adjusts numeric settings '
-            '(history turn limit, request rate, temperature, and cache duration).'
-        ),
-    },
     'hybrid_ensemble': {
         'id': 'hybrid_ensemble',
-        'name': 'Combined Mode (AlphaEvolve + Vizier + Opus Reviewer)',
+        'name': 'Combined Mode (AlphaEvolve + Opus Reviewer)',
         'badge': 'Combined Tuning Pipeline',
         'description': (
-            'Combines Opus prompt cleanup, Google Vizier numeric setting tuning, '
-            'and AlphaEvolve balanced selection.'
+            'Combines Opus prompt cleanup with AlphaEvolve balanced selection.'
         ),
     },
 }
@@ -3290,7 +3280,7 @@ class VibeLiftAlphaEvolveOptimizer:
     }
 
   def select_optimizer_platform(self, platform_id: str) -> dict[str, str]:
-    """Switches the active optimization platform (AlphaEvolve, Opus Critic, Vizier, or Hybrid)."""
+    """Switches the active optimization platform (AlphaEvolve, Opus Critic, or Hybrid)."""
     clean = (platform_id or '').strip().lower()
     if clean in OPTIMIZER_PLATFORMS:
       self.selected_optimizer_platform = clean

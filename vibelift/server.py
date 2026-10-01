@@ -693,7 +693,7 @@ class VibeLiftRuntimeController:
     return self.get_state_payload(include_fleet=False)
 
   def select_optimizer(self, platform_id: str) -> dict[str, Any]:
-    """Switches the active optimization platform (AlphaEvolve, Opus Critic, Vizier, or Hybrid)."""
+    """Switches the active optimization platform (AlphaEvolve, Opus Critic, or Hybrid)."""
     with self._lock:
       self.optimizer.select_optimizer_platform(platform_id)
     return self.get_state_payload(include_fleet=False)

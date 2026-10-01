@@ -4,7 +4,7 @@
 
 **VibeLift** is an enterprise observability, prompt cache FinOps, and autonomous multi-objective optimization platform built on Google Cloud with the **Google Agent Development Kit (ADK)**, **FastAPI**, and the **Model Context Protocol (MCP)**.
 
-Designed for production deployment on **Google Cloud Run** and native embedding inside **Gemini Enterprise**, VibeLift enumerates registered agents across global and regional Gemini Enterprise instances, joins inventory with real-time Google Cloud Monitoring and OpenTelemetry `gen_ai` logs, measures prompt cache and skill/MCP token economics, and runs closed-loop prompt optimization across **AlphaEvolve**, **Opus Frontier Critic**, **Google Vizier**, and **Hybrid Ensemble**.
+Designed for production deployment on **Google Cloud Run** and native embedding inside **Gemini Enterprise**, VibeLift enumerates registered agents across global and regional Gemini Enterprise instances, joins inventory with real-time Google Cloud Monitoring and OpenTelemetry `gen_ai` logs, measures prompt cache and skill/MCP token economics, and runs closed-loop prompt optimization across **AlphaEvolve**, **Opus Frontier Critic**, and **Hybrid Ensemble**.
 
 > **Deploying to your own project?** Follow [Deploy in Your Own GCP Project](#deploy-in-your-own-gcp-project): prerequisites, logging, BigQuery, Cloud Run, Gemini Enterprise registration, verification and [troubleshooting](#troubleshooting).
 
@@ -65,11 +65,10 @@ flowchart TB
 - **Custom Multi-Objective Parameters**: Allows operators to register and weight custom optimization parameters (`minimize` or `maximize`) with live baseline-to-current delta tracking.
 
 ### 3. Multi-Platform Optimization Studio (`Tab 2`)
-- **Pluggable Optimizer Backends**: Supports live switching and side-by-side comparison across four optimization engines:
+- **Pluggable Optimizer Backends**: Supports live switching and side-by-side comparison across three optimization engines:
   - **AlphaEvolve** (`alpha_evolve`) — Evolutionary Pareto-frontier prompt prefix, schema, and context optimization (`DEFAULT`).
   - **Opus Frontier Critic** (`opus_critic`) — Frontier LLM structural prompt refactoring, instruction synthesis, and schema compaction.
-  - **Google Vizier** (`vertex_vizier`) — Distributed black-box Bayesian hyperparameter and context-window tuner.
-  - **Hybrid Ensemble** (`hybrid_ensemble`) — Combined pipeline uniting Opus structural critique, Google Vizier numerical tuning, and AlphaEvolve Pareto selection.
+  - **Hybrid Ensemble** (`hybrid_ensemble`) — Combined pipeline uniting Opus structural critique and AlphaEvolve Pareto selection.
 - **Closed-Loop Safety Guardrails**: Evaluates candidate prompt mutations against accuracy, safety, and latency guardrails—automatically committing Pareto improvements or rolling back regressions when anomalies occur.
 
 ### 4. User-Centric FinOps & `@vibelift_telemetry` Decorator (`Tab 3`)
@@ -439,7 +438,7 @@ Exposed MCP tools:
 - `query_ge_agent_fleet`: live inventory and telemetry for all agents in Gemini Enterprise.
 - `query_project_telemetry`: Cloud Run service metrics and BigQuery triage log summaries.
 - `calculate_prompt_cache_economics`: prompt prefix cache hit rates and savings.
-- `run_alpha_evolve_generation`: one closed-loop optimization generation (`alpha_evolve`, `opus_critic`, `vertex_vizier`, `hybrid_ensemble`).
+- `run_alpha_evolve_generation`: one closed-loop optimization generation (`alpha_evolve`, `opus_critic`, `hybrid_ensemble`).
 - `get_vibelift_state`: active agent state, parameters and turn trajectory.
 
 
@@ -510,7 +509,7 @@ Operators can filter by Gemini Enterprise app, standalone runtimes and time wind
 | `/api/gcp_telemetry` | `GET` | Live Google Cloud Run service metrics and BigQuery triage log telemetry |
 | `/api/sync_gcp_telemetry` | `POST` | Syncs live Google Cloud Logging turns into the active agent profile |
 | `/api/user_centric_finops` | `GET` | User-centric FinOps plus `session_drilldown`: per-user session token rollup (sessions, turns, input/output/cached/reasoning/total tokens) and a per-session turn-by-turn token dictionary from `vibelift_mart.fct_sessions` / `fct_turns` (`?window_hours=168`). Token counts only, no prompt text |
-| `/api/select_optimizer` | `POST` | Switches active optimization platform (`platform_id`: `alpha_evolve`, `opus_critic`, `vertex_vizier`, `hybrid_ensemble`) |
+| `/api/select_optimizer` | `POST` | Switches active optimization platform (`platform_id`: `alpha_evolve`, `opus_critic`, `hybrid_ensemble`) |
 | `/api/decorator_ingest` | `POST` | Ingests a real-time `@vibelift_telemetry` span from an instrumented function or tool |
 | `/api/select_agent` | `POST` | Switches the active optimization agent profile (`agent_id`) |
 | `/api/add_parameter` | `POST` | Registers or updates a weighted multi-objective optimization parameter |

@@ -96,7 +96,7 @@
           },
           "platform_id": {
             "type": "string",
-            "description": "Optional optimization platform ID: 'alpha_evolve', 'opus_critic', 'vertex_vizier', or 'hybrid_ensemble'."
+            "description": "Optional optimization platform ID: 'alpha_evolve', 'opus_critic', or 'hybrid_ensemble'."
           }
         }
       }
