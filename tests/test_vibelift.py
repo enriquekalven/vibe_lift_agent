@@ -527,7 +527,8 @@ class VibeLiftFrameworkTest(unittest.TestCase):
         'params': {},
     })
     self.assertEqual(code_tools, 200)
-    self.assertEqual(len(json.loads(body_tools)['result']['tools']), 6)
+    self.assertEqual(len(json.loads(body_tools)['result']['tools']), len(mcp_server._TOOLS))
+    self.assertEqual(len(mcp_server._TOOLS), 8)
 
     # Test resources/read with invalid URI
     code_inv_uri, _, body_inv_uri = mcp_server.handle_jsonrpc_sync({
@@ -613,7 +614,8 @@ class ProductionAppTest(unittest.TestCase):
     tools = {t['name']: t for t in self._rpc('tools/list', rpc_id=2, session=session).json()['result']['tools']}
     self.assertEqual(sorted(tools), sorted([
         'open_dashboard', 'query_ge_agent_fleet', 'query_project_telemetry',
-        'calculate_prompt_cache_economics', 'run_alpha_evolve_generation', 'get_vibelift_state']))
+        'calculate_prompt_cache_economics', 'run_alpha_evolve_generation', 'get_vibelift_state',
+        'xray_prompt_cache', 'list_prompt_snapshot_turns']))
     self.assertTrue(tools['open_dashboard']['annotations']['readOnlyHint'])
     self.assertTrue(tools['query_ge_agent_fleet']['annotations']['readOnlyHint'])
 

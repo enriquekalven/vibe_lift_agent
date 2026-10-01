@@ -175,6 +175,25 @@ EXTRA_ENV=""
 if [[ -n "${VIBELIFT_BILLING_EXPORT_TABLE:-}" ]]; then
   EXTRA_ENV=";VIBELIFT_BILLING_EXPORT_TABLE=${VIBELIFT_BILLING_EXPORT_TABLE}"
 fi
+# Optional: live mode for the Prompt Cache X-Ray (diff two logged turns instead of pasted prompts).
+# The OTel prompt-log bucket holds RAW USER PROMPTS, so this is opt-in: set VIBELIFT_PROMPT_LOG_BUCKET
+# (e.g. my-project-agent-logs, no gs://) to grant the runtime SA read access on that bucket only and
+# enable VIBELIFT_PROMPT_XRAY_LIVE. Anyone who can open the dashboard can then view those prompts.
+if [[ -n "${VIBELIFT_PROMPT_LOG_BUCKET:-}" ]]; then
+  PROMPT_BUCKET="${VIBELIFT_PROMPT_LOG_BUCKET#gs://}"
+  PROMPT_BUCKET="${PROMPT_BUCKET%%/*}"
+  echo "Granting roles/storage.objectViewer on gs://${PROMPT_BUCKET} to ${SA_EMAIL} (Prompt X-Ray live mode)..."
+  if gcloud storage buckets add-iam-policy-binding "gs://${PROMPT_BUCKET}" \
+      --member="serviceAccount:${SA_EMAIL}" \
+      --role="roles/storage.objectViewer" \
+      --project="${PROJECT_ID}" \
+      --quiet > /dev/null; then
+    EXTRA_ENV="${EXTRA_ENV};VIBELIFT_PROMPT_XRAY_LIVE=1"
+  else
+    warn "could not grant objectViewer on gs://${PROMPT_BUCKET}; Prompt X-Ray stays in paste-only mode."
+    IAM_FAILURES=$((IAM_FAILURES + 1))
+  fi
+fi
 # `gcloud run deploy --source` builds with Cloud Build, which runs as the Compute Engine default service
 # account. Orgs that enforce iam.automaticIamGrantsForDefaultServiceAccounts (Argolis, and every org
 # created after May 3, 2024) give that account no roles, so the build fails unless it holds

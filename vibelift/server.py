@@ -27,7 +27,7 @@ try:
 except ImportError:
   fastapi = None  # type: ignore[assignment]
 
-from vibelift import billing_export, gcp_telemetry, long_running_agent, mcp_server, sme_eval, telemetry
+from vibelift import billing_export, gcp_telemetry, long_running_agent, mcp_server, prompt_xray, sme_eval, telemetry
 from vibelift import finops as live_finops
 from vibelift import fleet as ge_fleet
 from vibelift import optimizer as alpha_evolve_optimizer
@@ -37,6 +37,9 @@ from vibelift.ui import template as ui_template
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
+# Opt-in for the Prompt Cache X-Ray live mode, which reads logged (raw) user prompts from Cloud Storage.
+PROMPT_XRAY_LIVE_ENV = 'VIBELIFT_PROMPT_XRAY_LIVE'
 
 
 import threading
@@ -407,6 +410,111 @@ class VibeLiftRuntimeController:
     except (TypeError, ValueError):
       return {'status': 'ERROR', 'error': 'Invalid numeric input.'}
 
+  @staticmethod
+  def _prompt_xray_live_enabled() -> bool:
+    return os.environ.get(PROMPT_XRAY_LIVE_ENV, '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+  @staticmethod
+  def _public_snapshot_turn(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        'event_id': row.get('event_id'),
+        'timestamp': row.get('timestamp'),
+        'agent_name': row.get('agent_name'),
+        'user_id': row.get('user_id'),
+        'conversation_id': row.get('conversation_id'),
+        'input_tokens': row.get('input_tokens'),
+        'has_system_instruction': bool(row.get('sys_gcs_uri')),
+        'has_input_messages': bool(row.get('input_gcs_uri')),
+    }
+
+  def prompt_xray_live_turns(self) -> dict[str, Any]:
+    """Recent logged turns the Prompt Cache X-Ray can compare, plus models and a labeled example."""
+    base: dict[str, Any] = {
+        'available_models': sorted(m for m in telemetry.RATE_CARDS if m.startswith('gemini')),
+        'default_model': prompt_xray.DEFAULT_MODEL,
+        'example': {'previous_prompt': prompt_xray.EXAMPLE_PREVIOUS, 'current_prompt': prompt_xray.EXAMPLE_CURRENT},
+        'turns': [],
+    }
+    if not self._is_live_gcp():
+      return {**base, 'status': 'NOT_CONNECTED',
+              'message': 'No live Google Cloud project is connected; paste two prompt snapshots instead.'}
+    if not self._prompt_xray_live_enabled():
+      return {**base, 'status': 'DISABLED',
+              'message': (f'Reading logged prompts from Cloud Storage is off. It shows raw user prompts, so it '
+                          f'is opt-in: set {PROMPT_XRAY_LIVE_ENV}=1 and grant the runtime service account '
+                          'roles/storage.objectViewer on the prompt-log bucket (redeploy with '
+                          'VIBELIFT_PROMPT_LOG_BUCKET=<bucket> to do both).')}
+    rows = self.gcp_telemetry.fetch_prompt_snapshot_turns()
+    return {
+        **base,
+        'status': 'OK' if rows else 'EMPTY',
+        'source_table': rows[0].get('source_table') if rows else None,
+        'turns': [self._public_snapshot_turn(r) for r in rows],
+        'message': None if rows else 'No OTel GenAI turns with logged prompt content refs were found.',
+    }
+
+  def prompt_xray(self, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Prompt Cache X-Ray on two pasted snapshots, or on two logged turns (previous/current_event_id)."""
+    raw = body or {}
+
+    def _pos_int(key: str) -> int | None:
+      try:
+        val = int(float(str(raw.get(key))))
+      except (TypeError, ValueError):
+        return None
+      return val if val > 0 else None
+
+    model = str(raw.get('model') or prompt_xray.DEFAULT_MODEL)[:80]
+    monthly = _pos_int('monthly_requests')
+    try:
+      if raw.get('previous_event_id') or raw.get('current_event_id'):
+        return self._prompt_xray_live(
+            str(raw.get('previous_event_id') or ''), str(raw.get('current_event_id') or ''), model, monthly)
+      prev = raw.get('previous_prompt')
+      curr = raw.get('current_prompt')
+      return prompt_xray.analyze(
+          prev if isinstance(prev, str) else '',
+          curr if isinstance(curr, str) else '',
+          model=model,
+          monthly_requests=monthly,
+          current_input_tokens=_pos_int('current_input_tokens'),
+      )
+    except ValueError as exc:
+      return {'status': 'ERROR', 'error': str(exc)}
+
+  def _prompt_xray_live(self, prev_id: str, curr_id: str, model: str, monthly: int | None) -> dict[str, Any]:
+    if not self._is_live_gcp() or not self._prompt_xray_live_enabled():
+      listing = self.prompt_xray_live_turns()
+      return {'status': listing['status'], 'error': listing.get('message')}
+    # Only GCS objects referenced by this project's own OTel rows are read; callers pass event ids, not URIs.
+    by_id = {str(r.get('event_id')): r for r in self.gcp_telemetry.fetch_prompt_snapshot_turns()}
+    snapshots: list[tuple[Mapping[str, Any], str]] = []
+    for label, event_id in (('previous', prev_id), ('current', curr_id)):
+      row = by_id.get(event_id)
+      if row is None:
+        return {'status': 'ERROR', 'error': f'The {label} turn {event_id!r} is not among the recent logged turns.'}
+      try:
+        sys_text = self.gcp_telemetry.read_gcs_text(str(row['sys_gcs_uri'])) if row.get('sys_gcs_uri') else None
+        in_text = self.gcp_telemetry.read_gcs_text(str(row['input_gcs_uri'])) if row.get('input_gcs_uri') else None
+      except gcp_telemetry.GcsReadError as exc:
+        return {'status': 'SNAPSHOT_UNAVAILABLE', 'reason': exc.status, 'error': f'{label} turn: {exc}'}
+      snapshots.append((row, prompt_xray.render_logged_prompt(sys_text, in_text)))
+    (prev_row, prev_text), (curr_row, curr_text) = snapshots
+    source = {
+        'kind': 'live_otel_gcs',
+        'source_table': curr_row.get('source_table'),
+        'previous': self._public_snapshot_turn(prev_row),
+        'current': self._public_snapshot_turn(curr_row),
+        'rendering': ('System instruction and input messages as logged, rendered as text in order. The logged '
+                      'input token count also covers tool definitions, so token figures run slightly high.'),
+    }
+    logged = curr_row.get('input_tokens')
+    return prompt_xray.analyze(
+        prev_text, curr_text, model=model, monthly_requests=monthly,
+        current_input_tokens=int(logged) if isinstance(logged, int) and logged > 0 else None,
+        source=source,
+    )
+
   def recompute_finops(self, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Recomputes the deterministic Tokenomics & AgentOps Cockpit FinOps payload for given assumptions."""
     if self._is_live_gcp():
@@ -751,6 +859,9 @@ class VibeLiftRequestHandler(http.server.BaseHTTPRequestHandler):
       fresh = ge_fleet.parse_bool((query.get('fresh') or [''])[0])
       self._send_json(srv.controller.get_sme_evaluation(run_fresh=fresh))
       return
+    if path == '/api/prompt_xray/live_turns':
+      self._send_json(srv.controller.prompt_xray_live_turns())
+      return
     self.send_error(404, 'Not Found')
 
   def do_POST(self) -> None:  # pylint: disable=invalid-name
@@ -794,6 +905,9 @@ class VibeLiftRequestHandler(http.server.BaseHTTPRequestHandler):
       return
     if self.path == '/api/what_if_live':
       self._send_json(srv.controller.what_if_live(body))
+      return
+    if self.path == '/api/prompt_xray':
+      self._send_json(srv.controller.prompt_xray(body))
       return
     if self.path == '/api/recompute_finops':
       self._send_json(srv.controller.recompute_finops(body))
@@ -1085,6 +1199,14 @@ def register_api_routes(app: Any, controller: VibeLiftRuntimeController) -> None
   @app.post('/api/what_if_live')
   def post_what_if_live(payload: dict = fastapi.Body(default={})):
     return controller.what_if_live(payload)
+
+  @app.post('/api/prompt_xray')
+  def post_prompt_xray(payload: dict = fastapi.Body(default={})):
+    return controller.prompt_xray(payload)
+
+  @app.get('/api/prompt_xray/live_turns')
+  def get_prompt_xray_live_turns():
+    return controller.prompt_xray_live_turns()
 
   @app.get('/api/tokenomics_cockpit')
   def get_tokenomics_cockpit_endpoint():

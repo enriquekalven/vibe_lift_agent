@@ -340,6 +340,37 @@ async def _tool_get_vibelift_state(session_key: str, args: dict[str, Any]) -> di
   }
 
 
+async def _tool_xray_prompt_cache(session_key: str, args: dict[str, Any]) -> dict[str, Any]:
+  """Prompt Cache X-Ray: where two prompt snapshots stop sharing a cacheable prefix, and what it costs."""
+  ctrl = _get_controller()
+  report = await asyncio.to_thread(ctrl.prompt_xray, args)
+  if report.get('status') in (None, 'ERROR', 'NOT_CONNECTED', 'DISABLED', 'SNAPSHOT_UNAVAILABLE'):
+    text = f"Prompt Cache X-Ray unavailable: {report.get('error') or report.get('status')}"
+  else:
+    bp = report.get('breakpoint') or {}
+    cost = report.get('stranded_cost_usd_per_1k_requests')
+    rw = report.get('rewrite') or {}
+    text = (
+        f"Prompt Cache X-Ray ({report.get('status')}): {report.get('cached_prefix_pct')}% of the current prompt is "
+        f"a reusable prefix"
+        + (f"; it breaks at line {bp.get('line')}, column {bp.get('column')} "
+           f"({', '.join(c.get('label', '') for c in report.get('causes') or [])})" if bp else '')
+        + (f". Stranded static tokens cost ${cost:,.4f} per 1,000 requests on {report.get('model')}" if cost else '')
+        + (f". The proposed rewrite re-measures at {rw.get('projected_cached_prefix_pct')}% reusable."
+           if rw.get('changed') else '.')
+    )
+  return {'content': [{'type': 'text', 'text': text}], 'structuredContent': report}
+
+
+async def _tool_list_prompt_snapshot_turns(session_key: str, args: dict[str, Any]) -> dict[str, Any]:
+  """Lists recent logged turns (OTel GenAI + GCS content refs) that the Prompt Cache X-Ray can compare."""
+  ctrl = _get_controller()
+  listing = await asyncio.to_thread(ctrl.prompt_xray_live_turns)
+  text = (f"{len(listing.get('turns') or [])} logged turns available for the Prompt Cache X-Ray."
+          if listing.get('status') == 'OK' else str(listing.get('message') or listing.get('status')))
+  return {'content': [{'type': 'text', 'text': text}], 'structuredContent': listing}
+
+
 # ---------------------------------------------------------------------------
 # MCP Tool Registry
 # ---------------------------------------------------------------------------
@@ -499,6 +530,52 @@ _TOOLS: list[dict[str, Any]] = [
         },
         'annotations': _READ_ONLY_LOCAL,
         'handler': _tool_get_vibelift_state,
+    },
+    {
+        'name': 'xray_prompt_cache',
+        'title': 'Prompt Cache X-Ray',
+        'description': (
+            'Compares two snapshots of the same prompt (pasted text, or two logged turns by event id) and finds '
+            'the exact character where the cacheable prefix breaks, the cache-buster on that line (timestamp, '
+            'UUID, user e-mail, JSON key order, whitespace), the static tokens stranded behind it and their cost '
+            'per 1,000 requests from the rate card, plus a reordered prompt whose cached share is re-measured.'
+        ),
+        'visibility': ['model', 'app'],
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'previous_prompt': {'type': 'string', 'description': 'Prompt text from turn N-1.'},
+                'current_prompt': {'type': 'string', 'description': 'Prompt text from turn N.'},
+                'previous_event_id': {
+                    'type': 'string',
+                    'description': 'Instead of text: event id of a logged turn from list_prompt_snapshot_turns.',
+                },
+                'current_event_id': {'type': 'string', 'description': 'Event id of the later logged turn.'},
+                'model': {'type': 'string', 'description': "Rate card model (default 'gemini-2.5-flash')."},
+                'monthly_requests': {
+                    'type': 'integer',
+                    'description': 'Optional request volume per month; without it no monthly figure is given.',
+                },
+                'current_input_tokens': {
+                    'type': 'integer',
+                    'description': 'Optional logged input token count of the current prompt, for grounded token figures.',
+                },
+            },
+        },
+        'annotations': _READ_ONLY_CLOUD,
+        'handler': _tool_xray_prompt_cache,
+    },
+    {
+        'name': 'list_prompt_snapshot_turns',
+        'title': 'List Logged Turns for Prompt Cache X-Ray',
+        'description': (
+            'Lists recent OTel GenAI turns whose system instruction and input messages were logged to Cloud '
+            'Storage, so xray_prompt_cache can compare two of them. Opt-in (VIBELIFT_PROMPT_XRAY_LIVE).'
+        ),
+        'visibility': ['model', 'app'],
+        'inputSchema': {'type': 'object', 'properties': {}},
+        'annotations': _READ_ONLY_CLOUD,
+        'handler': _tool_list_prompt_snapshot_turns,
     },
 ]
 

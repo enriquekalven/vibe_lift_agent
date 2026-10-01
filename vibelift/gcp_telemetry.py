@@ -124,6 +124,14 @@ def get_current_gcp_region() -> str:
   return 'us-central1'
 
 
+class GcsReadError(Exception):
+  """A Cloud Storage object could not be read; ``status`` says why."""
+
+  def __init__(self, status: str, message: str):
+    super().__init__(message)
+    self.status = status
+
+
 class GoogleCloudTelemetryService:
   """Service for aggregating live GCP telemetry from Cloud Logging and BigQuery."""
 
@@ -664,6 +672,95 @@ class GoogleCloudTelemetryService:
         'refreshed_at': str(row.get('refreshed_at') or ''),
         'refresh_cli': f'python3 deploy/bigquery/provision_ge_mart.py --project {self.project_id} --refresh',
     }
+
+  def fetch_prompt_snapshot_turns(self, limit: int = 60, force_refresh: bool = False) -> list[dict[str, Any]]:
+    """Recent OTel GenAI turns whose prompt content (system instruction / input messages) was logged to GCS.
+
+    Rows come from <otel dataset>.gen_ai_client_inference_operation_details; only turns with at least
+    one content ref are returned. Cached for 60 seconds.
+    """
+    import re
+    import time
+
+    if not self.project_id or self.project_id in (UNCONFIGURED_PROJECT_ID, 'test-project'):
+      return []
+    cached = getattr(self, '_cached_prompt_turns', None)
+    cached_ts = float(getattr(self, '_cached_prompt_turns_ts', 0.0))
+    if cached is not None and not force_refresh and time.monotonic() - cached_ts < 60.0:
+      return list(cached)
+    otel_ds = (os.environ.get('VIBELIFT_OTEL_DATASET') or 'sre_triage_agent_telemetry').strip()
+    if not re.fullmatch(r'[A-Za-z0-9_]{1,1024}', otel_ds):
+      return []
+    rows = self._query_bigquery_rest(f"""
+      SELECT
+        insertId AS event_id,
+        CAST(timestamp AS STRING) AS ts,
+        labels.gen_ai_agent_name AS agent_name,
+        labels.user_id AS user_id,
+        COALESCE(labels.gen_ai_conversation_id, '') AS conversation_id,
+        SAFE_CAST(labels.gen_ai_usage_input_tokens AS INT64) AS input_tokens,
+        COALESCE(labels.gen_ai_system_instructions_ref, '') AS sys_gcs_uri,
+        COALESCE(labels.gen_ai_input_messages_ref, '') AS input_gcs_uri
+      FROM `{self.project_id}.{otel_ds}.gen_ai_client_inference_operation_details`
+      WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 400 DAY)
+        AND (COALESCE(labels.gen_ai_system_instructions_ref, '') != ''
+             OR COALESCE(labels.gen_ai_input_messages_ref, '') != '')
+      ORDER BY timestamp DESC
+      LIMIT {max(1, min(int(limit), 200))}
+    """, timeout_s=7.0)
+    turns = [{
+        'event_id': str(r.get('event_id') or ''),
+        'timestamp': str(r.get('ts') or ''),
+        'agent_name': str(r.get('agent_name') or '') or None,
+        'user_id': str(r.get('user_id') or '') or None,
+        'conversation_id': str(r.get('conversation_id') or '') or None,
+        'input_tokens': int(r['input_tokens']) if r.get('input_tokens') not in (None, '') else None,
+        'sys_gcs_uri': str(r.get('sys_gcs_uri') or ''),
+        'input_gcs_uri': str(r.get('input_gcs_uri') or ''),
+        'source_table': f'{self.project_id}.{otel_ds}.gen_ai_client_inference_operation_details',
+    } for r in rows if r.get('event_id')]
+    self._cached_prompt_turns = turns
+    self._cached_prompt_turns_ts = time.monotonic()
+    return list(turns)
+
+  def read_gcs_text(self, gcs_uri: str, max_bytes: int = 2_000_000) -> str:
+    """Reads a gs:// object as UTF-8 text via the Cloud Storage JSON API.
+
+    Raises:
+      GcsReadError: with status INVALID_URI, NOT_CONNECTED, FORBIDDEN, NOT_FOUND, TOO_LARGE or ERROR.
+    """
+    import re
+    import urllib.parse
+
+    m = re.fullmatch(r'gs://([a-z0-9][a-z0-9._-]{1,220})/(.+)', str(gcs_uri or ''))
+    if not m:
+      raise GcsReadError('INVALID_URI', f'Not a gs:// object URI: {str(gcs_uri)[:120]!r}')
+    bucket, obj = m.group(1), m.group(2)
+    token = self._get_access_token()
+    if not token:
+      raise GcsReadError('NOT_CONNECTED', 'No Google Cloud credentials available to read Cloud Storage.')
+    url = (f'https://storage.googleapis.com/storage/v1/b/{bucket}/o/'
+           f'{urllib.parse.quote(obj, safe="")}?alt=media')
+    req = urllib.request.Request(url, headers={
+        'Authorization': f'Bearer {token}',
+        'x-goog-user-project': self.project_id,
+    })
+    try:
+      with urllib.request.urlopen(req, timeout=8.0) as resp:
+        data = resp.read(max_bytes + 1)
+    except urllib.error.HTTPError as exc:
+      if exc.code == 403:
+        raise GcsReadError('FORBIDDEN', f'The runtime identity cannot read gs://{bucket} '
+                           '(needs roles/storage.objectViewer on the bucket).') from exc
+      if exc.code == 404:
+        raise GcsReadError('NOT_FOUND', f'{gcs_uri} no longer exists (a bucket lifecycle rule may '
+                           'have deleted it).') from exc
+      raise GcsReadError('ERROR', f'Cloud Storage returned HTTP {exc.code} for {gcs_uri}.') from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+      raise GcsReadError('ERROR', f'Cloud Storage read failed: {exc}') from exc
+    if len(data) > max_bytes:
+      raise GcsReadError('TOO_LARGE', f'{gcs_uri} is larger than {max_bytes:,} bytes.')
+    return data.decode('utf-8', errors='replace')
 
   def fetch_live_bigquery_project_insights(
       self,

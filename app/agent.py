@@ -141,6 +141,35 @@ def detect_prompt_breakpoint(previous_prompt: str, current_prompt: str) -> str:
   )
 
 
+def xray_prompt_cache(
+    previous_prompt: str,
+    current_prompt: str,
+    model: str = MODEL_NAME,
+    monthly_requests: int = 0,
+) -> str:
+  """Prompt Cache X-Ray: finds where two prompt snapshots stop sharing a cacheable prefix and what it costs.
+
+  Args:
+      previous_prompt: The prompt from turn N-1.
+      current_prompt: The prompt from turn N.
+      model: Rate card model (defaults to gemini-2.5-flash).
+      monthly_requests: Optional monthly request volume; 0 means no monthly figure is computed.
+
+  Returns:
+      JSON with the breakpoint (line, column, token index), the cache-buster cause, cached prefix share,
+      stranded tokens and cost per 1,000 requests, and a rewritten prompt with its re-measured cached share.
+  """
+  from vibelift import server as vibelift_server
+  report = vibelift_server._global_controller.prompt_xray({
+      "previous_prompt": previous_prompt,
+      "current_prompt": current_prompt,
+      "model": model,
+      "monthly_requests": monthly_requests or None,
+  })
+  report.pop("heatmap", None)
+  return json.dumps(report, indent=2, default=str)
+
+
 def trigger_alpha_evolve_cycle(agent_id: str = "it_service_desk") -> str:
   """Executes an AlphaEvolve optimization iteration to maximize prompt cache hit ratio.
 
@@ -277,7 +306,7 @@ Your mission is to:
 2. Report on every agent deployed on the Gemini Enterprise app AND standalone/unregistered runtimes (Vertex AI Agent Engine, Cloud Run agents/MCP servers, GKE workloads, and Cloud Trace Skills/MCP tools) with `query_ge_agent_fleet`: live requests, errors, latency, tokens, conversations, zombie/idle allocation, and project-wide model usage and estimated cost. Only quote numbers returned by the tools.
 3. Query the BigQuery reporting mart (`vibelift_mart`) and Cloud Billing export reconciliation with `query_live_finops_and_mart`, and verify live telemetry grounding with `validate_telemetry_grounding`.
 4. Calculate token cache economics (Cache Read vs Write vs Uncached) and dollar savings vs naive pricing.
-5. Diagnose prompt cache breakpoints where dynamic timestamps or non-static prefixes invalidate caches.
+5. Diagnose prompt cache breakpoints where dynamic timestamps or non-static prefixes invalidate caches; use `xray_prompt_cache` to locate the exact break, its cost per 1,000 requests, and a re-measured cache-friendly rewrite.
 6. Execute AlphaEvolve closed-loop Pareto mutations to optimize prompt prefixes and prune verbose tool outputs.
 Provide clear, authoritative, and actionable answers with specific token metrics and dollar cost savings. Never invent or extrapolate unmeasured values.
 """,
@@ -290,6 +319,7 @@ Provide clear, authoritative, and actionable answers with specific token metrics
         list_cloud_run_agents,
         calculate_cache_economics,
         detect_prompt_breakpoint,
+        xray_prompt_cache,
         trigger_alpha_evolve_cycle,
     ],
 )

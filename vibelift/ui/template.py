@@ -597,6 +597,44 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         -webkit-print-color-adjust: exact;
       }
     }
+
+    /* Prompt Cache X-Ray */
+    .px-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+    .px-seg { display: inline-flex; gap: 4px; }
+    .px-seg-btn.active { background: var(--text-primary); color: #fff; border-color: var(--text-primary); }
+    .px-field { font-size: 12px; color: var(--text-secondary); display: inline-flex; gap: 6px; align-items: center; }
+    .px-field select, .px-field input { font-size: 12px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; max-width: 170px; }
+    .px-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .px-area { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); }
+    .px-area textarea, .px-area select { font-family: var(--font-mono); font-size: 12px; border: 1px solid var(--border); border-radius: 8px; padding: 8px; color: var(--text-primary); }
+    .px-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 8px 0; }
+    .px-kpi { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--surface); }
+    .px-kpi-label { font-size: 11px; color: var(--text-secondary); }
+    .px-kpi-value { font-size: 18px; font-weight: 600; }
+    .px-kpi-value.good { color: var(--g-green); }
+    .px-kpi-value.bad { color: var(--g-red); }
+    .px-culprit { border-left: 3px solid var(--g-red); background: var(--g-red-bg); padding: 8px 10px; border-radius: 6px; font-size: 13px; margin-bottom: 8px; }
+    .px-culprit.ok { border-left-color: var(--g-green); background: var(--g-green-bg); }
+    .px-culprit code { font-family: var(--font-mono); font-size: 12px; background: rgba(255,255,255,0.7); padding: 0 3px; border-radius: 3px; }
+    .px-legend { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; font-size: 11px; align-items: center; }
+    .px-chip { padding: 2px 6px; border-radius: 4px; }
+    .px-heatmap, .px-code { font-family: var(--font-mono); font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: #fff; margin: 0; }
+    .px-cached { background: #dcfce7; }
+    .px-cached.px-tok-alt { background: #bbf7d0; }
+    .px-dynamic { background: #fee2e2; }
+    .px-dynamic.px-tok-alt { background: #fecaca; }
+    .px-buster { background: #dc2626; color: #fff; font-weight: 600; }
+    .px-recoverable { background: #fef3c7; }
+    .px-recoverable.px-tok-alt { background: #fde68a; }
+    .px-appended { background: #dbeafe; }
+    .px-appended.px-tok-alt { background: #bfdbfe; }
+    .px-latent { background: #ffedd5; outline: 1px dashed #d97706; }
+    .px-collapsed { display: inline-block; margin: 2px 0; padding: 1px 8px; border-radius: 10px; font-family: var(--font-sans); font-size: 11px; color: var(--text-secondary); border: 1px dashed #94a3b8; background: #f8fafc; }
+    .px-break { display: inline-block; width: 3px; height: 1.15em; background: #dc2626; vertical-align: text-bottom; margin: 0 1px; box-shadow: 0 0 0 2px rgba(220,38,38,0.25); }
+    .px-rewrite { margin-top: 10px; }
+    .px-rewrite-head { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; flex-wrap: wrap; }
+    .px-notes { font-size: 12px; color: var(--text-secondary); margin: 8px 0 0 18px; }
+    @media (max-width: 800px) { .px-grid { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -1278,6 +1316,59 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- TAB 2: TESTING, ROLLOUT SIMULATOR & CHANGE HISTORY -->
     <section id="tabPanel2" class="hidden">
+      <div class="panel" id="promptXrayPanel" style="margin-bottom:16px;">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Prompt Cache X-Ray</span>
+            <span class="badge badge-blue" id="pxStatusBadge">Compare two prompts</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Gemini only reuses an identical leading prefix. Compare two snapshots of the same prompt to see the exact character where caching breaks, what broke it, and what the stranded tokens cost.
+          </div>
+        </div>
+        <div class="px-toolbar">
+          <div class="px-seg">
+            <button class="btn px-seg-btn active" id="pxSrcPaste" onclick="pxSetSource('paste')">Paste two prompts</button>
+            <button class="btn px-seg-btn" id="pxSrcLive" onclick="pxSetSource('live')">Logged turns (OTel + GCS)</button>
+          </div>
+          <label class="px-field">Model <select id="pxModel"><option value="gemini-2.5-flash">gemini-2.5-flash</option></select></label>
+          <label class="px-field">Requests / month <input id="pxMonthly" type="number" min="0" step="1000" placeholder="optional"></label>
+          <button class="btn" id="pxExampleBtn" onclick="pxLoadExample()">Load example</button>
+          <button class="btn btn-primary" id="pxRunBtn" onclick="runPromptXray()">Run X-Ray</button>
+        </div>
+        <div id="pxPasteInputs" class="px-grid">
+          <label class="px-area"><span>Turn N-1 (previous)</span><textarea id="pxPrev" rows="8" spellcheck="false" placeholder="Paste the earlier prompt (system instruction + context)..."></textarea></label>
+          <label class="px-area"><span>Turn N (current)</span><textarea id="pxCurr" rows="8" spellcheck="false" placeholder="Paste the later prompt..."></textarea></label>
+        </div>
+        <div id="pxLiveInputs" class="px-grid hidden">
+          <label class="px-area"><span>Previous turn</span><select id="pxPrevTurn"></select></label>
+          <label class="px-area"><span>Current turn</span><select id="pxCurrTurn"></select></label>
+        </div>
+        <div id="pxNotice" class="kpi-sub" style="margin:8px 0;"></div>
+        <div id="pxResult" class="hidden">
+          <div class="px-kpis" id="pxKpis"></div>
+          <div class="px-culprit" id="pxCulprit"></div>
+          <div class="px-legend">
+            <span class="px-chip px-cached">cached prefix</span>
+            <span class="px-chip px-buster">cache-buster</span>
+            <span class="px-chip px-dynamic">changed since last turn</span>
+            <span class="px-chip px-recoverable">stranded static text (recoverable)</span>
+            <span class="px-chip px-appended">appended (normal growth)</span>
+            <span class="px-chip px-latent">latent buster</span>
+            <span class="kpi-sub">Shading stripes approximate token boundaries.</span>
+          </div>
+          <pre class="px-heatmap" id="pxHeatmap"></pre>
+          <div class="px-rewrite">
+            <div class="px-rewrite-head">
+              <strong>Cache-friendly rewrite</strong>
+              <span id="pxRewriteSummary" class="kpi-sub"></span>
+              <button class="btn" id="pxCopyBtn" onclick="pxCopyRewrite()">Copy</button>
+            </div>
+            <pre class="px-code" id="pxRewrite"></pre>
+          </div>
+          <ul class="px-notes" id="pxNotes"></ul>
+        </div>
+      </div>
       <div class="charts-grid">
         <div class="chart-card">
           <div class="panel-header" style="margin-bottom:8px;padding-bottom:6px;">
@@ -2358,6 +2449,7 @@ async def handle_agent_turn(message_envelope):
       });
       const banner = document.getElementById('demoSelectorBanner');
       if (banner) banner.classList.toggle('hidden', tab === 0 || tab === 6 || tab === 3 || tab === 4);
+      if (tab === 2) initPromptXray();
       notifyHostSizeChanged();
     }
 
@@ -2797,6 +2889,290 @@ async def handle_agent_turn(message_envelope):
           ]));
         });
       }
+    }
+
+    // ---------------- Prompt Cache X-Ray ----------------
+    var pxInitDone = false;
+    var pxSource = 'paste';
+    var pxExample = null;
+    var pxLive = null;
+    var pxLastRewrite = '';
+    var PX_TOKEN_RE = /\\s*[A-Za-z]+|\\s*[0-9]|\\s*[^A-Za-z0-9\\s]|\\s+/g;
+
+    async function pxCall(method, path, toolName, body) {
+      if (isEmbedded()) {
+        const result = await callHost('tools/call', {name: toolName, arguments: body || {}}, 30000);
+        if (!result || result.isError || !result.structuredContent) throw new Error('host tool call failed');
+        return result.structuredContent;
+      }
+      const opts = method === 'POST'
+        ? {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {}), credentials: 'same-origin'}
+        : {cache: 'no-store', credentials: 'same-origin'};
+      const res = await fetch(path, opts);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    }
+
+    function pxSetNotice(text) {
+      const n = document.getElementById('pxNotice');
+      if (n) n.textContent = text || '';
+    }
+
+    function pxSetBadge(text, cls) {
+      const b = document.getElementById('pxStatusBadge');
+      if (!b) return;
+      b.className = 'badge ' + cls;
+      b.textContent = text;
+    }
+
+    function pxTurnLabel(t) {
+      const parts = [t.timestamp ? String(t.timestamp).slice(0, 19) : '—'];
+      if (t.agent_name) parts.push(t.agent_name);
+      if (t.conversation_id) parts.push('conv ' + String(t.conversation_id).slice(0, 8));
+      parts.push(t.input_tokens == null ? 'tokens —' : fmtInt(t.input_tokens) + ' tok');
+      return parts.join(' · ');
+    }
+
+    function pxFillTurns(turns) {
+      const prevSel = document.getElementById('pxPrevTurn');
+      const currSel = document.getElementById('pxCurrTurn');
+      if (!prevSel || !currSel) return;
+      [prevSel, currSel].forEach(function(sel) {
+        sel.replaceChildren();
+        turns.forEach(function(t) {
+          const opt = document.createElement('option');
+          opt.value = t.event_id;
+          opt.textContent = pxTurnLabel(t);
+          sel.appendChild(opt);
+        });
+      });
+      // Default: the most recent pair of consecutive turns in the same conversation, else the two newest.
+      let curIdx = 0, prevIdx = turns.length > 1 ? 1 : 0;
+      for (let i = 0; i + 1 < turns.length; i++) {
+        if (turns[i].conversation_id && turns[i].conversation_id === turns[i + 1].conversation_id) {
+          curIdx = i; prevIdx = i + 1; break;
+        }
+      }
+      if (turns[curIdx]) currSel.value = turns[curIdx].event_id;
+      if (turns[prevIdx]) prevSel.value = turns[prevIdx].event_id;
+    }
+
+    async function initPromptXray() {
+      if (pxInitDone) return;
+      pxInitDone = true;
+      try {
+        pxLive = await pxCall('GET', '/api/prompt_xray/live_turns', 'list_prompt_snapshot_turns', {});
+      } catch (e) {
+        pxLive = {status: 'ERROR', message: 'Could not load logged turns: ' + e.message, turns: []};
+      }
+      pxExample = pxLive && pxLive.example ? pxLive.example : null;
+      const models = (pxLive && pxLive.available_models && pxLive.available_models.length)
+        ? pxLive.available_models : ['gemini-2.5-flash', 'gemini-2.5-pro'];
+      const sel = document.getElementById('pxModel');
+      if (sel) {
+        const keep = sel.value || (pxLive && pxLive.default_model) || 'gemini-2.5-flash';
+        sel.replaceChildren();
+        models.forEach(function(m) {
+          const opt = document.createElement('option');
+          opt.value = m; opt.textContent = m;
+          sel.appendChild(opt);
+        });
+        sel.value = models.indexOf(keep) >= 0 ? keep : models[0];
+      }
+      if (pxLive && pxLive.status === 'OK') pxFillTurns(pxLive.turns || []);
+      if (pxSource === 'live') pxSetSource('live');
+    }
+
+    function pxSetSource(kind) {
+      pxSource = kind === 'live' ? 'live' : 'paste';
+      document.getElementById('pxSrcPaste').classList.toggle('active', pxSource === 'paste');
+      document.getElementById('pxSrcLive').classList.toggle('active', pxSource === 'live');
+      document.getElementById('pxPasteInputs').classList.toggle('hidden', pxSource !== 'paste');
+      document.getElementById('pxLiveInputs').classList.toggle('hidden', pxSource !== 'live');
+      document.getElementById('pxExampleBtn').classList.toggle('hidden', pxSource !== 'paste');
+      if (pxSource === 'live') {
+        if (!pxLive) { pxSetNotice('Loading logged turns…'); initPromptXray(); return; }
+        if (pxLive.status === 'OK') {
+          pxSetNotice((pxLive.turns || []).length + ' logged turns from ' + (pxLive.source_table || 'OTel telemetry')
+            + '. Prompts are rendered from the system instruction and input messages each turn logged to Cloud Storage.');
+        } else {
+          pxSetNotice(pxLive.message || ('Logged turns unavailable (' + pxLive.status + ').'));
+        }
+      } else {
+        pxSetNotice('');
+      }
+    }
+
+    function pxLoadExample() {
+      if (!pxExample) { pxSetNotice('Example not loaded yet; try again in a moment.'); initPromptXray(); return; }
+      document.getElementById('pxPrev').value = pxExample.previous_prompt;
+      document.getElementById('pxCurr').value = pxExample.current_prompt;
+      pxSetNotice('EXAMPLE prompts loaded (not telemetry): an escalation agent whose prompt starts with a timestamp, a user e-mail and unsorted JSON.');
+      pxSetBadge('Example', 'badge-yellow');
+    }
+
+    async function runPromptXray() {
+      const btn = document.getElementById('pxRunBtn');
+      const body = {model: document.getElementById('pxModel').value};
+      const monthly = Number(document.getElementById('pxMonthly').value);
+      if (monthly > 0) body.monthly_requests = Math.round(monthly);
+      if (pxSource === 'live') {
+        if (!pxLive || pxLive.status !== 'OK') { pxSetSource('live'); return; }
+        body.previous_event_id = document.getElementById('pxPrevTurn').value;
+        body.current_event_id = document.getElementById('pxCurrTurn').value;
+        if (body.previous_event_id === body.current_event_id) { pxSetNotice('Pick two different turns.'); return; }
+      } else {
+        body.previous_prompt = document.getElementById('pxPrev').value;
+        body.current_prompt = document.getElementById('pxCurr').value;
+        if (!body.previous_prompt || !body.current_prompt) { pxSetNotice('Paste both prompts, or click Load example.'); return; }
+      }
+      if (btn) { btn.disabled = true; btn.textContent = 'X-Raying…'; }
+      try {
+        const res = await pxCall('POST', '/api/prompt_xray', 'xray_prompt_cache', body);
+        if (!res || !res.heatmap) {
+          pxSetBadge(res && res.status ? res.status : 'ERROR', 'badge-red');
+          pxSetNotice((res && (res.error || res.message)) || 'The X-Ray returned no result.');
+          document.getElementById('pxResult').classList.add('hidden');
+          return;
+        }
+        renderPromptXray(res);
+      } catch (e) {
+        pxSetBadge('ERROR', 'badge-red');
+        pxSetNotice('X-Ray request failed: ' + e.message);
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Run X-Ray'; }
+      }
+    }
+
+    function pxMoney(v, digits) {
+      if (v == null) return '—';
+      return '$' + Number(v).toLocaleString(undefined, {minimumFractionDigits: digits, maximumFractionDigits: digits});
+    }
+
+    function pxKpi(label, value, sub, cls) {
+      return el('div', 'px-kpi', [
+        el('div', 'px-kpi-label', [label]),
+        el('div', 'px-kpi-value' + (cls ? ' ' + cls : ''), [value]),
+        sub ? el('div', 'kpi-sub', [sub]) : null,
+      ]);
+    }
+
+    function pxTokenSpans(text, state) {
+      const frag = document.createDocumentFragment();
+      if (state === 'buster' || state === 'latent') {
+        frag.appendChild(el('span', 'px-' + state, [text]));
+        return frag;
+      }
+      const chunks = text.match(PX_TOKEN_RE) || [text];
+      chunks.forEach(function(chunk, i) {
+        frag.appendChild(el('span', 'px-' + state + (i % 2 ? ' px-tok-alt' : ''), [chunk]));
+      });
+      return frag;
+    }
+
+    function renderPromptXray(res) {
+      document.getElementById('pxResult').classList.remove('hidden');
+      const statusText = {
+        PREFIX_BUSTED: ['Cache busted', 'badge-red'],
+        APPEND_ONLY: ['Append-only (cache-friendly)', 'badge-green'],
+        IDENTICAL: ['Identical prefix', 'badge-green'],
+        SHORTER_PREFIX: ['Fully reusable', 'badge-green'],
+      }[res.status] || [res.status, 'badge-blue'];
+      pxSetBadge(statusText[0], statusText[1]);
+      const src = res.source || {};
+      pxSetNotice(src.kind === 'live_otel_gcs'
+        ? 'Logged turns from ' + (src.source_table || 'OTel telemetry') + '. ' + (src.rendering || '')
+        : (res.token_basis === 'heuristic_4_chars_per_token' ? 'Pasted prompts; token counts estimated at 4 characters per token.' : ''));
+
+      const bp = res.breakpoint;
+      const rw = res.rewrite || {};
+      const kpis = document.getElementById('pxKpis');
+      kpis.replaceChildren(
+        pxKpi('Cached prefix now', res.cached_prefix_pct + '%',
+          '≈' + fmtInt(res.cached_prefix_tokens) + ' of ' + fmtInt(res.current_tokens) + ' tokens'
+            + (res.below_cache_minimum ? ' · below ' + fmtInt(res.cache_minimum_tokens) + '-token minimum' : ''),
+          res.cached_prefix_pct >= 80 ? 'good' : 'bad'),
+        pxKpi('Cache breaks at', bp ? 'line ' + bp.line + ', col ' + bp.column : 'no break',
+          bp ? '≈ token #' + fmtInt(bp.token_index) : (res.status === 'APPEND_ONLY' ? 'new content only appended' : '')),
+        pxKpi('Stranded tokens / request', '≈' + fmtInt(res.recoverable_tokens_per_request),
+          'static text after the break'),
+        pxKpi('Cost per 1,000 requests', pxMoney(res.stranded_cost_usd_per_1k_requests, 4),
+          res.rate_card ? res.model + ' input vs cached-read rate' : 'no rate card for ' + res.model),
+        pxKpi('Per month', pxMoney(res.stranded_cost_usd_per_month, 2),
+          res.monthly_requests ? fmtInt(res.monthly_requests) + ' requests/month' : 'enter requests/month'),
+        pxKpi('After rewrite', rw.changed ? rw.projected_cached_prefix_pct + '%' : '—',
+          rw.changed ? 're-measured · ' + pxMoney(rw.projected_stranded_cost_usd_per_1k_requests, 4) + ' / 1k'
+            + (rw.projected_below_cache_minimum ? ' · still below minimum' : '') : 'no reorder needed',
+          rw.changed && !rw.projected_below_cache_minimum ? 'good' : null)
+      );
+
+      const culprit = document.getElementById('pxCulprit');
+      culprit.replaceChildren();
+      culprit.classList.toggle('ok', res.status !== 'PREFIX_BUSTED');
+      if (res.status === 'PREFIX_BUSTED' && bp) {
+        const causes = res.causes || [];
+        culprit.appendChild(el('div', null, [
+          el('strong', null, ['Line ' + bp.line + ' changed: ']),
+          el('code', null, [bp.previous_line || '(empty)']), ' → ', el('code', null, [bp.current_line || '(empty)']),
+        ]));
+        culprit.appendChild(el('div', null, [
+          el('strong', null, ['Cause: ']), causes.map(function(c) { return c.label; }).join(', ') || 'unclassified',
+        ]));
+        if (causes.length) culprit.appendChild(el('div', 'kpi-sub', [causes[causes.length - 1].advice]));
+      } else if (res.status === 'APPEND_ONLY') {
+        culprit.appendChild(el('div', null, ['Turn N extends turn N-1 exactly: the whole previous prompt is a reusable prefix and only the new tail is billed at the full input rate.']));
+      } else {
+        culprit.appendChild(el('div', null, ['The current prompt is entirely a prefix of the previous one: fully reusable.']));
+      }
+
+      const heat = document.getElementById('pxHeatmap');
+      heat.replaceChildren();
+      (res.heatmap || []).forEach(function(seg) {
+        if (bp && seg.start === bp.char_offset && seg.state !== 'cached') {
+          const mark = el('span', 'px-break', []);
+          mark.title = 'Cache breaks here: line ' + bp.line + ', column ' + bp.column + ', ≈ token #' + bp.token_index;
+          heat.appendChild(mark);
+        }
+        if (seg.collapsed) {
+          const pill = el('span', 'px-collapsed px-' + seg.state,
+            ['… ' + fmtInt(seg.chars) + ' chars (≈' + fmtInt(seg.tokens) + ' tokens) ' + seg.state + ' …']);
+          heat.appendChild(pill);
+          return;
+        }
+        const wrap = el('span', null, []);
+        wrap.title = seg.state + ' · ≈ tokens ' + seg.token_start + '–' + seg.token_end;
+        wrap.appendChild(pxTokenSpans(seg.text || '', seg.state));
+        heat.appendChild(wrap);
+      });
+
+      pxLastRewrite = rw.rewritten_prompt || '';
+      document.getElementById('pxRewrite').textContent = rw.changed ? pxLastRewrite : 'No volatile lines or unsorted JSON found; the prompt is already ordered for caching.';
+      document.getElementById('pxCopyBtn').classList.toggle('hidden', !rw.changed);
+      const moved = (rw.moved_lines || []).length;
+      document.getElementById('pxRewriteSummary').textContent = rw.changed
+        ? moved + ' volatile line(s) moved last, ' + (rw.json_lines_key_sorted || 0) + ' JSON line(s) key-sorted. ' + (rw.method || '')
+        : '';
+
+      const notes = document.getElementById('pxNotes');
+      notes.replaceChildren();
+      (res.notes || []).forEach(function(n) { notes.appendChild(el('li', null, [n])); });
+      notifyHostSizeChanged();
+    }
+
+    async function pxCopyRewrite() {
+      const btn = document.getElementById('pxCopyBtn');
+      try {
+        await navigator.clipboard.writeText(pxLastRewrite);
+        if (btn) btn.textContent = 'Copied';
+      } catch (e) {
+        const range = document.createRange();
+        range.selectNodeContents(document.getElementById('pxRewrite'));
+        const s = window.getSelection();
+        s.removeAllRanges();
+        s.addRange(range);
+        if (btn) btn.textContent = 'Selected — press Ctrl/Cmd+C';
+      }
+      setTimeout(function() { if (btn) btn.textContent = 'Copy'; }, 2000);
     }
 
     async function runTelemetryValidationAudit(runLlmJudge) {
