@@ -671,6 +671,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         <option value="4320">Last 6 months</option>
         <option value="8760">Last 1 year</option>
       </select>
+      <span id="fleetWindowStatus" class="mono" style="font-size:11px;font-weight:600;color:#0284c7;display:none;">&#x23F3; Loading&hellip;</span>
     </div>
     <div class="action-bar">
       <button id="btnModeFullscreen" class="btn btn-fullscreen-toggle" onclick="toggleDisplayMode()" title="Toggle between Right Side Panel and Fullscreen">
@@ -6029,12 +6030,19 @@ async def handle_agent_turn(message_envelope):
       const usage = (fleet.model_usage && fleet.model_usage.totals) || null;
       const traffic = fleet.ge_traffic || null;
       const unrated = usage && (usage.models_without_rate_card || []).length;
+      const winHoursNum = Number(userSelectedWindow ? fleetWindowHours : fleet.window_hours) || 24;
+      const tokenTitle = winHoursNum > 720 ? 'Agent tokens in / out (30d retention)' : 'Agent tokens in / out';
+      let tokenSub = fmtInt(t.llm_calls) + ' LLM calls · ' + fmtInt(t.conversations) + ' conversations';
+      if (winHoursNum > 720) {
+        tokenSub += ' · max 30d log/trace retention';
+      } else if (t.llm_calls === 0) {
+        tokenSub = '0 LLM calls in ' + win + ' · no ADK agent activity' + (t.last_activity ? ' (last: ' + fmtAgo(t.last_activity) + ')' : '');
+      }
       document.getElementById('fleetKpis').replaceChildren(
         kpiCard('Agents on Gemini Enterprise', fmtInt(t.agents), (t.enabled || 0) + ' enabled' + (byType ? ' · ' + byType : '')),
         kpiCard('Requests · ' + win, fmtInt(t.requests), t.requests == null ? 'no runtime telemetry'
           : fmtInt(t.errors_4xx) + ' 4xx · ' + fmtInt(t.errors_5xx) + ' 5xx' + (t.error_rate_pct != null ? ' (' + t.error_rate_pct + '% 5xx)' : '')),
-        kpiCard('Agent tokens in / out', fmtTokens(t.input_tokens) + ' / ' + fmtTokens(t.output_tokens),
-          fmtInt(t.llm_calls) + ' LLM calls · ' + fmtInt(t.conversations) + ' conversations'),
+        kpiCard(tokenTitle, fmtTokens(t.input_tokens) + ' / ' + fmtTokens(t.output_tokens), tokenSub),
         kpiCard('Model spend · project (est.)', usage ? fmtUsd(usage.est_cost_usd) : '—', usage
           ? fmtTokens(usage.input_tokens) + ' in / ' + fmtTokens(usage.output_tokens) + ' out · ' + fmtInt(usage.invocations) + ' calls'
             + (unrated ? ' · ' + unrated + ' model(s) without rate card' : '')
@@ -6135,9 +6143,23 @@ async def handle_agent_turn(message_envelope):
       }
     }
 
+    let fleetRequestSeq = 0;
+    let fleetWarmingTimer = null;
+
+    function setWindowLoadingState(isLoading) {
+      const badgeEl = document.getElementById('fleetWindowStatus');
+      if (badgeEl) {
+        badgeEl.style.display = isLoading ? 'inline-block' : 'none';
+      }
+    }
+
     async function refreshFleet(force) {
+      const reqSeq = ++fleetRequestSeq;
+      const requestedHours = fleetWindowHours;
+      if (fleetWarmingTimer) { clearTimeout(fleetWarmingTimer); fleetWarmingTimer = null; }
       const btn = document.getElementById('fleetRefreshBtn');
       if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
+      setWindowLoadingState(true);
       try {
         let fleet = null;
         if (isEmbedded()) {
@@ -6145,7 +6167,7 @@ async def handle_agent_turn(message_envelope):
           try {
             const result = await callHost('tools/call', {
               name: FLEET_TOOL,
-              arguments: {window_hours: fleetWindowHours, force_refresh: !!force},
+              arguments: {window_hours: requestedHours, force_refresh: !!force},
             }, 25000);
             if (result && !result.isError && result.structuredContent) {
               fleet = result.structuredContent;
@@ -6157,12 +6179,14 @@ async def handle_agent_turn(message_envelope):
           if (!fleet) {
             const fallback = await callHost('tools/call', {
               name: 'open_dashboard',
-              arguments: {window_hours: fleetWindowHours, force_refresh: !!force},
+              arguments: {window_hours: requestedHours, force_refresh: !!force},
             }, 25000);
             if (fallback && !fallback.isError && fallback.structuredContent) {
               const sc = fallback.structuredContent;
               if (sc.state) {
-                renderState(sc.state);
+                if (reqSeq === fleetRequestSeq && requestedHours === fleetWindowHours) {
+                  renderState(sc.state);
+                }
                 fleet = sc.state.ge_fleet;
               } else {
                 fleet = sc.ge_fleet || sc;
@@ -6171,35 +6195,51 @@ async def handle_agent_turn(message_envelope):
             }
           }
         } else {
-          const url = '/api/ge_fleet?window_hours=' + encodeURIComponent(fleetWindowHours) + (force ? '&force_refresh=1' : '');
+          const url = '/api/ge_fleet?window_hours=' + encodeURIComponent(requestedHours) + (force ? '&force_refresh=1' : '');
           const res = await fetch(url, {cache: 'no-store', credentials: 'same-origin'});
           if (!res.ok) throw new Error('HTTP ' + res.status);
           fleet = await res.json();
           fleetRefreshMode = 'http';
         }
+        // Ignore out-of-order responses from an earlier window selection.
+        if (reqSeq !== fleetRequestSeq || requestedHours !== fleetWindowHours) {
+          return false;
+        }
         if (!fleet || !Array.isArray(fleet.agents)) throw new Error('no fleet data');
         setFleetNotice('');
         renderFleet(fleet);
+        if (fleet.warming || (fleet.source_status && fleet.source_status.inventory === 'warming')) {
+          fleetWarmingTimer = setTimeout(function() {
+            if (fleetWindowHours === requestedHours) refreshFleet(false);
+          }, 2500);
+        }
+        return true;
       } catch (err) {
+        if (reqSeq !== fleetRequestSeq) return false;
         fleetRefreshMode = 'snapshot';
         const when = lastFleet && lastFleet.generated_at ? ' from ' + new Date(lastFleet.generated_at).toLocaleTimeString() : '';
         setFleetNotice('Live refresh is not available from this view, so this is the snapshot' + when
           + '. Ask the assistant to open the VibeLift dashboard again for newer data.', true);
         if (lastFleet) renderFleet(lastFleet);
+        return false;
       } finally {
-        if (btn) { btn.disabled = false; btn.textContent = 'Refresh now'; }
+        if (reqSeq === fleetRequestSeq) {
+          if (btn) { btn.disabled = false; btn.textContent = 'Refresh now'; }
+          setWindowLoadingState(false);
+        }
       }
     }
 
-    function onFleetWindowChange() {
+    async function onFleetWindowChange() {
       const sel = document.getElementById('fleetWindow');
       fleetWindowHours = Number(sel && sel.value) || 24;
       userSelectedWindow = true;
       try { localStorage.setItem('vibelift.fleetWindowHours', String(fleetWindowHours)); } catch (e) {}
       if (fleetRefreshMode === 'snapshot') fleetRefreshMode = 'pending';
-      refreshFleet(false);
-      if (!isEmbedded()) {
-        fetchState().catch(function() {});
+      const targetHours = fleetWindowHours;
+      const ok = await refreshFleet(false);
+      if (ok && !isEmbedded() && fleetWindowHours === targetHours) {
+        fetchState(targetHours, fleetRequestSeq).catch(function() {});
       }
     }
 
@@ -6213,11 +6253,15 @@ async def handle_agent_turn(message_envelope):
       }, FLEET_REFRESH_MS);
     }
 
-    async function fetchState() {
-      const url = '/api/state?window_hours=' + encodeURIComponent(fleetWindowHours);
+    async function fetchState(expectedHours, expectedSeq) {
+      const targetHours = expectedHours || fleetWindowHours;
+      const url = '/api/state?window_hours=' + encodeURIComponent(targetHours);
       const res = await fetch(url, {cache: 'no-store', credentials: 'same-origin'});
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
+      if (targetHours !== fleetWindowHours || (expectedSeq && expectedSeq !== fleetRequestSeq)) {
+        return;
+      }
       fleetRefreshMode = 'http';
       renderState(data);
     }

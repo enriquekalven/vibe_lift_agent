@@ -571,7 +571,99 @@ class GeFleetHelpersTest(unittest.TestCase):
     self.assertEqual(gke_unreg['type'], 'GKE_WORKLOAD')
     self.assertGreater(gke_unreg['metrics']['est_infra_cost_usd'], 0.0)
 
+  def test_project_alias_normalization_deduplicates_project_number(self):
+    service, _ = make_fake_service()
+    service._record_project_alias('projects/697625214430/locations/global/collections/default_collection/engines/my-app')
+    self.assertEqual(service._canonical_project('697625214430'), service.project_id)
+    self.assertEqual(service._canonical_project('other-project-999'), 'other-project-999')
+
+  def test_trace_cache_shares_30d_cap_and_falls_back_on_429(self):
+    calls = {'trace_list': 0, 'fail_429': False}
+
+    class TraceApi:
+      def call(self, method, url, body=None):
+        if '/v1/projects/' in url and '/traces' in url and method == 'GET':
+          calls['trace_list'] += 1
+          if calls['fail_429']:
+            raise ge_fleet.FleetSourceError(429, 'HTTP 429: Quota exceeded')
+          return {
+              'traces': [{
+                  'traceId': 't1',
+                  'spans': [{
+                      'spanId': '1',
+                      'name': 'call_llm',
+                      'startTime': '2099-09-30T10:00:00Z',
+                      'endTime': '2099-09-30T10:00:01Z',
+                      'attributes': {
+                          'gen_ai.usage.input_tokens': '500',
+                          'gen_ai.usage.output_tokens': '200',
+                      },
+                  }],
+              }]
+          }
+        return {}
+
+    service = ge_fleet.GeminiEnterpriseFleetService(
+        project_id=PROJECT,
+        engine_ids=[ENGINE],
+        api=TraceApi(),
+    )
+    traces_1m, trunc_1m = service._list_traces(
+        PROJECT,
+        window_s=720 * 3600,
+        trace_filter='+span:call_llm',
+    )
+    self.assertEqual(len(traces_1m), 1)
+    self.assertFalse(trunc_1m)
+    self.assertEqual(calls['trace_list'], 1)
+
+    # 3m (2160h) and 1y (8760h) cap to the same 30-day trace window and reuse cache
+    traces_3m, _ = service._list_traces(
+        PROJECT,
+        window_s=2160 * 3600,
+        trace_filter='+span:call_llm',
+    )
+    traces_1y, _ = service._list_traces(
+        PROJECT,
+        window_s=8760 * 3600,
+        trace_filter='+span:call_llm',
+    )
+    self.assertEqual(len(traces_3m), 1)
+    self.assertEqual(len(traces_1y), 1)
+    self.assertEqual(calls['trace_list'], 1)
+
+    # If a new window hits HTTP 429 on page 0, it falls back to cached trace scan
+    calls['fail_429'] = True
+    from unittest import mock
+    with mock.patch('vibelift.fleet.time.sleep', return_value=None):
+      traces_fallback, _ = service._list_traces(
+          PROJECT,
+          window_s=168 * 3600,
+          trace_filter='+span:call_llm',
+      )
+    self.assertEqual(len(traces_fallback), 1)
+
+  def test_fallback_cache_marks_warming_and_window_metadata(self):
+    service, _ = make_fake_service()
+    service._cache[24] = (
+        ge_fleet.time.monotonic(),
+        {
+            'window_hours': 24,
+            'notes': ['Existing note'],
+            'totals': {'agent_input_tokens_window': 0},
+        },
+    )
+    fallback = service._fallback_cache(720)
+    self.assertIsNotNone(fallback)
+    self.assertTrue(fallback['warming'])
+    self.assertEqual(fallback['window_hours'], 720)
+    self.assertEqual(fallback['fallback_from_window_hours'], 24)
+    self.assertTrue(any('showing cached 24h snapshot' in n for n in fallback['notes']))
+
 
 if __name__ == '__main__':
   unittest.main()
+
+
+
 

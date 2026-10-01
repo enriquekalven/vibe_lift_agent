@@ -871,9 +871,28 @@ class GeminiEnterpriseFleetService:
     self.max_log_entries = int(os.environ.get('VIBELIFT_TOKEN_LOG_MAX_ENTRIES', '3000'))
     self._api = api or _GoogleApi(quota_project=self.project_id)
     self._cache: dict[int, tuple[float, dict[str, Any]]] = {}
+    self._project_aliases: set[str] = {self.project_id}
+    self._trace_cache: dict[tuple[str, str, int], tuple[float, list[dict[str, Any]], bool]] = {}
+    self._log_cache: dict[tuple[str, tuple[str, ...], int], tuple[float, dict[str, Any]]] = {}
     self._cache_lock = threading.Lock()
     self._refresh_lock = threading.Lock()
     self._inflight_events: dict[int, threading.Event] = {}
+
+  def _record_project_alias(self, resource_name: str | None) -> None:
+    """Records a GCP project number/ID discovered from resources belonging to self.project_id."""
+    if not resource_name:
+      return
+    match = re.search(r'(?:^|/)projects/([^/]+)/', str(resource_name))
+    if match and match.group(1):
+      with self._cache_lock:
+        self._project_aliases.add(match.group(1))
+
+  def _canonical_project(self, project: str | None) -> str:
+    """Normalizes a project number or alias back to self.project_id so metrics/traces are queried once."""
+    aliases = getattr(self, '_project_aliases', None) or {self.project_id}
+    if not project or project in aliases:
+      return self.project_id
+    return project
 
   # ------------------------------------------------------------------ public API
 
@@ -923,6 +942,10 @@ class GeminiEnterpriseFleetService:
           not force_refresh or cached['cache_age_seconds'] < self.min_refresh_interval_s
       ):
         return cached
+      if force_refresh:
+        with self._cache_lock:
+          self._trace_cache.clear()
+          self._log_cache.clear()
       payload = self._collect_uncached(hours)
       with self._cache_lock:
         self._cache[hours] = (time.monotonic(), payload)
@@ -972,7 +995,17 @@ class GeminiEnterpriseFleetService:
         return None
       entry = max(self._cache.values(), key=lambda item: item[0])
     age = time.monotonic() - entry[0]
-    return dict(entry[1], window_hours=hours, cache_age_seconds=round(age, 1))
+    source_hours = entry[1].get('window_hours')
+    out = dict(entry[1], window_hours=hours, cache_age_seconds=round(age, 1))
+    if source_hours is not None and int(source_hours) != int(hours):
+      out['warming'] = True
+      out['fallback_from_window_hours'] = int(source_hours)
+      notes = list(out.get('notes') or [])
+      notes.append(
+          f'Warming {hours}h telemetry in the background (currently showing cached {source_hours}h snapshot).'
+      )
+      out['notes'] = notes
+    return out
 
   def _warming_placeholder(self, hours: int) -> dict[str, Any]:
     return {
@@ -1085,6 +1118,7 @@ class GeminiEnterpriseFleetService:
       loc, engine_id = self.location, engine_spec
     base = f'{self._de_base(loc)}/{engine_id}'
     engine = self._api.call('GET', base)
+    self._record_project_alias(engine.get('name'))
     try:
       assistants = [a['name'].rsplit('/', 1)[-1] for a in self._paged(f'{base}/assistants?pageSize=100', 'assistants')]
     except FleetSourceError:
@@ -1093,6 +1127,7 @@ class GeminiEnterpriseFleetService:
     display = engine.get('displayName') or engine_id
     for assistant_id in assistants or ['default_assistant']:
       for raw in self._paged(f'{base}/assistants/{assistant_id}/agents?pageSize=100', 'agents'):
+        self._record_project_alias(raw.get('name'))
         agent = classify_agent(engine_id, assistant_id, raw)
         agent['location'] = loc
         agent['engine_key'] = f'{loc}/{engine_id}'
@@ -1257,7 +1292,15 @@ class GeminiEnterpriseFleetService:
 
   def _genai_usage(self, project: str, engine_ids: list[str], window_s: int) -> dict[str, Any]:
     """Aggregates OpenTelemetry GenAI inference events written by ADK agents to Cloud Logging."""
-    start = _iso(_utcnow() - datetime.timedelta(seconds=window_s))
+    log_window_s = min(window_s, 30 * 24 * 3600)  # Cloud Logging _Default retains 30 days max
+    cache_key = (project, tuple(sorted(set(engine_ids))), log_window_s)
+    log_cache = getattr(self, '_log_cache', None)
+    if log_cache is not None and self.ttl_seconds > 0:
+      with self._cache_lock:
+        cached = log_cache.get(cache_key)
+      if cached is not None and (time.monotonic() - cached[0]) < self.ttl_seconds:
+        return json.loads(json.dumps(cached[1]))
+    start = _iso(_utcnow() - datetime.timedelta(seconds=log_window_s))
     ids = ' OR '.join(json.dumps(i) for i in sorted(set(engine_ids)))
     body: dict[str, Any] = {
         'resourceNames': [f'projects/{project}'],
@@ -1307,7 +1350,11 @@ class GeminiEnterpriseFleetService:
     for s in stats.values():
       s['conversations'] = len(s.pop('_conversations'))
       s['models'] = [m for m, _ in s.pop('_models').most_common(3)]
-    return {'by_engine': stats, 'entries_scanned': scanned, 'truncated': truncated}
+    out = {'by_engine': stats, 'entries_scanned': scanned, 'truncated': truncated}
+    if log_cache is not None and self.ttl_seconds > 0:
+      with self._cache_lock:
+        log_cache[cache_key] = (time.monotonic(), json.loads(json.dumps(out)))
+    return out
 
   def _trace_usage(self, project: str, engine_ids: list[str], window_s: int) -> dict[str, Any]:
     """Per-engine gen_ai token usage from Cloud Trace spans exported by Agent Engine telemetry."""
@@ -1330,11 +1377,48 @@ class GeminiEnterpriseFleetService:
     })
     return out
 
+  @staticmethod
+  def _filter_traces_by_start(traces: list[dict[str, Any]], start_iso: str) -> list[dict[str, Any]]:
+    """Filters a cached trace list down to traces with span activity at or after start_iso."""
+    filtered: list[dict[str, Any]] = []
+    for tr in traces:
+      spans = tr.get('spans') or []
+      if not spans:
+        filtered.append(tr)
+        continue
+      stamps = [
+          str(sp.get('endTime') or sp.get('startTime') or '')
+          for sp in spans
+          if sp.get('endTime') or sp.get('startTime')
+      ]
+      if not stamps or max(stamps) >= start_iso:
+        filtered.append(tr)
+    return filtered
+
   def _list_traces(self, project: str, trace_filter: str, window_s: int) -> tuple[list[dict[str, Any]], bool]:
     end = _utcnow()
     trace_window_s = min(window_s, 30 * 24 * 3600)  # Cloud Trace retains 30 days max
+    start_iso = _iso(end - datetime.timedelta(seconds=trace_window_s))
+    trace_cache = getattr(self, '_trace_cache', None)
+    now_mono = time.monotonic()
+    if trace_cache is not None and self.ttl_seconds > 0:
+      with self._cache_lock:
+        exact = trace_cache.get((project, trace_filter, trace_window_s))
+        if exact is not None and (now_mono - exact[0]) < self.ttl_seconds:
+          return list(exact[1]), exact[2]
+        # Reuse a fresh, non-truncated superset window (e.g., 7d or 30d) for smaller windows without extra API calls.
+        for (c_proj, c_filt, c_win_s), (c_ts, c_traces, c_trunc) in trace_cache.items():
+          if (
+              c_proj == project
+              and c_filt == trace_filter
+              and c_win_s >= trace_window_s
+              and not c_trunc
+              and (now_mono - c_ts) < self.ttl_seconds
+          ):
+            return self._filter_traces_by_start(c_traces, start_iso), False
+
     params = {
-        'startTime': _iso(end - datetime.timedelta(seconds=trace_window_s)),
+        'startTime': start_iso,
         'endTime': _iso(end),
         'view': 'COMPLETE',
         'pageSize': '500',
@@ -1345,13 +1429,45 @@ class GeminiEnterpriseFleetService:
     token = ''
     for page_no in range(self.max_trace_pages):
       query = dict(params, **({'pageToken': token} if token else {}))
-      page = self._api.call('GET', f'{_TRACE}/projects/{project}/traces?{urllib.parse.urlencode(query)}')
-      traces.extend(page.get('traces', []))
-      token = page.get('nextPageToken', '')
+      url = f'{_TRACE}/projects/{project}/traces?{urllib.parse.urlencode(query)}'
+      page = None
+      last_exc: FleetSourceError | None = None
+      for attempt in range(3):
+        try:
+          page = self._api.call('GET', url)
+          last_exc = None
+          break
+        except FleetSourceError as exc:
+          last_exc = exc
+          if exc.status == 429 and attempt < 2:
+            time.sleep(0.6 * (attempt + 1))
+            continue
+          break
+      if last_exc is not None:
+        if last_exc.status == 429:
+          if traces:
+            truncated = True
+            break
+          if trace_cache is not None:
+            with self._cache_lock:
+              candidates = [
+                  (c_win_s, c_traces, c_trunc)
+                  for (c_proj, c_filt, c_win_s), (_, c_traces, c_trunc) in trace_cache.items()
+                  if c_proj == project and c_filt == trace_filter
+              ]
+            if candidates:
+              best_win_s, best_traces, best_trunc = max(candidates, key=lambda item: item[0])
+              return self._filter_traces_by_start(best_traces, start_iso), (best_trunc or best_win_s < trace_window_s)
+        raise last_exc
+      traces.extend((page or {}).get('traces', []))
+      token = (page or {}).get('nextPageToken', '')
       if not token:
         break
       if page_no == self.max_trace_pages - 1:
         truncated = True
+    if trace_cache is not None and self.ttl_seconds > 0:
+      with self._cache_lock:
+        trace_cache[(project, trace_filter, trace_window_s)] = (time.monotonic(), list(traces), truncated)
     return traces, truncated
 
   def _reasoning_engine_meta(self, resource: str, location: str) -> dict[str, Any]:
@@ -1397,6 +1513,8 @@ class GeminiEnterpriseFleetService:
         continue
       for raw in items:
         resource = str(raw.get('name') or '')
+        if project == self.project_id:
+          self._record_project_alias(resource)
         match = _REASONING_ENGINE_RE.match(resource)
         rid = match['id'] if match else resource.rsplit('/', 1)[-1]
         if not rid:
@@ -1659,11 +1777,11 @@ class GeminiEnterpriseFleetService:
     for agent in agents:
       backend = agent['backend']
       if backend.get('kind') == 'agent_engine' and backend.get('reasoning_engine_id'):
-        engines_by_project[backend.get('project') or self.project_id].add(backend['reasoning_engine_id'])
+        engines_by_project[self._canonical_project(backend.get('project'))].add(backend['reasoning_engine_id'])
         if backend.get('resource') and backend.get('location'):
           engine_meta_jobs[backend['resource']] = backend['location']
       elif backend.get('kind') == 'cloud_run':
-        services_by_project[backend.get('project') or self.project_id].add(backend['service'])
+        services_by_project[self._canonical_project(backend.get('project'))].add(backend['service'])
 
     re_metric = 'aiplatform.googleapis.com/reasoning_engine'
     bucket_s = trend_bucket_seconds(hours)
@@ -1687,7 +1805,7 @@ class GeminiEnterpriseFleetService:
         jobs[('run_series', project)] = pool.submit(self._request_series, project, 'run.googleapis.com/request_count', 'service_name', svc_list, window_s, bucket_s)
       for resource, location in engine_meta_jobs.items():
         jobs[('re_meta', resource)] = pool.submit(self._reasoning_engine_meta, resource, location)
-      run_projects = {a['backend'].get('project') or self.project_id for a in agents
+      run_projects = {self._canonical_project(a['backend'].get('project')) for a in agents
                       if a['backend'].get('kind') == 'cloud_run' and a['backend'].get('service')}
       for project in sorted(run_projects):
         jobs[('run_inventory', project)] = pool.submit(self._cloud_run_services, project)
@@ -1784,6 +1902,18 @@ class GeminiEnterpriseFleetService:
                          ('ge_traffic', 'ge_traffic'), ('ge_assistant_tokens', 'ge_assistant_tokens')):
       status[name] = source_state(prefix)
 
+    token_results = [results[k] for k in results if k[0] == 're_tokens' and results[k]]
+    trace_results = [results[k] for k in results if k[0] == 're_trace_tokens' and results[k]]
+
+    # Mirror canonical project results to any discovered project number/ID aliases so
+    # assess_registration, _apply_telemetry, and build_request_trend resolve both forms.
+    aliases = (getattr(self, '_project_aliases', None) or {self.project_id}) - {self.project_id}
+    if aliases:
+      for key, val in list(results.items()):
+        if len(key) == 2 and key[1] == self.project_id:
+          for alias in aliases:
+            results.setdefault((key[0], alias), val)
+
     checked_at = _iso(_utcnow())
     for agent in agents:
       self._apply_telemetry(agent, results)
@@ -1823,8 +1953,17 @@ class GeminiEnterpriseFleetService:
     stamps = [a['metrics']['last_activity'] for a in agents if a['metrics']['last_activity']]
     totals['last_activity'] = max(stamps) if stamps else None
 
-    token_results = [results[k] for k in results if k[0] == 're_tokens' and results[k]]
-    trace_results = [results[k] for k in results if k[0] == 're_trace_tokens' and results[k]]
+    notes = [
+        'Cloud Monitoring data points typically appear 1-3 minutes after the request.',
+        'A2A agents on Cloud Run report service-level metrics (all traffic to the service).',
+        'Google-managed and no-code agents expose no per-project runtime telemetry.',
+        'Standalone Agent Engine, Cloud Run, GKE, and MCP runtimes not registered in GE are tracked in unregistered_runtimes.',
+    ]
+    if hours > 720:
+      notes.append(
+          'Per-agent token logs (Cloud Logging _Default) and traces (Cloud Trace) retain 30 days; '
+          'windows over 1 month reflect 30-day agent token history while Requests and Project Model Spend cover the full window.'
+      )
     return {
         'source': 'gemini_enterprise',
         'project_id': self.project_id,
@@ -1853,12 +1992,7 @@ class GeminiEnterpriseFleetService:
         },
         'source_status': status,
         'errors': errors,
-        'notes': [
-            'Cloud Monitoring data points typically appear 1-3 minutes after the request.',
-            'A2A agents on Cloud Run report service-level metrics (all traffic to the service).',
-            'Google-managed and no-code agents expose no per-project runtime telemetry.',
-            'Standalone Agent Engine, Cloud Run, GKE, and MCP runtimes not registered in GE are tracked in unregistered_runtimes.',
-        ],
+        'notes': notes,
     }
 
   def _build_unregistered_inventory(
@@ -2342,7 +2476,11 @@ class GeminiEnterpriseFleetService:
   def _apply_telemetry(self, agent: dict[str, Any], results: dict[tuple[str, ...], Any]) -> None:
     """Joins one agent with the telemetry fetched for its backend (exact project match)."""
     backend, metrics = agent['backend'], agent['metrics']
-    project = backend.get('project') or self.project_id
+    project = (
+        self._canonical_project(backend.get('project'))
+        if hasattr(self, '_canonical_project')
+        else (backend.get('project') or self.project_id)
+    )
     def pick(name):
       return results.get((name, project))
     if backend.get('kind') == 'agent_engine' and backend.get('reasoning_engine_id'):
