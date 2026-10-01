@@ -115,10 +115,12 @@ vibe_lift_agent/
 │   ├── set_log_retention.sh     # Raw log retention (partition expiration, default 90 days)
 │   ├── setup_mart_refresh.sh    # Hourly BigQuery scheduled query that rebuilds fct_turns
 │   ├── register_ge_agent.sh     # A2A registration + MCP connector values for a Gemini Enterprise app
+│   ├── setup_mcp_connector.py   # Custom MCP server data store: create, enable actions, link to app
 │   └── bigquery/
 │       ├── provision_ge_mart.py # Curated views + vibelift_mart (apply / refresh / scheduled-query DDL)
 │       └── ge_mart/             # SQL templates for the curated and mart layers
 ├── docs/
+│   ├── PERMISSIONS.md           # Every IAM role, API and org policy VibeLift needs
 │   ├── spec.md                  # Architecture and data-source specification
 │   ├── GE_MART.md               # Gemini Enterprise curated views and reporting mart
 │   ├── TESTING.md               # Requirement -> test map, CI gates
@@ -387,8 +389,18 @@ The script checks the service with your identity token, re-applies the Discovery
 
 The A2A registration needs the **Gemini Enterprise Admin** role. No OAuth authorization is attached; if you register in the console instead (*Agents > Add agents > Custom agent via A2A*), click **Skip & Finish** at the OAuth step.
 
-**Custom MCP server (side-panel dashboard).** In Gemini Enterprise this is a *data store*, created in the console ([docs](https://cloud.google.com/gemini/enterprise/docs/connectors/custom-mcp-server/set-up-custom-mcp-server)). First allow custom MCP servers with the org policy override in step 0, and make sure you have **Discovery Engine Editor**. Then:
+**Custom MCP server (side-panel dashboard).** In Gemini Enterprise this is a *data store* ([docs](https://cloud.google.com/gemini/enterprise/docs/connectors/custom-mcp-server/set-up-custom-mcp-server)). You need **Discovery Engine Editor**. Some orgs also block custom MCP servers with an org policy (see step 0); if creation fails with a policy or permission error, ask an Organization Policy Administrator for the override. In `project-maui` creation worked without one.
 
+**Scripted (recommended):**
+```bash
+GE_LOCATION=global python3 deploy/setup_mcp_connector.py GE_APP_ID            # add --dry-run to preview
+```
+It creates the connector with no authentication, imports the tools from `/mcp`, enables all 6 as actions (`--tools` to choose), and links the data store to the app while keeping the app's existing data stores. Safe to re-run. Remove a connector with `--delete --collection-id=ID`.
+
+> [!WARNING]
+> The script uses Discovery Engine v1alpha methods (`setUpDataConnectorV2`, `refreshDataConnectorTools`) that are not publicly documented and may change. If it fails, use the console steps below.
+
+**Console (fallback):**
 1. *Console > Gemini Enterprise > Data stores > Create data store*, search **Custom MCP Server**, click **Add MCP server**.
 2. Authentication: **No authentication**. The service stays private: for `*.run.app` URLs Gemini Enterprise sends a Google-signed ID token for its service agent, which step 3 made an invoker.
 3. Fill in the values below, click **Continue**, pick the same multi-region as your app, name it and click **Create**.
