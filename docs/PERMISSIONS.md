@@ -1,8 +1,8 @@
 # VibeLift permissions reference
 
-All the IAM roles, APIs and org policies VibeLift uses, in one place. Sources: `deploy/deploy_cloud_run.sh`, `deploy/setup_bigquery_sink.sh`, `deploy/setup_mart_refresh.sh`, `deploy/register_ge_agent.sh` and the README.
+All the IAM roles, APIs and org policies VibeLift uses, in one place. Sources: `deploy/deploy_cloud_run.sh`, `deploy/setup_bigquery_sink.sh`, `deploy/setup_mart_refresh.sh`, `deploy/register_ge_agent.sh`, `deploy/setup_mcp_connector.py` and the README.
 
-Each row says whether a script grants it or you do it by hand. **Billing is manual**, and the MCP connector needs its own script (`deploy/setup_mcp_connector.py`), so a deploy that only ran `deploy_cloud_run.sh` will show no billing data and no side-panel connector.
+Each row says whether a script grants it or you do it by hand. **Billing is manual**, and the Gemini Enterprise Custom MCP Server Data Store (`BYO_MCP` — **not** the Agent Registry / MCP Registry) is deployed and registered onto your Gemini Enterprise App instance by `deploy/register_ge_agent.sh <GE_APP_ID>` (which runs `deploy/setup_mcp_connector.py <GE_APP_ID>`), or automatically by `deploy/deploy_cloud_run.sh` when `GE_ENGINE_ID=<GE_APP_ID>` is set.
 
 ## 1. Runtime service account `vibe-lift-runtime-sa@PROJECT_ID.iam.gserviceaccount.com`
 
@@ -38,7 +38,7 @@ The Cloud Run service reads every metric as this account, never with the end use
 | Who | Needs | For |
 | :--- | :--- | :--- |
 | Person running the scripts | Project **Owner** is simplest. Otherwise roughly: Service Usage Admin, Service Account Admin, Role Administrator, Project IAM Admin, Cloud Run Admin, Cloud Build Editor, Artifact Registry Admin, Storage Admin, Service Account User on the runtime SA, Logs Configuration Writer, BigQuery Admin, Discovery Engine Admin. Not tested as a minimal set. | Deploy |
-| Person registering in Gemini Enterprise | **Gemini Enterprise Admin** (A2A agent), **Discovery Engine Editor** (`roles/discoveryengine.editor`, MCP data store via `setup_mcp_connector.py` or the console) | Step 4 |
+| Person registering in Gemini Enterprise | **Discovery Engine Editor** (`roles/discoveryengine.editor` — deploys the Custom MCP Server to the Gemini Enterprise Data Store `vibelift-analytics-mcp` [`BYO_MCP`, not Agent Registry] and registers `vibelift-analytics-mcp_mcp_data` onto the Gemini Enterprise App instance via `register_ge_agent.sh` / `setup_mcp_connector.py` or the console), **Gemini Enterprise Admin** (optional A2A agent registration) | Step 4 |
 | Org admin (only if needed) | **Organization Policy Administrator**, if creating the MCP data store fails because of *Disable custom MCP server connector for Gemini Enterprise*. In `project-maui` the policy showed as enforced but creation still worked. | MCP connector |
 | Billing account admin | **Billing Account Administrator** (or Billing Account Costs Manager) on the billing account | Turning on the BigQuery billing export |
 | Dashboard viewers | `roles/run.invoker` on the service (`VIBELIFT_INVOKERS` in `deploy_cloud_run.sh`) | Opening the dashboard through `gcloud run services proxy` |

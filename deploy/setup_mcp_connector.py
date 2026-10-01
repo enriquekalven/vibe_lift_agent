@@ -1,16 +1,26 @@
 #!/usr/bin/env python3
-"""Creates the VibeLift custom MCP server connector (data store) in a Gemini Enterprise app.
+"""Deploys VibeLift to a Gemini Enterprise Data Store and registers it to a Gemini Enterprise App instance.
 
-This is the scripted version of the console steps in README "4. Register in Gemini Enterprise":
-Data stores > Create data store > Custom MCP Server. It:
+IMPORTANT: VibeLift's MCP server (/mcp) and embedded side-panel UI (ui://vibelift-analytics/dashboard)
+must be deployed as a **Gemini Enterprise Custom MCP Server Data Store** (`dataSource="custom_mcp"`,
+`mcp_server_source="BYO_MCP"`, `use_agent_gateway_egress=False`) — **NOT** the Vertex AI / Cloud API
+Registry ("Agent Registry / MCP Registry").
 
-  1. Creates the connector (collection `vibelift-analytics-mcp`) pointing at `<service URL>/mcp`,
-     with no authentication. Skipped if the connector already exists.
-  2. Waits for it to become ACTIVE.
-  3. Re-imports the tool list from /mcp (refreshDataConnectorTools).
-  4. Enables the MCP tools as Gemini Enterprise actions (all 6 by default).
-  5. Renames the data store and links it to the Gemini Enterprise app, keeping the app's
-     existing data stores.
+Once deployed to the Gemini Enterprise Data Store, the data store (`vibelift-analytics-mcp_mcp_data`)
+must be **registered (linked via `dataStoreIds`) to the target Gemini Enterprise App instance**.
+
+This script automates both stages (Console > Gemini Enterprise > Data stores > Create data store >
+Custom MCP Server, followed by Console > Gemini Enterprise > Apps > <App> > Data stores):
+
+  1. Deploys the Custom MCP Server connector to Gemini Enterprise Data Stores (collection
+     `vibelift-analytics-mcp`, `mcp_server_source="BYO_MCP"`, `auth_type="NO_AUTH"`) pointing at
+     `<service URL>/mcp`. Skipped if the BYO_MCP connector already exists.
+  2. Waits for the Gemini Enterprise Data Store connector to become ACTIVE.
+  3. Re-imports the tool list from /mcp (`refreshDataConnectorTools`).
+  4. Enables the MCP tools as Gemini Enterprise actions on the Data Store (all 6 by default).
+  5. Renames the Gemini Enterprise Data Store (`vibelift-analytics-mcp_mcp_data`) and **registers
+     (links) it to the Gemini Enterprise App instance** (`engines/<GE_APP_ID>`), preserving the app
+     instance's existing connected data stores and verifying the registration.
 
 WARNING: this uses Discovery Engine v1alpha methods (setUpDataConnectorV2,
 refreshDataConnectorTools) that are not in Google's public documentation. They were found by
@@ -26,7 +36,7 @@ Usage (from the repo root):
   python3 deploy/setup_mcp_connector.py GE_APP_ID
   GE_LOCATION=us python3 deploy/setup_mcp_connector.py GE_APP_ID
   python3 deploy/setup_mcp_connector.py GE_APP_ID --dry-run
-  python3 deploy/setup_mcp_connector.py --no-attach            # create the connector only
+  python3 deploy/setup_mcp_connector.py --no-attach            # create the GE Data Store only
   python3 deploy/setup_mcp_connector.py --delete --collection-id=ID   # remove a connector
 
 Needs: Discovery Engine Editor (roles/discoveryengine.editor) or higher, and gcloud logged in.
@@ -201,14 +211,23 @@ def attach_to_app(api: Api, engine_id: str, data_store_id: str) -> None:
     raise SystemExit(f'ERROR: reading Gemini Enterprise app {engine_id} failed (HTTP {status}): {_err(engine)}')
   current = list(engine.get('dataStoreIds') or [])
   if data_store_id in current:
-    print(f'  already linked to app {engine_id}')
+    print(f'  already registered (linked) to Gemini Enterprise app instance {engine_id} (dataStoreId={data_store_id})')
     return
   # PATCH replaces the whole list, so send the existing data stores plus the new one.
   status, resp = api.call('PATCH', f'{url}?updateMask=dataStoreIds',
                           {'dataStoreIds': [*current, data_store_id]}, mutate=True)
   if status != 200:
     raise SystemExit(f'ERROR: linking data store to app failed (HTTP {status}): {_err(resp)}')
-  print(f'  linked to app {engine_id} (data stores: {len(current)} -> {len(current) + 1})')
+  if not api.dry_run:
+    v_status, v_engine = api.call('GET', url)
+    if v_status == 200 and data_store_id not in (v_engine.get('dataStoreIds') or []):
+      raise SystemExit(
+          f'ERROR: data store {data_store_id} was not persisted in dataStoreIds for Gemini Enterprise app {engine_id}.'
+      )
+  print(
+      f'  registered GE Data Store {data_store_id} to Gemini Enterprise app instance {engine_id} '
+      f'(data stores: {len(current)} -> {len(current) + 1})'
+  )
 
 
 def delete_connector(api: Api, collection: str) -> None:
@@ -238,7 +257,7 @@ def delete_connector(api: Api, collection: str) -> None:
 def main(argv: list[str] | None = None) -> None:
   parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
   parser.add_argument('ge_app_id', nargs='?', default=os.environ.get('GE_ENGINE_ID', ''),
-                      help='Gemini Enterprise app (engine) ID to link the data store to.')
+                      help='Gemini Enterprise app (engine) ID to register/link the GE Data Store to.')
   parser.add_argument('--location', default=os.environ.get('GE_LOCATION', 'global'), choices=_LOCATIONS,
                       help='Same multi-region as the Gemini Enterprise app (default: $GE_LOCATION or global).')
   parser.add_argument('--collection-id', default=DEFAULT_COLLECTION_ID)
@@ -246,7 +265,7 @@ def main(argv: list[str] | None = None) -> None:
   parser.add_argument('--tools', default=','.join(ALL_TOOLS),
                       help='Comma-separated MCP tools to enable as actions (default: all 6).')
   parser.add_argument('--mcp-url', default='', help='Default: ${VIBELIFT_PUBLIC_URL or Cloud Run URL}/mcp')
-  parser.add_argument('--no-attach', action='store_true', help='Do not link the data store to an app.')
+  parser.add_argument('--no-attach', action='store_true', help='Create the GE Data Store only; do not link to an app.')
   parser.add_argument('--delete', action='store_true', help='Delete the connector and its data store.')
   parser.add_argument('--dry-run', action='store_true', help='Print the write requests without sending them.')
   args = parser.parse_args(argv)
@@ -277,26 +296,36 @@ def main(argv: list[str] | None = None) -> None:
   data_store_id = f'{collection}_mcp_data'
 
   print(f'Project {project_id} ({project_number}), location {args.location}')
-  print(f'Connector {collection} -> {mcp_url}')
+  print(f'GE Data Store Connector: {collection} (dataStoreId: {data_store_id}, source: BYO_MCP) -> {mcp_url}')
+  print(f'Target GE App Instance:  {args.ge_app_id or "(none, --no-attach)"}')
   print(f'Actions: {", ".join(tools)}')
 
-  print('1. Connector')
+  print('1. Deploy Custom MCP Server to Gemini Enterprise Data Store (BYO_MCP, NOT Agent Registry / MCP Registry)')
   existing = get_connector(api, collection)
   if existing:
-    print(f'  exists (state={existing.get("state")}); not re-creating')
-    uri = (existing.get('actionConfig') or {}).get('actionParams', {}).get('instance_uri')
+    action_params = (existing.get('actionConfig') or {}).get('actionParams') or {}
+    src = action_params.get('mcp_server_source', 'BYO_MCP')
+    if src != 'BYO_MCP':
+      raise SystemExit(
+          f'ERROR: existing connector {collection} has mcp_server_source={src!r}. '
+          'VibeLift must be deployed as a Gemini Enterprise Custom MCP Server Data Store (mcp_server_source="BYO_MCP"), '
+          'NOT via the Agent Registry / MCP Registry. Delete and re-create it with: '
+          f'python3 deploy/setup_mcp_connector.py --delete --collection-id={collection}'
+      )
+    print(f'  exists (state={existing.get("state")}, source={src}); not re-creating')
+    uri = action_params.get('instance_uri')
     if uri and uri != mcp_url:
       print(f'  WARNING: existing connector points at {uri}, not {mcp_url}')
   else:
     create_connector(api, collection, args.display_name, mcp_url, tools)
-    print('  created')
+    print('  created in Gemini Enterprise Data Stores (source=BYO_MCP)')
 
   if args.dry_run:
     print('2-3. [dry-run] would wait for ACTIVE and refresh tools')
   else:
-    print('2. Waiting for ACTIVE')
+    print('2. Waiting for GE Data Store connector to become ACTIVE')
     wait_active(api, collection)
-    print('3. Importing tools from /mcp')
+    print('3. Importing tools from /mcp into GE Data Store')
     refresh_tools(api, collection)
     conn = wait_active(api, collection)
     found = {t.get('name') for t in conn.get('dynamicTools') or []}
@@ -305,13 +334,13 @@ def main(argv: list[str] | None = None) -> None:
       raise SystemExit(f'ERROR: /mcp did not report tools {missing} (found: {sorted(found)}). '
                        'Check that the service is deployed and the Discovery Engine service agent can invoke it.')
 
-  print('4. Enabling actions')
+  print('4. Enabling MCP actions on GE Data Store')
   enable_actions(api, collection, tools)
 
-  print('5. Data store')
+  print('5. Register (link) GE Data Store to Gemini Enterprise App instance')
   rename_data_store(api, data_store_id, args.display_name)
   if args.no_attach:
-    print('  --no-attach: not linking to an app')
+    print('  --no-attach: not linking GE Data Store to an app instance')
   else:
     attach_to_app(api, args.ge_app_id, data_store_id)
 
@@ -324,3 +353,4 @@ def main(argv: list[str] | None = None) -> None:
 
 if __name__ == '__main__':
   main(sys.argv[1:])
+

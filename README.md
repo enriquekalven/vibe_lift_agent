@@ -114,8 +114,8 @@ vibe_lift_agent/
 │   ├── setup_bigquery_sink.sh   # BigQuery datasets, Logging sinks, analytics tables, curated views + mart
 │   ├── set_log_retention.sh     # Raw log retention (partition expiration, default 90 days)
 │   ├── setup_mart_refresh.sh    # Hourly BigQuery scheduled query that rebuilds fct_turns
-│   ├── register_ge_agent.sh     # A2A registration + MCP connector values for a Gemini Enterprise app
-│   ├── setup_mcp_connector.py   # Custom MCP server data store: create, enable actions, link to app
+│   ├── register_ge_agent.sh     # Deploys Custom MCP Data Store (BYO_MCP) & registers it + A2A agent to a GE App instance
+│   ├── setup_mcp_connector.py   # Deploys Custom MCP Data Store (NOT Agent Registry) & links dataStoreIds to GE App instance
 │   └── bigquery/
 │       ├── provision_ge_mart.py # Curated views + vibelift_mart (apply / refresh / scheduled-query DDL)
 │       └── ge_mart/             # SQL templates for the curated and mart layers
@@ -195,8 +195,8 @@ Runtime variables are read by the service (set on Cloud Run by `deploy/deploy_cl
 | `VIBELIFT_RETENTION_DAYS` | `setup_bigquery_sink.sh`, `set_log_retention.sh` | `90` | Days of raw log history kept in BigQuery (partition expiration on the raw sink datasets). The mart reads the same window (`provision_ge_mart.py --lookback-days`, default 90). |
 | `VIBELIFT_REFRESH_SCHEDULE` | `setup_mart_refresh.sh` | `every 1 hours` | How often the scheduled query rebuilds `fct_turns` (Data Transfer schedule syntax). |
 | `VIBELIFT_REFRESH_SA` | `setup_mart_refresh.sh` | `vibe-lift-runtime-sa@PROJECT.iam.gserviceaccount.com` | Service account the scheduled query runs as. |
-| `GE_ENGINE_ID` | `register_ge_agent.sh` | *(required)* | Gemini Enterprise app ID (or pass it as the first argument). |
-| `GE_LOCATION` | `register_ge_agent.sh` | `global` | Location of that app (`global`, `us`, `eu`). |
+| `GE_ENGINE_ID` | `register_ge_agent.sh`, `setup_mcp_connector.py`, `deploy_cloud_run.sh` | *(required for step 4)* | Gemini Enterprise app instance ID to register the GE Data Store to (or pass it as the first argument to `register_ge_agent.sh`). |
+| `GE_LOCATION` | `register_ge_agent.sh`, `setup_mcp_connector.py` | `global` | Location of that Gemini Enterprise app instance (`global`, `us`, `eu`). |
 
 ---
 
@@ -260,15 +260,16 @@ External services can also push telemetry spans over HTTP via `POST /api/decorat
 
 ## Deploy in Your Own GCP Project
 
-This section takes a fresh Google Cloud project to a working, private VibeLift deployment registered in Gemini Enterprise. Run every command from the repo root. Replace `PROJECT_ID`, `REGION` and `GE_APP_ID` with your values.
+This section takes a fresh Google Cloud project to a working, private VibeLift deployment deployed to a **Gemini Enterprise Data Store** and registered to your **Gemini Enterprise App instance**. Run every command from the repo root. Replace `PROJECT_ID`, `REGION` and `GE_APP_ID` with your values.
 
 ```mermaid
 flowchart LR
   P["0. Prerequisites"] --> L["1. Turn on GE + audit logging"]
   L --> B["2. setup_bigquery_sink.sh"]
   B --> D["3. deploy_cloud_run.sh"]
-  D --> R["4. register_ge_agent.sh + MCP connector"]
-  R --> V["5. Verify"]
+  D --> R1["4a. Deploy to GE Data Store (BYO_MCP)"]
+  R1 --> R2["4b. Register GE Data Store to GE App Instance"]
+  R2 --> V["5. Verify"]
   V --> S["6. Schedule mart refresh"]
 ```
 
@@ -282,12 +283,12 @@ flowchart LR
   pip install -r requirements.txt -c constraints.txt
   pip install ruff   # optional; the deploy gate runs it when present
   ```
-- `agents-cli` (optional, used by `register_ge_agent.sh` to publish the A2A agent). Without it, register the agent in the console.
+- `agents-cli` (optional, only if you also want `register_ge_agent.sh` to publish the standalone A2A agent).
 
 **Google Cloud**
 - A project with billing enabled, selected with `gcloud config set project PROJECT_ID`.
 - An existing **Gemini Enterprise app** in that project (VibeLift observes and registers into it; it does not create one). Note its app ID and location (`global`, `us` or `eu`).
-- **Your permissions.** Project **Owner** is the simplest. Otherwise you need roughly: Service Usage Admin, Service Account Admin, Role Administrator (for the custom `vibeLiftGeFleetReader` role), Project IAM Admin, Cloud Run Admin, Cloud Build Editor, Artifact Registry Admin, Storage Admin (source upload bucket), Service Account User on the runtime SA, Logs Configuration Writer, BigQuery Admin, Discovery Engine Admin, **Gemini Enterprise Admin** (A2A agent registration) and **Discovery Engine Editor** (custom MCP server data store). This list has not been tested as a minimal set; if a step fails with `PERMISSION_DENIED`, the error names the missing permission.
+- **Your permissions.** Project **Owner** is the simplest. Otherwise you need roughly: Service Usage Admin, Service Account Admin, Role Administrator (for the custom `vibeLiftGeFleetReader` role), Project IAM Admin, Cloud Run Admin, Cloud Build Editor, Artifact Registry Admin, Storage Admin (source upload bucket), Service Account User on the runtime SA, Logs Configuration Writer, BigQuery Admin, Discovery Engine Admin, **Discovery Engine Editor** (to deploy the Custom MCP Server data store and register it onto the Gemini Enterprise App instance) and **Gemini Enterprise Admin** (optional A2A agent registration). This list has not been tested as a minimal set; if a step fails with `PERMISSION_DENIED`, the error names the missing permission.
 - **Organization Policy Administrator** (`roles/orgpolicy.policyAdmin`) on the project, or someone who has it, to allow custom MCP servers (see below). In Argolis you normally administer your own organization and can grant it to yourself.
 
 **OAuth client: not needed.** VibeLift does not need an OAuth client ID or consent screen:
@@ -330,7 +331,7 @@ Idempotent. It creates:
 
 | Layer | Objects |
 | :--- | :--- |
-| Raw datasets (`BQ_LOCATION`) | `ds_ge_assistant_raw`, `ds_ge_search_raw`, `ds_vertex_agents_raw`, `ds_ge_audit_raw`, `ds_security_guardrails_raw`, `vibelift_analytics` |
+| Raw datasets (`BQ_LOCATION`) | `ds_ge_assistant_raw`, `ds_ge_search_raw`, `ds_vertex_reasoning_engine`, `ds_ge_audit_raw`, `ds_security_guardrails_raw`, `vibelift_analytics` |
 | Log sinks (partitioned tables) | `sink-ge-assistant-activity`, `sink-ge-search-activity`, `sink-vertex-reasoning-engine`, **`sink-ge-inference-tokens`** (the only source of per-turn tokens), `sink-platform-audit`, `sink-model-armor-sdp`, `vibelift-telemetry-sink`. Each sink's writer identity gets `roles/bigquery.dataEditor` on the project. |
 | Raw log retention | Partition expiration of `VIBELIFT_RETENTION_DAYS` (default **90 days**) on the raw sink datasets, set on each dataset (new tables) and each existing table, by `deploy/set_log_retention.sh`. `vibelift_analytics` is not expired. |
 | Analytics tables | `vibelift_analytics.agent_turns`, `agent_eval_runs`, `alpha_evolve_generations`, `agent_registry_snapshots`, view `vw_fleet_finops_summary` |
@@ -354,6 +355,7 @@ To change retention later, run `VIBELIFT_RETENTION_DAYS=180 ./deploy/set_log_ret
 #   VIBELIFT_INVOKERS="user:alice@example.com,group:finops@example.com"  -> can open the dashboard
 #   VIBELIFT_BILLING_EXPORT_TABLE="billing-proj.billing_ds.gcp_billing_export_v1_XXXX"
 #   VIBELIFT_GE_ENGINES="global/my-app"   (default: auto)
+#   GE_ENGINE_ID="GE_APP_ID"              (optional: automatically runs step 4 after Cloud Run deploy)
 GOOGLE_CLOUD_REGION=us-central1 ./deploy/deploy_cloud_run.sh
 ```
 
@@ -379,37 +381,51 @@ gcloud builds submit --config=deploy/cloudbuild.yaml .
 gcloud builds submit --config=deploy/cloudbuild.yaml --substitutions=_DEPLOY=false .   # build, test, push only
 ```
 
-### 4. Register in Gemini Enterprise
+### 4. Deploy to Gemini Enterprise Data Store & Register to GE App Instance
 
+> [!IMPORTANT]
+> **Deploy to the Gemini Enterprise Data Store — NOT the Agent Registry / MCP Registry.**
+> VibeLift's MCP server (`/mcp`) and embedded side-panel UI (`ui://vibelift-analytics/dashboard`) must be deployed as a **Gemini Enterprise Custom MCP Server Data Store** (`dataSource: "custom_mcp"`, `mcp_server_source: "BYO_MCP"`, `use_agent_gateway_egress: false` in **Console > Gemini Enterprise > Data stores**), **not** in Vertex AI / Cloud API Registry (*Agent Registry > MCP Registry*).
+>
+> **Two mandatory stages are required:**
+> 1. **Stage 4a — Deploy to Gemini Enterprise Data Store (`BYO_MCP`):** Create the `Custom MCP Server` data store (`vibelift-analytics-mcp` / `vibelift-analytics-mcp_mcp_data`) pointing to `https://vibe-lift-agent-PROJECT_NUMBER.REGION.run.app/mcp` with `No authentication`, wait for it to become `ACTIVE`, import the 6 tools from `/mcp`, and enable them as actions on the data store.
+> 2. **Stage 4b — Register the GE Data Store to the Gemini Enterprise App Instance (`GE_APP_ID`):** Once deployed to the GE Data Store, link/register `vibelift-analytics-mcp_mcp_data` onto your target **Gemini Enterprise App instance** (`engines/GE_APP_ID` -> `dataStoreIds`) so the assistant in that app instance can invoke VibeLift's MCP tools and open the right side-panel dashboard.
+
+**Automated script (recommended — runs both Stage 4a and Stage 4b):**
 ```bash
 GE_LOCATION=global ./deploy/register_ge_agent.sh GE_APP_ID
-```
-
-The script checks the service with your identity token, re-applies the Discovery Engine service agent invoker binding, publishes the A2A agent with `agents-cli publish gemini-enterprise --registration-type a2a`, and prints the values for the MCP connector.
-
-The A2A registration needs the **Gemini Enterprise Admin** role. No OAuth authorization is attached; if you register in the console instead (*Agents > Add agents > Custom agent via A2A*), click **Skip & Finish** at the OAuth step.
-
-**Custom MCP server (side-panel dashboard).** In Gemini Enterprise this is a *data store* ([docs](https://cloud.google.com/gemini/enterprise/docs/connectors/custom-mcp-server/set-up-custom-mcp-server)). You need **Discovery Engine Editor**. Some orgs also block custom MCP servers with an org policy (see step 0); if creation fails with a policy or permission error, ask an Organization Policy Administrator for the override. In `project-maui` creation worked without one.
-
-**Scripted (recommended):**
-```bash
+# Or call the GE Data Store + App linker directly:
 GE_LOCATION=global python3 deploy/setup_mcp_connector.py GE_APP_ID            # add --dry-run to preview
 ```
-It creates the connector with no authentication, imports the tools from `/mcp`, enables all 6 as actions (`--tools` to choose), and links the data store to the app while keeping the app's existing data stores. Safe to re-run. Remove a connector with `--delete --collection-id=ID`.
+
+What `./deploy/register_ge_agent.sh GE_APP_ID` does:
+1. Checks the private Cloud Run service health with your identity token and ensures the Discovery Engine service agent (`service-PROJECT_NUMBER@gcp-sa-discoveryengine.iam.gserviceaccount.com`) holds `roles/run.invoker`.
+2. **Stage 4a — Deploys to the Gemini Enterprise Data Store (`deploy/setup_mcp_connector.py`):** Creates the `Custom MCP Server` connector (`collectionId=vibelift-analytics-mcp`, `mcp_server_source="BYO_MCP"`, `use_agent_gateway_egress=false`, `auth_type="NO_AUTH"`) in Gemini Enterprise Data Stores ([docs](https://cloud.google.com/gemini/enterprise/docs/connectors/custom-mcp-server/set-up-custom-mcp-server)), waits for `ACTIVE`, imports all 6 tools from `/mcp`, and enables all 6 as actions (`--tools` to choose). Rejects any connector mistakenly created with `AGENT_REGISTRY`.
+3. **Stage 4b — Registers the GE Data Store to the Gemini Enterprise App Instance:** Renames the data store (`vibelift-analytics-mcp_mcp_data`) to `VibeLift Analytics`, links it into `engines/GE_APP_ID.dataStoreIds` while keeping the app instance's existing connected data stores, and verifies the registration with a follow-up `GET`.
+4. **Optional A2A Agent Registration:** If `agents-cli` is installed, also registers the A2A agent card on the Gemini Enterprise App instance (`--registration-type a2a`, no OAuth).
+
+Safe to re-run. Remove a connector with `python3 deploy/setup_mcp_connector.py --delete --collection-id=ID`. You need **Discovery Engine Editor** (`roles/discoveryengine.editor`). Some orgs also block custom MCP servers with an org policy (see step 0); in `project-maui` creation worked without an override.
 
 > [!WARNING]
-> The script uses Discovery Engine v1alpha methods (`setUpDataConnectorV2`, `refreshDataConnectorTools`) that are not publicly documented and may change. If it fails, use the console steps below.
+> `setup_mcp_connector.py` uses Discovery Engine v1alpha methods (`setUpDataConnectorV2`, `refreshDataConnectorTools`) that are not publicly documented and may change. If it fails, use the two-stage Console fallback steps below.
 
 **Console (fallback):**
-1. *Console > Gemini Enterprise > Data stores > Create data store*, search **Custom MCP Server**, click **Add MCP server**.
-2. Authentication: **No authentication**. The service stays private: for `*.run.app` URLs Gemini Enterprise sends a Google-signed ID token for its service agent, which step 3 made an invoker.
-3. Fill in the values below, click **Continue**, pick the same multi-region as your app, name it and click **Create**.
-4. When the data store is **Active**: open it, *Actions > Reload custom actions*, select the actions and click **Enable actions**. All actions start disabled.
-5. If the data store is not connected to your app yet, connect it (Google docs: *Connect a data store to an app and authorize Gemini Enterprise*).
+
+**Stage 4a (Console) — Deploy to Gemini Enterprise Data Store (NOT Agent Registry / MCP Registry):**
+1. Go to **Console > Gemini Enterprise > Data stores > Create data store**, search **Custom MCP Server**, and click **Add MCP server** (choose **Bring your own MCP server URL** — do **not** go to *Agent Registry / MCP Registry* or select *From Agent Registry*).
+2. Authentication: **No authentication**. The service stays private: for `*.run.app` URLs Gemini Enterprise sends a Google-signed ID token for its Discovery Engine service agent (`X-Serverless-Authorization`), which step 3 granted `roles/run.invoker`.
+3. Fill in the values below, click **Continue**, pick the same multi-region as your app (`global`, `us` or `eu`), name it `vibelift-analytics-mcp` and click **Create**.
+4. When the data store is **Active**: open it in **Gemini Enterprise > Data stores**, click **Actions > Reload custom actions**, select all 6 actions and click **Enable actions** (all actions start disabled).
+
+**Stage 4b (Console) — Register the GE Data Store to the Gemini Enterprise App Instance:**
+5. Go to **Console > Gemini Enterprise > Apps > `GE_APP_ID` > Data stores** (or *Connected data stores*).
+6. Click **Connect existing data store** (or *Edit data stores*), select **`VibeLift Analytics`** (`vibelift-analytics-mcp` / `vibelift-analytics-mcp_mcp_data`), and click **Save** to register the data store to your Gemini Enterprise App instance ([Google docs](https://cloud.google.com/gemini/enterprise/docs/connectors/custom-mcp-server/set-up-custom-mcp-server)).
 
 | Field | Value |
 | :--- | :--- |
-| Data store name | `vibelift-analytics-mcp` |
+| Target destination | **Gemini Enterprise > Data stores > Custom MCP Server (`BYO_MCP`)** — *not* Agent Registry / MCP Registry |
+| Data store name / ID | `vibelift-analytics-mcp` (`vibelift-analytics-mcp_mcp_data`) |
+| Registered GE App instance | `Console > Gemini Enterprise > Apps > GE_APP_ID > Data stores` (`engines/GE_APP_ID.dataStoreIds`) |
 | MCP Server URL | `https://vibe-lift-agent-PROJECT_NUMBER.REGION.run.app/mcp` (the default Cloud Run URL; a custom domain does not receive the ID token) |
 | Authentication | No authentication (no OAuth client) |
 | Location | Same multi-region as your Gemini Enterprise app (`global`, `us` or `eu`) |
@@ -425,6 +441,7 @@ Exposed MCP tools:
 - `calculate_prompt_cache_economics`: prompt prefix cache hit rates and savings.
 - `run_alpha_evolve_generation`: one closed-loop optimization generation (`alpha_evolve`, `opus_critic`, `vertex_vizier`, `hybrid_ensemble`).
 - `get_vibelift_state`: active agent state, parameters and turn trajectory.
+
 
 #### Optional: end-user OAuth (not used by VibeLift)
 
@@ -527,6 +544,7 @@ Operators can filter by Gemini Enterprise app, standalone runtimes and time wind
 | Billed cost shows unknown | `VIBELIFT_BILLING_EXPORT_TABLE` unset or unreadable | See "Cost data" in step 3. |
 | Source build fails with `PERMISSION_DENIED` (for example on `storage.objects.get` or Artifact Registry) | Cloud Build service account has no roles (`iam.automaticIamGrantsForDefaultServiceAccounts`, Argolis) | Re-run `deploy_cloud_run.sh` (grants `roles/run.builder` to `PROJECT_NUMBER-compute@developer.gserviceaccount.com`); wait 2 minutes if the grant was just made. |
 | *Custom MCP Server* is missing or creation is blocked | Managed org constraint *Disable custom MCP server connector for Gemini Enterprise* | Override it for the project (step 0, Argolis table); you need `roles/orgpolicy.policyAdmin`. |
+| MCP server was registered in *Agent Registry / MCP Registry*, or the GE Data Store exists but tools do not appear in Gemini Enterprise chat | VibeLift must be deployed as a **Gemini Enterprise Custom MCP Server Data Store** (`BYO_MCP`, not Agent Registry / MCP Registry) **and** registered (linked via `dataStoreIds`) onto the target Gemini Enterprise App instance (`GE_APP_ID`) | Run `GE_LOCATION=global ./deploy/register_ge_agent.sh GE_APP_ID` (which runs `deploy/setup_mcp_connector.py GE_APP_ID` to create the GE Data Store, enable all 6 actions, and link `vibelift-analytics-mcp_mcp_data` to `engines/GE_APP_ID`). |
 | MCP data store stays in error, or actions do not load | Wrong URL (custom domain, missing `/mcp`), the service agent is not an invoker, or egress is restricted | Use `https://vibe-lift-agent-PROJECT_NUMBER.REGION.run.app/mcp`; re-run `register_ge_agent.sh`; if the project is VPC-SC protected, allow `custom_mcp` and the host in the data-connector policies. Then *Actions > Reload custom actions*. |
 | `VIBELIFT_INVOKERS` grant fails with a domain / organization error | Domain restricted sharing | Use principals from your own org domain (in Argolis, `@YOUR_LDAP.altostrat.com`). |
 | Deploy aborts before building | Local tests or `ruff` failed, or dependencies not installed | `pip install -r requirements.txt -c constraints.txt`, then fix the failure shown. |

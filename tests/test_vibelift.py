@@ -811,6 +811,43 @@ class DeploymentHardeningTest(unittest.TestCase):
     self.assertNotIn(':latest', _read_repo_file('deploy/cloudbuild.yaml'))
     self.assertIn('gcp-sa-discoveryengine', _read_repo_file('deploy/deploy_cloud_run.sh'))
 
+  def test_ge_datastore_deployment_and_app_registration(self) -> None:
+    import deploy.setup_mcp_connector as smc
+
+    reg_script = _read_repo_file('deploy/register_ge_agent.sh')
+    self.assertIn('python3 deploy/setup_mcp_connector.py --location="${GE_LOCATION}" "${GE_ENGINE_ID}"', reg_script)
+
+    calls: list[tuple[str, str, object]] = []
+    engine_stores = ['existing_store']
+
+    class FakeConnectorApi:
+      base = 'https://discoveryengine.googleapis.com/v1alpha/projects/123/locations/global'
+      root = 'https://discoveryengine.googleapis.com/v1alpha'
+      dry_run = False
+
+      def call(self, method: str, url: str, body: object = None, mutate: bool = False):
+        del mutate
+        calls.append((method, url, body))
+        if method == 'POST' and ':setUpDataConnectorV2' in url:
+          return 200, {'state': 'ACTIVE'}
+        if method == 'GET' and url.endswith('/engines/my-ge-app'):
+          return 200, {'name': 'engines/my-ge-app', 'dataStoreIds': list(engine_stores)}
+        if method == 'PATCH' and '/engines/my-ge-app?updateMask=dataStoreIds' in url:
+          engine_stores[:] = list((body or {}).get('dataStoreIds') or [])
+          return 200, {'name': 'engines/my-ge-app', 'dataStoreIds': list(engine_stores)}
+        return 200, {}
+
+    fake_api = FakeConnectorApi()
+    smc.create_connector(fake_api, 'vibelift-analytics-mcp', 'VibeLift Analytics', 'https://svc.run.app/mcp', ['open_dashboard'])
+    create_body = calls[0][2]
+    self.assertEqual(create_body['dataSource'], 'custom_mcp')
+    self.assertEqual(create_body['actionConfig']['actionParams']['mcp_server_source'], 'BYO_MCP')
+    self.assertFalse(create_body['actionConfig']['actionParams']['use_agent_gateway_egress'])
+
+    smc.attach_to_app(fake_api, 'my-ge-app', 'vibelift-analytics-mcp_mcp_data')
+    self.assertEqual(engine_stores, ['existing_store', 'vibelift-analytics-mcp_mcp_data'])
+
+
   def test_real_ge_agents_and_sub_second_mcp_open_dashboard(self) -> None:
     import time
     for fname in (

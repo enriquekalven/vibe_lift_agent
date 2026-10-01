@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
-# register_ge_agent.sh — Register VibeLift Agent and MCP Server in Gemini Enterprise
+# register_ge_agent.sh — Deploy VibeLift to a Gemini Enterprise Data Store & Register to a GE App Instance
 #
-# Connects the deployed VibeLift Cloud Run service to a Gemini Enterprise app:
+# IMPORTANT: VibeLift's MCP server (/mcp) and side-panel UI (ui://vibelift-analytics/dashboard) must be
+# deployed as a **Gemini Enterprise Custom MCP Server Data Store** (mcp_server_source="BYO_MCP") —
+# NOT in the Vertex AI / Cloud API Registry ("Agent Registry / MCP Registry").
+# Once deployed to the Gemini Enterprise Data Store, the data store (vibelift-analytics-mcp_mcp_data)
+# must be **registered (linked via dataStoreIds) to your Gemini Enterprise App instance (<GE_APP_ID>)**.
+#
+# Connects the deployed VibeLift Cloud Run service to a Gemini Enterprise app instance:
 #   1. Authenticated health check of the private Cloud Run service
 #   2. Discovery Engine service agent run.invoker binding (so GE can call /mcp and the A2A card)
-#   3. A2A agent registration via agents-cli
-#   4. Printed values for attaching the BYO MCP connector in the console
+#   3. Deploys Custom MCP Server to the Gemini Enterprise Data Store (vibelift-analytics-mcp, BYO_MCP),
+#      enables all 6 MCP actions, and registers (links) the GE Data Store (vibelift-analytics-mcp_mcp_data)
+#      to the Gemini Enterprise App instance (<GE_APP_ID>) via deploy/setup_mcp_connector.py
+#   4. Registers the A2A agent on the Gemini Enterprise App instance (if agents-cli is installed)
 #
 # Usage:
 #   ./deploy/register_ge_agent.sh <GE_APP_ID>        # the engine ID of your Gemini Enterprise app
@@ -40,12 +48,12 @@ CARD_URL="${PUBLIC_URL}/a2a/app/.well-known/agent-card.json"
 MCP_URL="${PUBLIC_URL}/mcp"
 
 echo "=========================================================="
-echo " Registering VibeLift in Gemini Enterprise"
+echo " Deploying VibeLift to GE Data Store & Registering to GE App"
 echo " Project:       ${PROJECT_ID} (${PROJECT_NUMBER})"
 echo " Region:        ${REGION}"
 echo " Service URL:   ${PUBLIC_URL}"
+echo " MCP Endpoint:  ${MCP_URL} (Target: Gemini Enterprise Data Store, BYO_MCP)"
 echo " A2A Card URL:  ${CARD_URL}"
-echo " MCP Endpoint:  ${MCP_URL}"
 echo " GE App Engine: ${GE_ENGINE_ID} (Location: ${GE_LOCATION})"
 echo "=========================================================="
 
@@ -77,9 +85,47 @@ if ! gcloud run services add-iam-policy-binding "${SERVICE_NAME}" \
   echo "  gcloud beta services identity create --service=discoveryengine.googleapis.com --project=${PROJECT_ID}" >&2
 fi
 
-# 3. Register the A2A agent (the Cloud Run service publishes its card at /a2a/app/.well-known/agent-card.json).
+# 3. Deploy the Custom MCP Server to a Gemini Enterprise Data Store (NOT Agent Registry / MCP Registry),
+#    enable all 6 MCP actions, and register (link) the GE Data Store to the Gemini Enterprise App instance.
+#    Official docs: https://cloud.google.com/gemini/enterprise/docs/connectors/custom-mcp-server/set-up-custom-mcp-server
 echo ""
-echo "--- Step 3: Registering A2A Agent with Gemini Enterprise ---"
+echo "--- Step 3: Deploying to Gemini Enterprise Data Store & Registering to GE App Instance ---"
+echo "IMPORTANT: VibeLift deploys as a Gemini Enterprise Custom MCP Server Data Store (source=BYO_MCP),"
+echo "           NOT in the Agent Registry / MCP Registry."
+echo "           Once the GE Data Store (vibelift-analytics-mcp_mcp_data) is ACTIVE and its 6 actions are enabled,"
+echo "           it is registered (linked via dataStoreIds) to Gemini Enterprise App instance '${GE_ENGINE_ID}'."
+
+if [[ "${VIBELIFT_SKIP_MCP_CONNECTOR:-0}" == "1" ]]; then
+  echo "VIBELIFT_SKIP_MCP_CONNECTOR=1: skipping automated setup_mcp_connector.py run."
+elif GOOGLE_CLOUD_PROJECT="${PROJECT_ID}" GOOGLE_CLOUD_REGION="${REGION}" SERVICE_NAME="${SERVICE_NAME}" \
+    GE_LOCATION="${GE_LOCATION}" python3 deploy/setup_mcp_connector.py --location="${GE_LOCATION}" "${GE_ENGINE_ID}"; then
+  echo "Successfully deployed to Gemini Enterprise Data Store (vibelift-analytics-mcp_mcp_data) and registered to GE App instance (${GE_ENGINE_ID})."
+else
+  echo "" >&2
+  echo "WARNING: scripted GE Data Store deployment / app registration failed (see error above)." >&2
+  echo "         Use the two-stage Console fallback below (do NOT use Agent Registry / MCP Registry):" >&2
+  echo "" >&2
+  echo "  Stage 3a (Console) — Deploy to Gemini Enterprise Data Store (NOT Agent Registry / MCP Registry):" >&2
+  echo "    - Org policy (if blocked): IAM & Admin > Organization Policies > 'Disable custom MCP server" >&2
+  echo "      connector for Gemini Enterprise' > Manage policy > Override parent's policy > Enforcement OFF." >&2
+  echo "    - Role required: Discovery Engine Editor (roles/discoveryengine.editor)." >&2
+  echo "    - Open: Console > Gemini Enterprise > Data stores > Create data store > search 'Custom MCP Server'" >&2
+  echo "      (choose Bring Your Own MCP Server URL — do NOT select Agent Registry / MCP Registry):" >&2
+  echo "        * Authentication:  No authentication (Discovery Engine SA uses X-Serverless-Authorization)" >&2
+  echo "        * MCP Server URL:  ${MCP_URL}" >&2
+  echo "        * Location:        ${GE_LOCATION} (must match your GE App instance location)" >&2
+  echo "        * Data store name: vibelift-analytics-mcp" >&2
+  echo "    - Once Active: open the data store > Actions > Reload custom actions > select all 6 actions > Enable actions." >&2
+  echo "" >&2
+  echo "  Stage 3b (Console) — Register the GE Data Store to the Gemini Enterprise App Instance:" >&2
+  echo "    - Open: Console > Gemini Enterprise > Apps > ${GE_ENGINE_ID} > Data stores (Connected data stores)" >&2
+  echo "    - Click 'Connect existing data store' (or 'Edit data stores'), select 'VibeLift Analytics'" >&2
+  echo "      (vibelift-analytics-mcp_mcp_data), and click Save." >&2
+fi
+
+# 4. Optional: Register the A2A agent on the Gemini Enterprise App instance (not Agent Registry).
+echo ""
+echo "--- Step 4: Registering A2A Agent on Gemini Enterprise App Instance (Optional) ---"
 echo "Needs the Gemini Enterprise Admin role. No OAuth authorization is attached: VibeLift reads telemetry with"
 echo "its own runtime service account, not the end user's token (in the console, choose 'Skip & Finish')."
 GE_APP_RESOURCE="projects/${PROJECT_NUMBER}/locations/${GE_LOCATION}/collections/default_collection/engines/${GE_ENGINE_ID}"
@@ -96,43 +142,19 @@ if command -v agents-cli &>/dev/null; then
     echo "         Console > Gemini Enterprise > Apps > ${GE_ENGINE_ID} > Agents using the card URL above." >&2
   fi
 else
-  echo "agents-cli not found in PATH. Install it (see README prerequisites) or register the agent in"
-  echo "Console > Gemini Enterprise > Apps > ${GE_ENGINE_ID} > Agents using the card URL above."
+  echo "agents-cli not found in PATH (optional). The Gemini Enterprise Custom MCP Server Data Store registered in"
+  echo "Step 3 already provides all 6 MCP tools and the side-panel dashboard in app ${GE_ENGINE_ID}."
+  echo "To also add the standalone A2A agent in the console: Console > Gemini Enterprise > Apps > ${GE_ENGINE_ID} > Agents."
 fi
 
-# 4. The custom MCP server (side-panel dashboard) is a Gemini Enterprise *data store*, created in the console.
-#    Official steps: https://cloud.google.com/gemini/enterprise/docs/connectors/custom-mcp-server/set-up-custom-mcp-server
 echo ""
-echo "--- Step 4: Custom MCP server data store ---"
-echo "Scripted (needs Discovery Engine Editor; uses undocumented v1alpha methods):"
-echo "  GE_LOCATION=${GE_LOCATION} python3 deploy/setup_mcp_connector.py ${GE_ENGINE_ID}   # add --dry-run to preview"
-echo ""
-echo "Console fallback. Before you start (once per project):"
-echo "  - Org policy: some orgs block custom MCP servers with 'Disable custom MCP server connector for"
-echo "    Gemini Enterprise'. If creation fails with a policy error, an Organization Policy Administrator"
-echo "    turns it off for this project: Console > IAM & Admin > Organization Policies > filter that name >"
-echo "    Manage policy > Override parent's policy > rule OFF."
-echo "  - Your account needs Discovery Engine Editor (roles/discoveryengine.editor)."
-echo "Then: Console > Gemini Enterprise > Data stores > Create data store > search 'Custom MCP Server' >"
-echo "Add MCP server, and use:"
-echo "     - Authentication:  No authentication  (no OAuth client needed; see below)"
-echo "     - MCP Server URL:  ${MCP_URL}"
-echo "     - Location:        the same multi-region as your app (${GE_LOCATION})"
-echo "     - Data store name: vibelift-analytics-mcp"
-echo "  After it shows Active: open it > Actions > Reload custom actions > select the actions > Enable actions,"
-echo "  and connect the data store to app ${GE_ENGINE_ID} if it is not connected yet."
-echo "  Auth: the service stays private. For default *.run.app URLs Gemini Enterprise sends a Google-signed"
-echo "  ID token for ${DE_SA} (X-Serverless-Authorization), which Step 2 granted roles/run.invoker."
-echo "  This does not work with a custom domain. Do not make the service public."
-echo "  Read-only tools declare readOnlyHint, so they run without a confirmation prompt;"
-echo "  run_alpha_evolve_generation changes state and asks the user to confirm."
-echo "  Tools exposed by the server:"
-echo "     - open_dashboard (opens Right Side Panel with Fullscreen toggle)"
-echo "     - query_ge_agent_fleet (live multi-engine agent inventory and telemetry)"
-echo "     - query_project_telemetry (service requests, errors, and Cloud Run stats)"
-echo "     - calculate_prompt_cache_economics (prefix cache hit ratios and savings)"
-echo "     - run_alpha_evolve_generation (closed-loop Pareto optimization)"
-echo "     - get_vibelift_state (runtime state, parameters, and turns)"
+echo "Exposed MCP tools in GE Data Store (vibelift-analytics-mcp_mcp_data -> app ${GE_ENGINE_ID}):"
+echo "  - open_dashboard (opens Right Side Panel with Fullscreen toggle)"
+echo "  - query_ge_agent_fleet (live multi-engine agent inventory and telemetry)"
+echo "  - query_project_telemetry (service requests, errors, and Cloud Run stats)"
+echo "  - calculate_prompt_cache_economics (prefix cache hit ratios and savings)"
+echo "  - run_alpha_evolve_generation (closed-loop Pareto optimization)"
+echo "  - get_vibelift_state (runtime state, parameters, and turns)"
 echo ""
 echo "Smoke test of the MCP endpoint with your identity token:"
 echo "  curl -s -X POST -H \"Authorization: Bearer \$(gcloud auth print-identity-token)\" \\"
@@ -141,6 +163,9 @@ echo "    -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}' ${MCP_UR
 echo ""
 echo "=========================================================="
 echo " VibeLift Gemini Enterprise registration steps finished"
-echo " Dashboard: ${PUBLIC_URL}/ui"
-echo " MCP App:   ui://vibelift-analytics/dashboard"
+echo " GE Data Store: vibelift-analytics-mcp_mcp_data (${GE_LOCATION}, BYO_MCP)"
+echo " GE App Linked: ${GE_ENGINE_ID} (${GE_LOCATION})"
+echo " Dashboard:     ${PUBLIC_URL}/ui"
+echo " MCP App:       ui://vibelift-analytics/dashboard"
 echo "=========================================================="
+

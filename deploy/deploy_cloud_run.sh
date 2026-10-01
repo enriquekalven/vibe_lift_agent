@@ -286,6 +286,16 @@ echo "BYO MCP App Endpoint:       ${PUBLIC_URL}/mcp"
 echo "Interactive MCP UI App:     ${PUBLIC_URL}/ui (or ui://vibelift-analytics/dashboard)"
 echo "Health check:               ${PUBLIC_URL}/health (/healthz is reserved by Cloud Run's front end)"
 echo ""
+
+# Optional: if GE_ENGINE_ID is provided, automatically deploy the Custom MCP Server to the
+# Gemini Enterprise Data Store (BYO_MCP, NOT Agent Registry / MCP Registry) and register
+# (link) that GE Data Store onto the Gemini Enterprise App instance.
+if [[ -n "${GE_ENGINE_ID:-}" ]]; then
+  echo "GE_ENGINE_ID=${GE_ENGINE_ID} set: deploying to Gemini Enterprise Data Store & registering to GE App instance..."
+  GOOGLE_CLOUD_PROJECT="${PROJECT_ID}" GOOGLE_CLOUD_REGION="${REGION}" SERVICE_NAME="${SERVICE_NAME}" \
+      GE_LOCATION="${GE_LOCATION:-global}" ./deploy/register_ge_agent.sh "${GE_ENGINE_ID}"
+fi
+
 echo "The service is private. To open the dashboard from your machine:"
 echo "  gcloud run services proxy ${SERVICE_NAME} --project=${PROJECT_ID} --region=${REGION} --port=8080"
 echo "  then browse http://localhost:8080"
@@ -294,8 +304,12 @@ echo "  curl -H \"Authorization: Bearer \$(gcloud auth print-identity-token)\" $
 echo ""
 echo "Next steps (see README 'Deploy in your own GCP project'):"
 echo "  1. If not done yet: ./deploy/setup_bigquery_sink.sh, then re-run this script for the mart grant."
-echo "  2. Register in Gemini Enterprise: ./deploy/register_ge_agent.sh <GE_APP_ID>"
+echo "  2. Deploy to Gemini Enterprise Data Store (NOT Agent Registry / MCP Registry) & register to your GE App instance:"
+echo "       GE_LOCATION=global ./deploy/register_ge_agent.sh <GE_APP_ID>"
+echo "     (Deploys the Custom MCP Server to GE Data Store 'vibelift-analytics-mcp' [source=BYO_MCP], enables"
+echo "      all 6 MCP actions, and registers GE Data Store 'vibelift-analytics-mcp_mcp_data' onto GE App <GE_APP_ID>.)"
 echo "  3. Hourly mart refresh (scheduled query): GOOGLE_CLOUD_PROJECT=${PROJECT_ID} ./deploy/setup_mart_refresh.sh"
 if [[ "${IAM_FAILURES}" -gt 0 ]]; then
   warn "${IAM_FAILURES} IAM grant(s) failed; see the warnings above."
 fi
+
