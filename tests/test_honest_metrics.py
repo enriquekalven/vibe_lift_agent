@@ -208,5 +208,143 @@ class RequestTrendTest(unittest.TestCase):
     self.assertEqual(ge_fleet.trend_bucket_seconds(168), 6 * 3600)
 
 
+class BlindspotRemediationTest(unittest.TestCase):
+
+  def test_cloud_run_services_never_invent_cpu_memory_or_cost(self):
+    from vibelift import gcp_telemetry
+    svc = gcp_telemetry.GoogleCloudTelemetryService(project_id='project-maui', region='us-central1')
+    with mock.patch.object(svc, '_get_access_token', return_value=None), \
+         mock.patch.object(svc, '_query_bigquery_rest', return_value=[
+             {'service_name': 'vibe-lift-agent', 'latest_rev': 'vibe-lift-agent-00099',
+              'req_count': 42, 'avg_latency_ms': 112.4, 'p95_latency_ms': 245.8}
+         ]):
+      rows = svc.list_cloud_run_agent_services(force_refresh=True)
+    self.assertGreaterEqual(len(rows), 1)
+    row = rows[0]
+    self.assertIsNone(row['cpu_utilization_pct'])
+    self.assertIsNone(row['memory_utilization_pct'])
+    self.assertIsNone(row['monthly_cost_usd'])
+    self.assertEqual(row['p95_latency_ms'], 245.8)
+    self.assertEqual(row['active_revision'], 'vibe-lift-agent-00099')
+
+  def test_unconfigured_project_never_crashes_summary_or_insights(self):
+    from vibelift import gcp_telemetry
+    svc = gcp_telemetry.GoogleCloudTelemetryService(
+        project_id=gcp_telemetry.UNCONFIGURED_PROJECT_ID,
+        region='us-central1',
+    )
+    with mock.patch.object(svc, '_get_access_token', return_value='tok'), \
+         mock.patch.object(svc, '_query_bigquery_rest', return_value=[]), \
+         mock.patch.object(svc, 'fetch_live_cloud_turns', return_value=[]):
+      summary = svc.get_telemetry_summary_payload()
+      insights = svc.fetch_live_bigquery_project_insights(force_refresh=True)
+    self.assertEqual(summary['project_id'], gcp_telemetry.UNCONFIGURED_PROJECT_ID)
+    self.assertIn('vibelift_mart', summary['bigquery_datasets'])
+    self.assertIsNone(insights)
+
+  def test_mart_tool_names_extracted_into_live_skills_and_decorator_events(self):
+    from vibelift import gcp_telemetry
+    svc = gcp_telemetry.GoogleCloudTelemetryService(project_id='project-maui', region='us-central1')
+    def fake_bq(sql, timeout_s=7.0):
+      if 'tool_names' in sql and 'fct_turns' in sql and 'RECENT_SESSIONS' not in sql.upper():
+        return [{
+            'turn_id': 't-1',
+            'turn_source': 'INFERENCE',
+            'turn_kind': 'AGENT_CALL',
+            'ts': '2026-09-30T10:00:00Z',
+            'session_id': 's-1',
+            'user_email': 'enriq@google.com',
+            'engine_key': 'global/app-1',
+            'agent_name': 'sre-agent',
+            'model_name': 'gemini-2.5-flash',
+            'api_method': 'StreamAssist',
+            'turn_status': 'SUCCESS',
+            'status_message': None,
+            'input_tokens': '1200',
+            'output_tokens': '300',
+            'cached_input_tokens': '800',
+            'reasoning_tokens': '150',
+            'total_tokens': '1650',
+            'llm_calls': '1',
+            'tool_call_count': '2',
+            'tool_names': 'fetch_logs, run_diagnostics',
+        }]
+      return []
+
+    with mock.patch.object(svc, '_get_access_token', return_value='tok'), \
+         mock.patch.object(svc, '_query_bigquery_rest', side_effect=fake_bq):
+      insights = svc.fetch_live_bigquery_project_insights(force_refresh=True)
+    self.assertIsNotNone(insights)
+    skill_names = [s['resource_name'] for s in insights['live_skills_mcp']]
+    self.assertIn('ge_tool://fetch_logs', skill_names)
+    self.assertIn('ge_tool://run_diagnostics', skill_names)
+    handlers = [d['handler_name'] for d in insights['live_decorator_events']]
+    self.assertIn('fetch_logs', handlers)
+
+  def test_reasoning_tokens_priced_and_decomposed_in_finops(self):
+    from vibelift import finops as live_finops
+    cards = {'gemini-2.5-flash': {'input': 0.30, 'output': 2.50, 'cached_read': 0.03, 'cache_write': 0.0}}
+    prev_row = {'model': 'gemini-2.5-flash', 'input_tokens': 1_000_000, 'output_tokens': 100_000,
+                'reasoning_tokens': 50_000, 'cache_read_tokens': 0, 'cache_write_tokens': 0, 'invocations': 100}
+    cur_row = {'model': 'gemini-2.5-flash', 'input_tokens': 1_200_000, 'output_tokens': 120_000,
+               'reasoning_tokens': 200_000, 'cache_read_tokens': 200_000, 'cache_write_tokens': 0, 'invocations': 120}
+    prev_row['est_cost_usd'] = round(live_finops._cost(prev_row, cards['gemini-2.5-flash']), 4)
+    cur_row['est_cost_usd'] = round(live_finops._cost(cur_row, cards['gemini-2.5-flash']), 4)
+    prev = {'models': [prev_row], 'totals': {'est_cost_usd': prev_row['est_cost_usd'], 'invocations': 100,
+            'input_tokens': 1_000_000, 'output_tokens': 100_000, 'reasoning_tokens': 50_000, 'cache_read_tokens': 0},
+            'rate_cards': cards, 'interval': {'start': 's0', 'end': 'e0'}}
+    cur = {'models': [cur_row], 'totals': {'est_cost_usd': cur_row['est_cost_usd'], 'invocations': 120,
+           'input_tokens': 1_200_000, 'output_tokens': 120_000, 'reasoning_tokens': 200_000, 'cache_read_tokens': 200_000},
+           'rate_cards': cards, 'interval': {'start': 's1', 'end': 'e1'}}
+    drift = live_finops.build_spend_drift(cur, prev, cards)
+    self.assertEqual(drift['status'], 'LIVE')
+    self.assertAlmostEqual(drift['unexplained_usd'], 0.0, places=6)
+    te = live_finops.build_token_economics({'model_usage': cur, 'agents': [], 'window_hours': 24})
+    self.assertEqual(te['totals']['reasoning_tokens'], 200_000)
+    self.assertEqual(te['models'][0]['reasoning_tokens'], 200_000)
+
+  def test_nl2sql_uses_dynamic_project_and_vibelift_mart_tables(self):
+    opt = alpha_evolve_optimizer.VibeLiftAlphaEvolveOptimizer()
+    for q in (
+        'Which agents have runaway thinking tokens?',
+        'Show session duration from fct_sessions',
+        'Who are the top power users by ldap?',
+        'Show 5-layer otel span metrics',
+        'Compare cost per 1k turns across agents',
+    ):
+      out = opt.execute_nl2sql_telemetry_query(q, project_id='custom-gcp-proj')
+      self.assertIn('custom-gcp-proj.vibelift_mart', out['generated_sql'])
+      self.assertNotIn('aive_logs.', out['generated_sql'])
+
+  def test_structured_audit_sink_and_sme_state_dir_persistence(self):
+    import tempfile
+
+    from vibelift import sme_eval, telemetry
+    with tempfile.TemporaryDirectory() as tmpdir:
+      with mock.patch.dict(os.environ, {'VIBELIFT_STATE_DIR': tmpdir}):
+        store1 = sme_eval.SmeEvaluationStore()
+        store1.submit_rating(persona_id='finops_lead', reviewer_ldap='enriq', overall_rating=5, notes='Persisted')
+        telemetry.log_csat_rating('sess-1', 'evt-1', 'enriq@google.com', 5, 'Great')
+        # New store instance should reload the persisted SME rating from VIBELIFT_STATE_DIR
+        store2 = sme_eval.SmeEvaluationStore()
+        ratings = store2.list_ratings('finops_lead')
+        self.assertEqual(len(ratings), 1)
+        self.assertEqual(ratings[0]['reviewer_ldap'], 'enriq')
+        self.assertTrue(os.path.isfile(os.path.join(tmpdir, 'csat_rating.jsonl')))
+        store2.clear()
+        self.assertEqual(len(store2.list_ratings()), 0)
+
+  def test_server_reset_restores_default_agent_and_cors_env(self):
+    from vibelift import server
+    ctrl = server.VibeLiftRuntimeController()
+    ctrl.select_agent('deep_research')
+    self.assertEqual(ctrl.optimizer.selected_agent_id, 'deep_research')
+    ctrl.reset()
+    self.assertEqual(ctrl.optimizer.selected_agent_id, 'it_service_desk')
+    with mock.patch.dict(os.environ, {'ALLOWED_ORIGINS': 'https://a.example.com, https://b.example.com'}):
+      self.assertEqual(server.resolve_allowed_origins(), ['https://a.example.com', 'https://b.example.com'])
+
+
 if __name__ == '__main__':
   unittest.main()
+

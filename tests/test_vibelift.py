@@ -168,6 +168,17 @@ class VibeLiftFrameworkTest(unittest.TestCase):
     self.assertEqual(evolve_res['agent_id'], 'it_service_desk')
     self.assertIn('active_generation', evolve_res)
 
+    # validate_telemetry_grounding must run the real validator (deterministic, no LLM judge by default)
+    with mock.patch.object(
+        server._global_controller, 'validate_telemetry', wraps=server._global_controller.validate_telemetry
+    ) as spy:
+      grounding_res = json.loads(adk_agent_module.validate_telemetry_grounding())
+    spy.assert_called_once_with(run_llm_judge=False)
+    self.assertIn('overall_status', grounding_res)
+    self.assertIsInstance(grounding_res['checks'], list)
+    self.assertGreater(grounding_res['total_checks'], 0)
+    server._global_controller.reset()
+
   def test_http_server_renders_ui_and_executes_rest_api_end_to_end(self) -> None:
     httpd = server.create_http_server(host='127.0.0.1', port=0)
     port = httpd.server_address[1]

@@ -421,7 +421,20 @@ class VibeLiftRuntimeController:
   def query_nl2sql(self, question: str) -> dict[str, Any]:
     """Executes an interactive NL2SQL telemetry query and returns SQL + rows + executive summary."""
     with self._lock:
-      return self.optimizer.execute_nl2sql_telemetry_query(question)
+      res = self.optimizer.execute_nl2sql_telemetry_query(
+          question,
+          project_id=self.gcp_telemetry.project_id,
+      )
+    safety = res.get('sql_safety_audit') or {}
+    if self._is_live_gcp() and res.get('generated_sql') and not safety.get('blocked_dml_attempt'):
+      live_rows = self.gcp_telemetry._query_bigquery_rest(str(res['generated_sql']), timeout_s=6.0)
+      if live_rows:
+        res['live_bigquery_rows'] = live_rows
+        res['execution_mode'] = 'LIVE_BIGQUERY_REST'
+        if not res.get('rows'):
+          res['rows'] = live_rows
+          res['columns'] = list(live_rows[0].keys())
+    return res
 
   def simulate_what_if(self, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Runs an interactive What-If FinOps & Canary scenario on the currently selected agent."""
@@ -606,9 +619,7 @@ class VibeLiftRuntimeController:
   def reset(self) -> dict[str, Any]:
     """Resets the optimizer and agent trajectory to the initial seed state."""
     with self._lock:
-      current_id = self.optimizer.active_agent.agent_id
       self.optimizer = alpha_evolve_optimizer.VibeLiftAlphaEvolveOptimizer()
-      self.optimizer.select_agent(current_id)
       self.agent = long_running_agent.LongRunningVibeLiftAgent(
           self.optimizer,
           agent_name=self.optimizer.active_agent.agent_id,
@@ -1132,6 +1143,14 @@ def register_api_routes(app: Any, controller: VibeLiftRuntimeController) -> None
     return controller.reset()
 
 
+def resolve_allowed_origins() -> list[str]:
+  """Resolves allowed CORS origins from ALLOWED_ORIGINS env var (defaults to ['*'] when unset)."""
+  raw = os.environ.get('ALLOWED_ORIGINS', '*').strip()
+  if not raw or raw == '*':
+    return ['*']
+  return [origin.strip() for origin in raw.split(',') if origin.strip()] or ['*']
+
+
 # ---------------------------------------------------------------------------
 # FastAPI Application for Cloud Run Production Deployment & ADK Framework
 # ---------------------------------------------------------------------------
@@ -1142,11 +1161,9 @@ if fastapi is not None:
       version='1.1.0',
   )
 
-  # TODO(security): restrict CORS to known origins (ALLOWED_ORIGINS) once the dashboard's
-  # consumers are fixed; the service itself is IAM-protected on Cloud Run.
   app.add_middleware(
       CORSMiddleware,
-      allow_origins=['*'],
+      allow_origins=resolve_allowed_origins(),
       allow_credentials=False,
       allow_methods=['GET', 'POST', 'DELETE'],
       allow_headers=['*'],

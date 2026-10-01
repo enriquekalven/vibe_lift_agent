@@ -1564,8 +1564,8 @@ class GeminiEnterpriseFleetService:
 
     def bucket(model: str) -> dict[str, Any]:
       return models.setdefault(model, {
-          'model': model, 'input_tokens': 0, 'output_tokens': 0, 'cache_read_tokens': 0,
-          'cache_write_tokens': 0, 'other_tokens': 0, 'invocations': 0})
+          'model': model, 'input_tokens': 0, 'output_tokens': 0, 'reasoning_tokens': 0,
+          'cache_read_tokens': 0, 'cache_write_tokens': 0, 'other_tokens': 0, 'invocations': 0})
 
     for labels, value in token_rows:
       row = bucket(labels.get('model_user_id') or 'unknown')
@@ -1575,6 +1575,8 @@ class GeminiEnterpriseFleetService:
         row['input_tokens'] += count
       elif token_type == 'output':
         row['output_tokens'] += count
+      elif token_type in ('thought', 'thoughts', 'reasoning') or token_type.startswith(('thought', 'reasoning')):
+        row['reasoning_tokens'] += count
       elif 'cache_read' in token_type or token_type.startswith('cached'):
         row['cache_read_tokens'] += count
       elif token_type.startswith('cache_write'):
@@ -1585,16 +1587,18 @@ class GeminiEnterpriseFleetService:
       bucket(labels.get('model_user_id') or 'unknown')['invocations'] += round(value)
 
     cards = self._rate_cards()
-    totals: dict[str, Any] = {'input_tokens': 0, 'output_tokens': 0, 'cache_read_tokens': 0, 'cache_write_tokens': 0,
+    totals: dict[str, Any] = {'input_tokens': 0, 'output_tokens': 0, 'reasoning_tokens': 0,
+              'cache_read_tokens': 0, 'cache_write_tokens': 0,
               'invocations': 0, 'est_cost_usd': 0.0, 'models_without_rate_card': []}
     rows = []
-    for row in sorted(models.values(), key=lambda r: -(r['input_tokens'] + r['output_tokens'])):
-      if not any(row[k] for k in ('input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens', 'invocations')):
+    for row in sorted(models.values(), key=lambda r: -(r['input_tokens'] + r['output_tokens'] + r['reasoning_tokens'])):
+      if not any(row[k] for k in ('input_tokens', 'output_tokens', 'reasoning_tokens', 'cache_read_tokens', 'cache_write_tokens', 'invocations')):
         continue
       card = cards.get(row['model'])
       if card:
         row['est_cost_usd'] = round(
-            row['input_tokens'] / 1e6 * card['input'] + row['output_tokens'] / 1e6 * card['output']
+            row['input_tokens'] / 1e6 * card['input']
+            + (row['output_tokens'] + row['reasoning_tokens']) / 1e6 * card['output']
             + row['cache_read_tokens'] / 1e6 * card['cached_read']
             + row['cache_write_tokens'] / 1e6 * card['cache_write'], 4)
         totals['est_cost_usd'] += row['est_cost_usd']
@@ -1603,7 +1607,7 @@ class GeminiEnterpriseFleetService:
         totals['models_without_rate_card'].append(row['model'])
       denominator = row['input_tokens'] + row['cache_read_tokens'] + row['cache_write_tokens']
       row['cache_read_share_pct'] = round(row['cache_read_tokens'] / denominator * 100, 1) if denominator else None
-      for key in ('input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens', 'invocations'):
+      for key in ('input_tokens', 'output_tokens', 'reasoning_tokens', 'cache_read_tokens', 'cache_write_tokens', 'invocations'):
         totals[key] += row[key]
       rows.append(row)
     totals['est_cost_usd'] = round(totals['est_cost_usd'], 4)

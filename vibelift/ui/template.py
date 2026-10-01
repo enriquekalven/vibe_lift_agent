@@ -3351,16 +3351,21 @@ async def handle_agent_turn(message_envelope):
       if (crBody && Array.isArray(state.cloud_run_services)) {
         crBody.replaceChildren();
         state.cloud_run_services.forEach(function(svc) {
+          var cpuTxt = svc.cpu_utilization_pct != null ? (svc.cpu_utilization_pct + '% CPU') : '— CPU';
+          var memTxt = svc.memory_utilization_pct != null ? (svc.memory_utilization_pct + '% Mem') : '— Mem';
+          var latTxt = svc.p95_latency_ms != null ? (svc.p95_latency_ms + 'ms') : '—';
+          var coldTxt = svc.cold_starts_1h != null ? (' (cold: ' + svc.cold_starts_1h + ')') : '';
+          var costTxt = svc.monthly_cost_usd != null ? ('$' + fmtInt(svc.monthly_cost_usd) + '/mo') : '—';
           crBody.appendChild(el('tr', null, [
             el('td', 'mono', [
               el('strong', null, [svc.service_name || '']),
-              el('div', 'kpi-sub', [(svc.region || 'us-central1') + ' • rev: ' + (svc.active_revision || '')])
+              el('div', 'kpi-sub', [(svc.region || 'us-central1') + ' • rev: ' + (svc.active_revision || '—')])
             ]),
             el('td', 'mono', ['min=' + (svc.min_instances ?? 1) + ' / max=' + (svc.max_instances ?? 10) + ' / conc=' + (svc.concurrency ?? 80)]),
-            el('td', 'mono', [(svc.cpu_utilization_pct || 0) + '% CPU / ' + (svc.memory_utilization_pct || 0) + '% Mem']),
-            el('td', 'mono', [(svc.p95_latency_ms || 0) + 'ms (cold: ' + (svc.cold_starts_1h ?? 0) + ')']),
-            el('td', 'mono', ['$' + fmtInt(svc.monthly_cost_usd || 0) + '/mo']),
-            el('td', null, [badge(svc.status || 'HEALTHY', 'badge-green')]),
+            el('td', 'mono', [cpuTxt + ' / ' + memTxt]),
+            el('td', 'mono', [latTxt + coldTxt]),
+            el('td', 'mono', [costTxt]),
+            el('td', null, [badge(svc.status || 'UNKNOWN', svc.status === 'READY' || svc.status === 'HEALTHY' ? 'badge-green' : 'badge-amber')]),
           ]));
         });
       }

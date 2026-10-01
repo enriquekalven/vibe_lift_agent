@@ -20,8 +20,7 @@ from google.adk.models import Gemini
 from google.genai import types
 
 from vibelift import fleet as ge_fleet
-from vibelift import gcp_telemetry, telemetry
-from vibelift import optimizer as alpha_evolve_optimizer
+from vibelift import telemetry
 
 MODEL_NAME = "gemini-2.5-flash"
 
@@ -51,7 +50,8 @@ def query_gcp_telemetry(hours_ago: int = 48) -> str:
   Returns:
       JSON string with project ID, active services, ingested turns, and cache statistics.
   """
-  svc = gcp_telemetry.GoogleCloudTelemetryService()
+  from vibelift import server as vibelift_server
+  svc = vibelift_server._global_controller.gcp_telemetry
   summary = svc.get_telemetry_summary_payload()
   return json.dumps(summary, indent=2)
 
@@ -62,7 +62,8 @@ def list_cloud_run_agents() -> str:
   Returns:
       JSON string of deployed Cloud Run services, regions, and URLs.
   """
-  svc = gcp_telemetry.GoogleCloudTelemetryService()
+  from vibelift import server as vibelift_server
+  svc = vibelift_server._global_controller.gcp_telemetry
   services = svc.list_cloud_run_agent_services()
   return json.dumps(services, indent=2)
 
@@ -70,19 +71,19 @@ def list_cloud_run_agents() -> str:
 def calculate_cache_economics(
     prompt_token_count: int,
     cached_content_token_count: int,
-    model: str = "gemini-3.1-flash",
+    model: str = MODEL_NAME,
 ) -> str:
   """Calculates prompt cache hit ratio and dollar savings vs naive pricing.
 
   Args:
       prompt_token_count: Total prompt token count.
       cached_content_token_count: Tokens read from prompt cache.
-      model: Gemini model identifier.
+      model: Gemini model identifier (defaults to gemini-2.5-flash).
 
   Returns:
       JSON string with cache hit ratio, naive cost, actual cost, and net savings in USD.
   """
-  telemetry.RATE_CARDS.get(model, telemetry.RATE_CARDS["gemini-3.1-flash"])
+  telemetry.RATE_CARDS.get(model, telemetry.RATE_CARDS[MODEL_NAME])
   uncached = max(0, prompt_token_count - cached_content_token_count)
   log = telemetry.TurnUsageLog(
       timestamp="2026-09-25T15:00:00Z",
@@ -149,20 +150,21 @@ def trigger_alpha_evolve_cycle(agent_id: str = "it_service_desk") -> str:
   Returns:
       JSON string with mutated genome parameters and Pareto action description.
   """
-  optimizer = alpha_evolve_optimizer.VibeLiftAlphaEvolveOptimizer()
-  optimizer.select_agent(agent_id)
-  optimizer.run_next_generation()
-  active = optimizer.active_agent
-  last_action = active.actions[-1] if active.actions else None
-  return json.dumps(
-      {
-          "agent_id": active.agent_id,
-          "active_generation": active.timeline[-1].generation if active.timeline else 14,
-          "latest_action": last_action.to_dict() if last_action else {},
-          "monthly_savings_usd": active.monthly_savings_usd,
-      },
-      indent=2,
-  )
+  from vibelift import server as vibelift_server
+  ctrl = vibelift_server._global_controller
+  with ctrl._lock:
+    ctrl.optimizer.select_agent(agent_id)
+    ctrl.optimizer.run_next_generation()
+    ctrl.agent.step_turn()
+    active = ctrl.optimizer.active_agent
+    last_action = active.actions[-1] if active.actions else None
+    result = {
+        "agent_id": active.agent_id,
+        "active_generation": active.timeline[-1].generation if active.timeline else 14,
+        "latest_action": last_action.to_dict() if last_action else {},
+        "monthly_savings_usd": active.monthly_savings_usd,
+    }
+  return json.dumps(result, indent=2)
 
 
 def query_ge_agent_fleet(window_hours: int = 24) -> str:
@@ -181,6 +183,51 @@ def query_ge_agent_fleet(window_hours: int = 24) -> str:
   """
   payload = ge_fleet.get_ge_fleet_service().collect(window_hours=ge_fleet.parse_window_hours(window_hours))
   return json.dumps({"summary": ge_fleet.summarize_fleet(payload), **payload}, indent=2)
+
+
+def query_live_finops_and_mart(days: int = 30) -> str:
+  """Queries the BigQuery Gemini Enterprise reporting mart (vibelift_mart) and Cloud Billing reconciliation.
+
+  Returns real conversation sessions, daily usage by app/model, principal rollups, tool invocations,
+  billed SKU ledger, and additive spend-drift attribution. Unknown fields are reported as null.
+
+  Args:
+      days: Lookback window in days (1-365, default 30).
+
+  Returns:
+      JSON string with live BigQuery mart insights, billing export reconciliation, and token economics.
+  """
+  from vibelift import server as vibelift_server
+  ctrl = vibelift_server._global_controller
+  hours = max(24, min(int(days) * 24, 24 * 365))
+  bq_insights = ctrl.gcp_telemetry.fetch_live_bigquery_project_insights(
+      window_hours=hours, non_blocking=False
+  )
+  billing = ctrl.billing_export.get(non_blocking=False)
+  return json.dumps(
+      {
+          "project_id": ctrl.gcp_telemetry.project_id,
+          "window_days": days,
+          "bigquery_mart_insights": bq_insights,
+          "billing_reconciliation": billing,
+      },
+      indent=2,
+  )
+
+
+def validate_telemetry_grounding(run_llm_judge: bool = False) -> str:
+  """Audits dashboard telemetry for grounding against live sources (GE fleet, BigQuery mart, Billing).
+
+  Args:
+      run_llm_judge: Also run the Vertex AI LLM-as-a-Judge pass (slower, billed). Defaults to False
+          so the deterministic checks run alone.
+
+  Returns:
+      JSON string with the deterministic grounding checks and, if requested, the LLM judge verdict.
+  """
+  from vibelift import server as vibelift_server
+  report = vibelift_server._global_controller.validate_telemetry(run_llm_judge=bool(run_llm_judge))
+  return json.dumps(report, indent=2, default=str)
 
 
 def open_dashboard(focus_tab: int = 6, initial_agent: str = "it_service_desk") -> str:
@@ -228,16 +275,18 @@ root_agent = Agent(
 Your mission is to:
 1. Always call `open_dashboard` FIRST whenever the user asks to open, view, or inspect the VibeLift Analytics Platform, or asks for agent telemetry, FinOps prompt cache economics, or AlphaEvolve optimization. Calling `open_dashboard` opens the interactive glassmorphic dashboard.
 2. Report on every agent deployed on the Gemini Enterprise app AND standalone/unregistered runtimes (Vertex AI Agent Engine, Cloud Run agents/MCP servers, GKE workloads, and Cloud Trace Skills/MCP tools) with `query_ge_agent_fleet`: live requests, errors, latency, tokens, conversations, zombie/idle allocation, and project-wide model usage and estimated cost. Only quote numbers returned by the tools.
-3. Fetch and analyze live telemetry from Google Cloud Run and Gemini Enterprise app logs.
+3. Query the BigQuery reporting mart (`vibelift_mart`) and Cloud Billing export reconciliation with `query_live_finops_and_mart`, and verify live telemetry grounding with `validate_telemetry_grounding`.
 4. Calculate token cache economics (Cache Read vs Write vs Uncached) and dollar savings vs naive pricing.
 5. Diagnose prompt cache breakpoints where dynamic timestamps or non-static prefixes invalidate caches.
 6. Execute AlphaEvolve closed-loop Pareto mutations to optimize prompt prefixes and prune verbose tool outputs.
-Provide clear, authoritative, and actionable answers with specific token metrics and dollar cost savings.
+Provide clear, authoritative, and actionable answers with specific token metrics and dollar cost savings. Never invent or extrapolate unmeasured values.
 """,
     tools=[
         open_dashboard,
         query_gcp_telemetry,
         query_ge_agent_fleet,
+        query_live_finops_and_mart,
+        validate_telemetry_grounding,
         list_cloud_run_agents,
         calculate_cache_economics,
         detect_prompt_breakpoint,

@@ -10,6 +10,8 @@ from a mart row; when the mart does not know a value (tokens, model, latency, ra
 payload carries None, never a default.
 """
 
+from __future__ import annotations
+
 import os
 import re
 from collections.abc import Mapping, Sequence
@@ -34,14 +36,22 @@ def _dataset_from_env(env: str, default: str) -> str:
   return value
 
 
+def curated_dataset_name() -> str:
+  return _dataset_from_env(CURATED_DATASET_ENV, DEFAULT_CURATED_DATASET)
+
+
+def mart_dataset_name() -> str:
+  return _dataset_from_env(MART_DATASET_ENV, DEFAULT_MART_DATASET)
+
+
 def curated_ref(project_id: str) -> str:
   _check_project(project_id)
-  return f'{project_id}.{_dataset_from_env(CURATED_DATASET_ENV, DEFAULT_CURATED_DATASET)}'
+  return f'{project_id}.{curated_dataset_name()}'
 
 
 def mart_ref(project_id: str) -> str:
   _check_project(project_id)
-  return f'{project_id}.{_dataset_from_env(MART_DATASET_ENV, DEFAULT_MART_DATASET)}'
+  return f'{project_id}.{mart_dataset_name()}'
 
 
 def _check_project(project_id: str) -> None:

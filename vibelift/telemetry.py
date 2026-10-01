@@ -6,11 +6,38 @@ import functools
 import hashlib
 import inspect
 import json
+import logging
+import os
 import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
+
+_AUDIT_LOGGER = logging.getLogger('vibelift.audit_sink')
+_STATE_FILE_LOCK = threading.Lock()
+
+
+def emit_structured_audit_record(kind: str, record: Mapping[str, Any]) -> None:
+  """Emits a structured JSON audit record to Cloud Logging and optional VIBELIFT_STATE_DIR JSONL."""
+  payload = {'vibelift_event_kind': kind, **dict(record)}
+  try:
+    line = json.dumps(payload, sort_keys=True)
+    _AUDIT_LOGGER.info(line)
+  except Exception:
+    return
+  state_dir = (os.environ.get('VIBELIFT_STATE_DIR') or '').strip()
+  if state_dir:
+    try:
+      os.makedirs(state_dir, exist_ok=True)
+      safe_kind = ''.join(c for c in kind if c.isalnum() or c in ('_', '-')) or 'events'
+      target_path = os.path.join(state_dir, f'{safe_kind}.jsonl')
+      with _STATE_FILE_LOCK:
+        with open(target_path, 'a', encoding='utf-8') as fh:
+          fh.write(line + '\n')
+    except OSError:
+      pass
+
 
 
 @dataclasses.dataclass(frozen=True)
@@ -409,7 +436,9 @@ def record_decorator_event(event: DecoratorTelemetryEvent) -> dict[str, Any]:
     del _RUNTIME_DECORATOR_EVENTS[25:]
     _DECORATOR_EVENTS.insert(0, event)
     del _DECORATOR_EVENTS[25:]
-  return event.to_dict()
+  out = event.to_dict()
+  emit_structured_audit_record('decorator_event', out)
+  return out
 
 
 def get_recent_decorator_events() -> list[dict[str, Any]]:
@@ -800,6 +829,7 @@ def log_agent_generation_event(
           status=f'200 OK ({status})',
       )
   )
+  emit_structured_audit_record('aive_usage_log', row)
   return row
 
 
@@ -836,6 +866,7 @@ def log_csat_rating(
       for row in _LIVE_GCP_AIVE_USAGE_LOGS:
         if row.get('event_id') == event_id:
           row['csat_rating'] = clamped_rating
+  emit_structured_audit_record('csat_rating', entry)
   return entry
 
 

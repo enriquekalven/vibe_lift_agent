@@ -15,12 +15,15 @@ Design invariants:
 from __future__ import annotations
 
 import datetime
+import json
+import os
 import re
 import threading
 import uuid
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from vibelift import telemetry
 from vibelift.jsonutil import as_list, as_mapping
 
 RUBRIC_DIMENSIONS: tuple[dict[str, Any], ...] = (
@@ -202,10 +205,43 @@ class SmeEvaluationStore:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._ratings: list[dict[str, Any]] = []
+        self._load_persisted_if_configured()
+
+    def _persisted_path(self) -> str | None:
+        state_dir = (os.environ.get('VIBELIFT_STATE_DIR') or '').strip()
+        if not state_dir:
+            return None
+        return os.path.join(state_dir, 'sme_eval_rating.jsonl')
+
+    def _load_persisted_if_configured(self) -> None:
+        path = self._persisted_path()
+        if not path or not os.path.isfile(path):
+            return
+        loaded: list[dict[str, Any]] = []
+        try:
+            with open(path, encoding='utf-8') as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    obj = json.loads(line)
+                    if isinstance(obj, dict) and obj.get('persona_id') in VALID_PERSONA_IDS:
+                        obj.pop('vibelift_event_kind', None)
+                        loaded.insert(0, obj)
+        except (OSError, ValueError):
+            return
+        with self._lock:
+            self._ratings = loaded
 
     def clear(self) -> None:
         with self._lock:
             self._ratings.clear()
+        path = self._persisted_path()
+        if path and os.path.isfile(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
     def list_ratings(self, persona_id: str | None = None) -> list[dict[str, Any]]:
         with self._lock:
@@ -286,6 +322,7 @@ class SmeEvaluationStore:
         }
         with self._lock:
             self._ratings.insert(0, entry)
+        telemetry.emit_structured_audit_record('sme_eval_rating', entry)
         return entry
 
 

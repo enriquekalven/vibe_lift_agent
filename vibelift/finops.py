@@ -16,17 +16,18 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-_TOKEN_KEYS = ('input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens')
+_TOKEN_KEYS = ('input_tokens', 'output_tokens', 'reasoning_tokens', 'cache_read_tokens', 'cache_write_tokens')
 _PRICE_KEY = {
     'input_tokens': 'input',
     'output_tokens': 'output',
+    'reasoning_tokens': 'output',
     'cache_read_tokens': 'cached_read',
     'cache_write_tokens': 'cache_write',
 }
 DRIVERS = (
     ('volume', 'Call volume', 'More or fewer model calls at the previous cost per call.'),
     ('prompt_size', 'Prompt size', 'Change in uncached input tokens per call.'),
-    ('output_length', 'Output length', 'Change in output tokens per call.'),
+    ('output_length', 'Output length', 'Change in output and reasoning tokens per call.'),
     ('caching', 'Caching', 'Change in cache-read and cache-write tokens per call.'),
     ('model_mix', 'Models started or stopped', 'Models used in only one of the two periods.'),
 )
@@ -64,6 +65,7 @@ def build_token_economics(fleet: Mapping[str, Any] | None) -> dict[str, Any]:
         'calls': calls,
         'input_tokens': int(m.get('input_tokens') or 0),
         'output_tokens': int(m.get('output_tokens') or 0),
+        'reasoning_tokens': int(m.get('reasoning_tokens') or 0),
         'cache_read_tokens': int(m.get('cache_read_tokens') or 0),
         'est_cost_usd': cost,
         'cost_share_pct': round(cost / total_cost * 100, 1) if cost is not None and total_cost else None,
@@ -141,6 +143,7 @@ def build_token_economics(fleet: Mapping[str, Any] | None) -> dict[str, Any]:
           'calls': int(totals.get('invocations') or 0),
           'input_tokens': int(totals.get('input_tokens') or 0),
           'output_tokens': int(totals.get('output_tokens') or 0),
+          'reasoning_tokens': int(totals.get('reasoning_tokens') or 0),
           'cache_read_tokens': int(totals.get('cache_read_tokens') or 0),
           'est_cost_usd': totals.get('est_cost_usd'),
           'models_without_rate_card': list(totals.get('models_without_rate_card') or []),
@@ -168,8 +171,8 @@ def build_spend_drift(
   """Explains the change in estimated model spend between two equal-length periods.
 
   Both periods are priced with the same (current) list prices, so price changes are excluded. For a
-  model used in both periods with calls N and per-call tokens a (input), b (output), c (cache read),
-  w (cache write):
+  model used in both periods with calls N and per-call tokens a (input), b (output + reasoning),
+  c (cache read), w (cache write):
     volume        = (N1 - N0) * u0            (u = cost per call)
     prompt_size   = N1 * (a1 - a0) * p_in
     output_length = N1 * (b1 - b0) * p_out
@@ -203,7 +206,10 @@ def build_spend_drift(
         return float(r.get(k) or 0) / n
       parts['volume'] = (n1 - n0) * (c0 / n0)
       parts['prompt_size'] = n1 * (per(r1, 'input_tokens', n1) - per(r0, 'input_tokens', n0)) * card['input'] / 1e6
-      parts['output_length'] = n1 * (per(r1, 'output_tokens', n1) - per(r0, 'output_tokens', n0)) * card['output'] / 1e6
+      parts['output_length'] = n1 * (
+          (per(r1, 'output_tokens', n1) - per(r0, 'output_tokens', n0))
+          + (per(r1, 'reasoning_tokens', n1) - per(r0, 'reasoning_tokens', n0))
+      ) * card['output'] / 1e6
       parts['caching'] = n1 * (
           (per(r1, 'cache_read_tokens', n1) - per(r0, 'cache_read_tokens', n0)) * card['cached_read']
           + (per(r1, 'cache_write_tokens', n1) - per(r0, 'cache_write_tokens', n0)) * card['cache_write']) / 1e6

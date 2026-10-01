@@ -8,6 +8,8 @@ The export table is configured with `VIBELIFT_BILLING_EXPORT_TABLE`
 result says so explicitly (`NOT_CONNECTED` / `ERROR`); no numbers are invented.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os

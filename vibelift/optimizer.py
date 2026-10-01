@@ -2,6 +2,7 @@
 
 import ast
 import dataclasses
+import os
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -1693,11 +1694,31 @@ class VibeLiftAlphaEvolveOptimizer:
         live_bq=self._live_bq_insights,
     )
 
-  def execute_nl2sql_telemetry_query(self, question: str) -> dict[str, Any]:
+  def execute_nl2sql_telemetry_query(
+      self,
+      question: str,
+      project_id: str | None = None,
+  ) -> dict[str, Any]:
     """Translates a natural-language telemetry/FinOps question into BigQuery SQL and live results."""
+    from vibelift import ge_mart
     q_clean = (question or '').strip()
     q_lower = q_clean.lower()
     uc = self.get_user_centric_payload()
+    live_bq = self._live_bq_insights if isinstance(self._live_bq_insights, dict) else {}
+    live_fl = self._live_fleet_payload if isinstance(self._live_fleet_payload, dict) else {}
+    cand_proj = (
+        project_id
+        or live_bq.get('project_id')
+        or live_fl.get('project_id')
+        or os.environ.get('GOOGLE_CLOUD_PROJECT')
+        or 'project-maui'
+    )
+    proj = str(cand_proj) if str(cand_proj) != 'UNCONFIGURED-PROJECT' else 'project-maui'
+    mart_ds = ge_mart.mart_dataset_name()
+    curated_ds = ge_mart.curated_dataset_name()
+    otel_ds = (os.environ.get('VIBELIFT_OTEL_DATASET') or 'sre_triage_agent_telemetry').strip() or 'sre_triage_agent_telemetry'
+    analytics_ds = (os.environ.get('VIBELIFT_ANALYTICS_DATASET') or 'vibelift_analytics').strip() or 'vibelift_analytics'
+
     dml_tokens = ('drop ', 'delete ', 'update ', 'insert ', 'alter ', 'truncate ', 'grant ', ';')
     blocked_dml = any(tok in q_lower for tok in dml_tokens)
     safety_audit = {
@@ -1705,13 +1726,11 @@ class VibeLiftAlphaEvolveOptimizer:
         'blocked_dml_attempt': blocked_dml,
         'max_bytes_billed_cap': 104857600,
         'allowed_datasets': [
-            'project-maui.vibelift_mart',
-            'project-maui.ds_ge_curated_staging',
-            'project-maui.ds_ge_audit_raw',
-            'project-maui.sre_triage_agent_telemetry',
-            'project-maui.vibelift_analytics',
-            'project-maui.aive_logs',
-            'project-maui.billing_export',
+            f'{proj}.{mart_ds}',
+            f'{proj}.{curated_ds}',
+            f'{proj}.ds_ge_audit_raw',
+            f'{proj}.{otel_ds}',
+            f'{proj}.{analytics_ds}',
         ],
         'service_account_mode': 'READ_ONLY_BIGQUERY_DATA_VIEWER',
     }
@@ -1719,24 +1738,25 @@ class VibeLiftAlphaEvolveOptimizer:
     if any(w in q_lower for w in ('runaway', 'thinking', 'background', 'burn', 'loop')) and not blocked_dml:
       sql = (
           'SELECT\n'
-          '  agent_name,\n'
-          '  task_type,\n'
-          '  ROUND(AVG(thinking_tokens), 0) AS avg_thinking_tokens,\n'
-          '  ROUND(AVG(background_tokens), 0) AS avg_background_tokens,\n'
-          '  COUNTIF(thinking_tokens > 3000 OR background_tokens > 4000) AS runaway_turns\n'
-          'FROM `project-maui.aive_logs.agent_usage_log`\n'
-          'WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)\n'
+          '  COALESCE(agent_name, engine_key, \'unknown\') AS agent_name,\n'
+          '  turn_kind AS task_type,\n'
+          '  ROUND(AVG(reasoning_tokens), 0) AS avg_thinking_tokens,\n'
+          '  ROUND(AVG(output_tokens), 0) AS avg_output_tokens,\n'
+          '  COUNTIF(reasoning_tokens > 3000 OR total_tokens > 16000) AS runaway_turns\n'
+          f'FROM `{proj}.{mart_ds}.fct_turns`\n'
+          'WHERE event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)\n'
           'GROUP BY agent_name, task_type\n'
-          'ORDER BY avg_thinking_tokens DESC;'
+          'ORDER BY avg_thinking_tokens DESC\n'
+          'LIMIT 25'
       )
       alerts = as_list(uc.get('runaway_agent_alerts'))
       rows = [
           {
-              'agent_name': a['agent_name'],
-              'telemetry_signal': a['telemetry_signal'],
-              'baseline_burn': a['baseline_burn_per_1k_turns'],
-              'optimized_burn': a['optimized_burn_per_1k_turns'],
-              'status': a['status'],
+              'agent_name': a.get('agent_name') or a.get('runtime') or '—',
+              'telemetry_signal': a.get('telemetry_signal') or a.get('signal') or '—',
+              'baseline_burn': a.get('baseline_burn_per_1k_turns') or a.get('observed') or '—',
+              'optimized_burn': a.get('optimized_burn_per_1k_turns') or '—',
+              'status': a.get('status') or a.get('severity') or '—',
           }
           for a in alerts
       ]
@@ -1748,8 +1768,8 @@ class VibeLiftAlphaEvolveOptimizer:
           'columns': ['agent_name', 'telemetry_signal', 'baseline_burn', 'optimized_burn', 'status'],
           'rows': rows,
           'executive_summary': (
-              'Identified 3 runaway token & latency patterns across Reasoning Engine P95 wait, '
-              'Cloud Run 4xx retry cascades, and uncached Model Garden calls.'
+              f'Evaluated {len(rows)} runaway token & error rate alerts across {proj}.{mart_ds}.fct_turns '
+              'and Cloud Monitoring telemetry.'
           ),
       }
 
@@ -1765,12 +1785,11 @@ class VibeLiftAlphaEvolveOptimizer:
           '  duration_seconds,\n'
           '  total_tokens,\n'
           '  CAST(session_end AS STRING) AS session_end\n'
-          'FROM `project-maui.vibelift_mart.fct_sessions`\n'
+          f'FROM `{proj}.{mart_ds}.fct_sessions`\n'
           'WHERE session_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)\n'
           'ORDER BY session_end DESC\n'
-          'LIMIT 25;'
+          'LIMIT 25'
       )
-      live_bq = self._live_bq_insights if isinstance(self._live_bq_insights, dict) else {}
       sessions = list(live_bq.get('ge_sessions') or [])
       rows = [
           {
@@ -1787,7 +1806,7 @@ class VibeLiftAlphaEvolveOptimizer:
           for s in sessions
       ]
       return {
-          'question': q_clean or 'Show Gemini Enterprise conversation sessions from vibelift_mart.fct_sessions',
+          'question': q_clean or f'Show Gemini Enterprise conversation sessions from {mart_ds}.fct_sessions',
           'intent': 'GE_MART_SESSIONS_AND_DAILY',
           'generated_sql': sql,
           'sql_safety_audit': safety_audit,
@@ -1797,8 +1816,8 @@ class VibeLiftAlphaEvolveOptimizer:
           ],
           'rows': rows,
           'executive_summary': (
-              f'Queried {len(rows)} real conversation sessions from project-maui.vibelift_mart.fct_sessions '
-              '(built over ds_ge_curated_staging views with zero synthetic single-search session inflation).'
+              f'Queried {len(rows)} real conversation sessions from {proj}.{mart_ds}.fct_sessions '
+              f'(built over {curated_ds} views with zero synthetic single-search session inflation).'
           ),
       }
 
@@ -1810,12 +1829,12 @@ class VibeLiftAlphaEvolveOptimizer:
           '  COUNT(1) AS interactions_7d,\n'
           '  COUNT(DISTINCT session_id) AS sessions_7d,\n'
           '  SUM(total_tokens) AS total_tokens\n'
-          'FROM `project-maui.vibelift_mart.fct_turns`\n'
+          f'FROM `{proj}.{mart_ds}.fct_turns`\n'
           'WHERE event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)\n'
           '  AND user_email IS NOT NULL\n'
           'GROUP BY user_email, engine_key\n'
           'ORDER BY interactions_7d DESC\n'
-          'LIMIT 10;'
+          'LIMIT 10'
       )
       users = as_list(uc.get('power_users_ldap'))
       rows = [
@@ -1852,21 +1871,24 @@ class VibeLiftAlphaEvolveOptimizer:
           'rows': rows,
           'executive_summary': (
               f'Top Gemini Enterprise & GCP principals ({ldaps_str}) '
-              f'recorded {total_sess} observed sessions across project-maui telemetry.'
+              f'recorded {total_sess} observed sessions across {proj} telemetry.'
           ),
       }
 
     if any(w in q_lower for w in ('a2a', 'a2ui', 'layer', 'waterfall', 'otel', 'handoff')) and not blocked_dml:
       sql = (
           'SELECT\n'
-          '  layer_title,\n'
-          '  otel_metric_name,\n'
-          '  ROUND(AVG(baseline_value), 1) AS baseline_val,\n'
-          '  ROUND(AVG(current_value), 1) AS optimized_val,\n'
-          '  target_slo\n'
-          'FROM `project-maui.aive_logs.otel_5layer_parameter_snapshots`\n'
-          'WHERE layer_number IN (1, 2, 3, 4, 5)\n'
-          'ORDER BY layer_number ASC, weight_pct DESC;'
+          '  turn_source,\n'
+          '  turn_kind,\n'
+          '  COUNT(1) AS turns,\n'
+          '  COUNTIF(is_failed) AS failed_turns,\n'
+          '  SUM(input_tokens) AS input_tokens,\n'
+          '  SUM(output_tokens) AS output_tokens,\n'
+          '  SUM(tool_call_count) AS tool_calls\n'
+          f'FROM `{proj}.{mart_ds}.fct_turns`\n'
+          'WHERE event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)\n'
+          'GROUP BY turn_source, turn_kind\n'
+          'ORDER BY turns DESC'
       )
       catalog = self.get_otel_catalog_payload()
       layers = as_list(catalog.get('layers'))
@@ -1894,18 +1916,23 @@ class VibeLiftAlphaEvolveOptimizer:
           ),
       }
 
-    # Default: Cost & Cache ROI comparison across agents
+    # Default: Cost & Cache ROI / Daily Usage comparison across agents
     sql = (
         'SELECT\n'
-        '  agent_id,\n'
-        '  model,\n'
-        '  ROUND(AVG(naive_cost_per_1k_usd), 2) AS baseline_cost_1k_usd,\n'
-        '  ROUND(AVG(actual_cached_cost_per_1k_usd), 2) AS optimized_cost_1k_usd,\n'
-        '  ROUND(AVG(cache_hit_ratio_pct), 1) AS cache_hit_pct,\n'
-        '  SUM(monthly_savings_usd) AS monthly_savings_usd\n'
-        'FROM `project-maui.aive_logs.agent_finops_attribution`\n'
-        'GROUP BY agent_id, model\n'
-        'ORDER BY monthly_savings_usd DESC;'
+        '  engine_key,\n'
+        '  agent_name,\n'
+        '  model_name,\n'
+        '  SUM(interactions) AS interactions,\n'
+        '  SUM(sessions) AS sessions,\n'
+        '  SUM(input_tokens) AS input_tokens,\n'
+        '  SUM(cached_input_tokens) AS cached_input_tokens,\n'
+        '  SUM(output_tokens) AS output_tokens,\n'
+        '  SUM(reasoning_tokens) AS reasoning_tokens\n'
+        f'FROM `{proj}.{mart_ds}.agg_daily_usage`\n'
+        'WHERE event_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)\n'
+        'GROUP BY engine_key, agent_name, model_name\n'
+        'ORDER BY interactions DESC\n'
+        'LIMIT 25'
     )
     rows = []
     for profile in self._agents.values():

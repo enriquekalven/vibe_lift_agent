@@ -275,15 +275,15 @@ class GoogleCloudTelemetryService:
               'url': pub_url if name == (os.environ.get('K_SERVICE') or DEFAULT_SERVICE_NAME) else '',
               'region': self.region,
               'status': 'READY' if pub_url else 'UNKNOWN',
-              'active_revision': f'{name}-live',
+              'active_revision': f'{name}-live' if pub_url else '',
               'min_instances': 1,
               'max_instances': 10,
               'concurrency': 80,
-              'cpu_utilization_pct': 18.4,
-              'memory_utilization_pct': 42.1,
-              'p95_latency_ms': 186.6,
-              'cold_starts_1h': 0,
-              'monthly_cost_usd': 18,
+              'cpu_utilization_pct': None,
+              'memory_utilization_pct': None,
+              'p95_latency_ms': None,
+              'cold_starts_1h': None,
+              'monthly_cost_usd': None,
           }
           for name in get_monitored_service_names()
       ]
@@ -300,11 +300,11 @@ class GoogleCloudTelemetryService:
           'min_instances': 1,
           'max_instances': 10,
           'concurrency': 80,
-          'cpu_utilization_pct': 0.0,
-          'memory_utilization_pct': 0.0,
-          'p95_latency_ms': 0.0,
-          'cold_starts_1h': 0,
-          'monthly_cost_usd': 0,
+          'cpu_utilization_pct': None,
+          'memory_utilization_pct': None,
+          'p95_latency_ms': None,
+          'cold_starts_1h': None,
+          'monthly_cost_usd': None,
       }
       if token and self.project_id not in (UNCONFIGURED_PROJECT_ID, 'test-project'):
         api_url = (
@@ -334,7 +334,8 @@ class GoogleCloudTelemetryService:
           logger.debug('Cloud Run Admin API describe failed for %s: %s', name, exc)
       discovered.append(entry)
 
-    # Enrich with real request & latency metrics from BigQuery vibelift_analytics.run_googleapis_com_requests_*
+    # Enrich with real request & latency metrics from BigQuery <analytics_ds>.run_googleapis_com_requests_*
+    analytics_ds = (os.environ.get('VIBELIFT_ANALYTICS_DATASET') or 'vibelift_analytics').strip() or 'vibelift_analytics'
     bq_rev_rows = self._query_bigquery_rest(f"""
       SELECT
         resource.labels.service_name AS service_name,
@@ -342,7 +343,7 @@ class GoogleCloudTelemetryService:
         COUNT(*) AS req_count,
         ROUND(AVG(httpRequest.latency * 1000), 1) AS avg_latency_ms,
         ROUND(APPROX_QUANTILES(httpRequest.latency * 1000, 100)[OFFSET(95)], 1) AS p95_latency_ms
-      FROM `{self.project_id}.vibelift_analytics.run_googleapis_com_requests_*`
+      FROM `{self.project_id}.{analytics_ds}.run_googleapis_com_requests_*`
       GROUP BY 1
     """, timeout_s=5.0)
     rev_by_svc = {str(r.get('service_name')): r for r in bq_rev_rows}
@@ -350,13 +351,13 @@ class GoogleCloudTelemetryService:
       sname = str(d.get('service_name'))
       if sname in rev_by_svc:
         rinfo = rev_by_svc[sname]
-        if not d.get('active_revision'):
-          d['active_revision'] = str(rinfo.get('latest_rev') or f'{sname}-00012')
-        d['p95_latency_ms'] = float(rinfo.get('p95_latency_ms') or rinfo.get('avg_latency_ms') or 0.0)
+        if not d.get('active_revision') and rinfo.get('latest_rev'):
+          d['active_revision'] = str(rinfo.get('latest_rev'))
+        lat = rinfo.get('p95_latency_ms') if rinfo.get('p95_latency_ms') is not None else rinfo.get('avg_latency_ms')
+        d['p95_latency_ms'] = float(lat) if lat is not None else None
         d['requests_observed'] = int(rinfo.get('req_count') or 0)
-        d['cpu_utilization_pct'] = 18.4
-        d['memory_utilization_pct'] = 41.2
-        d['monthly_cost_usd'] = 18
+        # CPU utilization, memory utilization, and per-service monthly cost are not present
+        # in Cloud Run request logs; keep them None rather than fabricating numbers.
 
     self._cached_services = discovered
     return discovered
@@ -705,10 +706,18 @@ class GoogleCloudTelemetryService:
       return self._cached_bq_insights
 
     token = self._get_access_token()
-    if not token:
+    if not token or self.project_id == UNCONFIGURED_PROJECT_ID:
       return self._cached_bq_insights
 
     p = self.project_id
+    try:
+      ge_mart.mart_ref(p)
+    except ValueError:
+      return self._cached_bq_insights
+
+    otel_ds = (os.environ.get('VIBELIFT_OTEL_DATASET') or 'sre_triage_agent_telemetry').strip() or 'sre_triage_agent_telemetry'
+    analytics_ds = (os.environ.get('VIBELIFT_ANALYTICS_DATASET') or 'vibelift_analytics').strip() or 'vibelift_analytics'
+
     queries = {
         # Gemini Enterprise: VibeLift's curated views and mart (provision_ge_mart.py).
         'ge_audit_principals': ge_mart.build_audit_principals_sql(p, hours=eff_hours),
@@ -733,7 +742,7 @@ class GoogleCloudTelemetryService:
             COALESCE(labels.gen_ai_system_instructions_ref, '') AS sys_gcs_uri,
             COALESCE(labels.gen_ai_tool_definitions, '[]') AS tool_defs_json,
             resource.labels.reasoning_engine_id AS engine_id
-          FROM `{p}.sre_triage_agent_telemetry.gen_ai_client_inference_operation_details`
+          FROM `{p}.{otel_ds}.gen_ai_client_inference_operation_details`
           WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {eff_hours} HOUR)
           ORDER BY timestamp DESC
           LIMIT 2000
@@ -745,7 +754,7 @@ class GoogleCloudTelemetryService:
             COUNT(*) AS req_count,
             ROUND(AVG(httpRequest.latency * 1000), 1) AS avg_latency_ms,
             ROUND(MAX(httpRequest.latency * 1000), 1) AS max_latency_ms
-          FROM `{p}.vibelift_analytics.run_googleapis_com_requests_*`
+          FROM `{p}.{analytics_ds}.run_googleapis_com_requests_*`
           WHERE _TABLE_SUFFIX >= FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE(), INTERVAL 8 DAY))
             AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
           GROUP BY 1, 2
@@ -766,12 +775,12 @@ class GoogleCloudTelemetryService:
             GROUP BY 1, 2, 3
             UNION ALL
             SELECT
-              'vibelift_analytics' AS dataset,
+              '{analytics_ds}' AS dataset,
               protopayload_auditlog.authenticationInfo.principalEmail AS principal,
               protopayload_auditlog.methodName AS method_name,
               COUNT(*) AS call_count,
               CAST(MAX(timestamp) AS STRING) AS last_seen
-            FROM `{p}.vibelift_analytics.cloudaudit_googleapis_com_data_access_*`
+            FROM `{p}.{analytics_ds}.cloudaudit_googleapis_com_data_access_*`
             WHERE protopayload_auditlog.authenticationInfo.principalEmail IS NOT NULL
               AND _TABLE_SUFFIX >= FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE(), INTERVAL 8 DAY))
               AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
@@ -1075,6 +1084,55 @@ class GoogleCloudTelemetryService:
           'status': 'OTel span (BigQuery)',
       })
 
+    # Add real tool calls observed in vibelift_mart.fct_turns (tool_names / tool_call_count)
+    mart_tool_stats: dict[str, dict[str, Any]] = {}
+    for r in ge_recent:
+      raw_names = str(r.get('tool_names') or '').strip()
+      if not raw_names:
+        continue
+      for tname in [x.strip() for x in raw_names.split(',') if x.strip()]:
+        st_tool = mart_tool_stats.setdefault(tname, {
+            'calls': 0,
+            'in_tok': 0,
+            'out_tok': 0,
+            'agent_name': str(r.get('agent_name') or r.get('engine_key') or 'Gemini Enterprise Agent'),
+            'model_name': r.get('model_name'),
+            'ts': str(r.get('ts') or 'Live BQ'),
+        })
+        st_tool['calls'] += max(1, int(ge_mart.int_or_none(r.get('tool_call_count')) or 1))
+        st_tool['in_tok'] += int(ge_mart.int_or_none(r.get('input_tokens')) or 0)
+        st_tool['out_tok'] += int(ge_mart.int_or_none(r.get('output_tokens')) or 0)
+
+    for tname, tstat in sorted(mart_tool_stats.items(), key=lambda kv: -kv[1]['calls']):
+      live_skills_mcp.append({
+          'resource_name': f'ge_tool://{tname}',
+          'kind': 'Gemini Enterprise Tool (vibelift_mart)',
+          'attached_agent': tstat['agent_name'],
+          'calls_24h': tstat['calls'],
+          'prompt_tokens_m': round(tstat['in_tok'] / 1_000_000.0, 4) if tstat['in_tok'] > 0 else None,
+          'cache_hit_pct': None,
+          'context_bloat_pct': None,
+          'optimization_applied': f"Observed in {mart}.fct_turns ({tstat['calls']} calls)",
+          'monthly_saved_usd': None,
+      })
+      live_decorator_events.append({
+          'timestamp': tstat['ts'],
+          'agent_name': tstat['agent_name'],
+          'handler_name': tname,
+          'protocol': 'Gemini Enterprise Tool Span (vibelift_mart.fct_turns)',
+          'model': tstat['model_name'],
+          'latency_ms': None,
+          'prompt_tokens': tstat['in_tok'] or None,
+          'cached_tokens': None,
+          'output_tokens': tstat['out_tok'] or None,
+          'cache_hit_pct': None,
+          'context_bloat_pct': None,
+          'idle_ratio_pct': None,
+          'skill_or_mcp': f'ge_tool://{tname}',
+          'user_cohort': f'{mart}.fct_turns (BigQuery)',
+          'status': 'Mart turn tool call (BigQuery)',
+      })
+
     # Add real Discovery Engine methods from ds_ge_audit_raw
     method_totals: dict[str, int] = {}
     for r in ge_audit:
@@ -1111,7 +1169,7 @@ class GoogleCloudTelemetryService:
           'status': 'Audit log (BigQuery)',
       })
 
-    # Add Cloud Run request aggregates from vibelift_analytics.run_googleapis_com_requests_*
+    # Add Cloud Run request aggregates from <analytics_ds>.run_googleapis_com_requests_*
     total_cr_calls = sum(int(r.get('req_count') or 0) for r in cr_reqs)
     if total_cr_calls > 0:
       live_skills_mcp.append({
@@ -1122,7 +1180,7 @@ class GoogleCloudTelemetryService:
           'prompt_tokens_m': None,
           'cache_hit_pct': None,
           'context_bloat_pct': None,
-          'optimization_applied': f'Request log count across {len({r.get("revision") for r in cr_reqs})} Cloud Run revisions (vibelift_analytics)',
+          'optimization_applied': f'Request log count across {len({r.get("revision") for r in cr_reqs})} Cloud Run revisions ({analytics_ds})',
           'monthly_saved_usd': None,
       })
 
@@ -1134,8 +1192,8 @@ class GoogleCloudTelemetryService:
             f'{mart}.fct_turns',
             f'{mart}.fct_sessions',
             f'{mart}.agg_daily_usage',
-            f'{p}.sre_triage_agent_telemetry.gen_ai_client_inference_operation_details',
-            f'{p}.vibelift_analytics.run_googleapis_com_requests_*',
+            f'{p}.{otel_ds}.gen_ai_client_inference_operation_details',
+            f'{p}.{analytics_ds}.run_googleapis_com_requests_*',
         ],
         'ge_mart_dataset': mart,
         'ge_curated_dataset': curated,
@@ -1184,6 +1242,8 @@ class GoogleCloudTelemetryService:
     bq_fleet = self.fetch_bigquery_fleet_summary()
 
     summary_stats = telemetry.summarize_log_stream(live_turns)
+    otel_ds = (os.environ.get('VIBELIFT_OTEL_DATASET') or 'sre_triage_agent_telemetry').strip() or 'sre_triage_agent_telemetry'
+    analytics_ds = (os.environ.get('VIBELIFT_ANALYTICS_DATASET') or 'vibelift_analytics').strip() or 'vibelift_analytics'
 
     return {
         'project_id': self.project_id,
@@ -1194,10 +1254,10 @@ class GoogleCloudTelemetryService:
         'services': services,
         'cloud_run_services': services,
         'bigquery_datasets': [
-            'vibelift_analytics',
-            ge_mart.curated_ref(self.project_id).split('.')[1],
-            ge_mart.mart_ref(self.project_id).split('.')[1],
-            'sre_triage_agent_telemetry',
+            analytics_ds,
+            ge_mart.curated_dataset_name(),
+            ge_mart.mart_dataset_name(),
+            otel_ds,
         ],
         'bigquery_fleet_summary': bq_fleet,
         'gemini_enterprise_support_events': support_events,
