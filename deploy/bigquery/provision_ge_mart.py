@@ -51,7 +51,7 @@ DEFAULT_AUDIT_LAG_S = 300
 DEFAULT_AUDIT_LEAD_S = 30
 JOB_LABELS = {'datacloud': 'jetski', 'app': 'vibelift'}
 
-_PROJECT_RE = re.compile(r'^[a-z][a-z0-9\-]{4,61}[a-z0-9]$')
+_PROJECT_RE = re.compile(r'^(?:[a-z][a-z0-9\-]{1,61}[a-z0-9]\.[a-z]{2,}:)?[a-z][a-z0-9\-]{4,61}[a-z0-9]$')
 _DATASET_RE = re.compile(r'^[A-Za-z0-9_]{1,1024}$')
 _TABLE_RE = re.compile(r'^[A-Za-z0-9_\-]{1,1024}$')
 _PLACEHOLDER_RE = re.compile(r'\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}')

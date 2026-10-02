@@ -26,7 +26,7 @@ DEFAULT_MART_DATASET = 'vibelift_mart'
 # matches the original reference deployment; set VIBELIFT_OTEL_DATASET to your own dataset.
 DEFAULT_OTEL_DATASET = 'sre_triage_agent_telemetry'
 
-_PROJECT_RE = re.compile(r'^[a-z][a-z0-9\-]{4,61}[a-z0-9]$')
+_PROJECT_RE = re.compile(r'^(?:[a-z][a-z0-9\-]{1,61}[a-z0-9]\.[a-z]{2,}:)?[a-z][a-z0-9\-]{4,61}[a-z0-9]$')
 _DATASET_RE = re.compile(r'^[A-Za-z0-9_]{1,1024}$')
 
 # Turn statuses that are not failures (see fct_turns.is_failed).
@@ -99,6 +99,7 @@ def build_refresh_fct_turns_ddl(project_id: str) -> str:
 
 def build_support_turns_sql(project_id: str, hours: int = 168, limit: int = 15) -> str:
   """Recent turns, actionable issues first (failures, quota, permission, guardrail blocks)."""
+  h = _clamp(hours, 1, 24 * 365)
   return f"""
     SELECT
       turn_id, turn_source, turn_kind, CAST(event_timestamp AS STRING) AS ts, trace_id, session_id,
@@ -106,7 +107,8 @@ def build_support_turns_sql(project_id: str, hours: int = 168, limit: int = 15) 
       status_code, status_message, error_reason, audit_match_method, is_guardrail_blocked,
       guardrail_categories
     FROM `{mart_ref(project_id)}.fct_turns`
-    WHERE event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {_clamp(hours, 1, 24 * 365)} HOUR)
+    WHERE event_date >= DATE(TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {h} HOUR))
+      AND event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {h} HOUR)
     ORDER BY is_actionable_issue DESC, event_timestamp DESC
     LIMIT {_clamp(limit, 1, 500)}
   """
@@ -114,6 +116,7 @@ def build_support_turns_sql(project_id: str, hours: int = 168, limit: int = 15) 
 
 def build_recent_turns_sql(project_id: str, hours: int = 168, limit: int = 20, tokens_only: bool = False) -> str:
   """Recent turns with their measured usage (tokens NULL when not logged)."""
+  h = _clamp(hours, 1, 24 * 365)
   where_tokens = 'AND total_tokens IS NOT NULL' if tokens_only else ''
   return f"""
     SELECT
@@ -122,7 +125,8 @@ def build_recent_turns_sql(project_id: str, hours: int = 168, limit: int = 20, t
       input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, total_tokens, llm_calls,
       tool_call_count, tool_names
     FROM `{mart_ref(project_id)}.fct_turns`
-    WHERE event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {_clamp(hours, 1, 24 * 365)} HOUR)
+    WHERE event_date >= DATE(TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {h} HOUR))
+      AND event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {h} HOUR)
       AND turn_kind != 'WIDGET_ACTION'
       {where_tokens}
     ORDER BY event_timestamp DESC
@@ -132,6 +136,7 @@ def build_recent_turns_sql(project_id: str, hours: int = 168, limit: int = 20, t
 
 def build_user_engine_rollup_sql(project_id: str, hours: int = 168) -> str:
   """Per user and GE app: interactions, real sessions and measured tokens."""
+  h = _clamp(hours, 1, 24 * 365)
   return f"""
     SELECT
       user_email,
@@ -145,7 +150,8 @@ def build_user_engine_rollup_sql(project_id: str, hours: int = 168) -> str:
       COUNTIF(is_failed) AS failed_turns,
       CAST(MAX(event_timestamp) AS STRING) AS last_seen
     FROM `{mart_ref(project_id)}.fct_turns`
-    WHERE event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {_clamp(hours, 1, 24 * 365)} HOUR)
+    WHERE event_date >= DATE(TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {h} HOUR))
+      AND event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {h} HOUR)
       AND user_email IS NOT NULL
     GROUP BY user_email, engine_key
     ORDER BY interactions DESC

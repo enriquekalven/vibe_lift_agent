@@ -1490,6 +1490,8 @@ class GeminiEnterpriseFleetService:
         url += f'&pageToken={urllib.parse.quote(token)}'
       page = self._api.call('GET', url)
       for svc in page.get('services', []):
+        if project == self.project_id:
+          self._record_project_alias(svc.get('name'))
         info = classify_cloud_run_service(svc, project)
         if info['service_name']:
           catalog[info['service_name']] = info
@@ -1788,6 +1790,11 @@ class GeminiEnterpriseFleetService:
     jobs: dict[tuple[str, ...], Any] = {}
     unreg_jobs: dict[tuple[str, ...], Any] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=14) as pool:
+      if self.discover_unregistered:
+        unreg_jobs[('discover_re', self.project_id)] = pool.submit(self._discover_reasoning_engines, self.project_id)
+        unreg_jobs[('run_catalog', self.project_id)] = pool.submit(self._cloud_run_services_catalog, self.project_id)
+        unreg_jobs[('discover_gke', self.project_id)] = pool.submit(self._discover_gke_workloads, self.project_id, window_s)
+
       for project, ids in engines_by_project.items():
         id_list = sorted(ids)
         jobs[('re_requests', project)] = pool.submit(self._requests_by, project, f'{re_metric}/request_count', 'reasoning_engine_id', id_list, window_s)
@@ -1808,16 +1815,17 @@ class GeminiEnterpriseFleetService:
       run_projects = {self._canonical_project(a['backend'].get('project')) for a in agents
                       if a['backend'].get('kind') == 'cloud_run' and a['backend'].get('service')}
       for project in sorted(run_projects):
-        jobs[('run_inventory', project)] = pool.submit(self._cloud_run_services, project)
+        if self.discover_unregistered and project == self.project_id and ('run_catalog', self.project_id) in unreg_jobs:
+          cat_fut = unreg_jobs[('run_catalog', self.project_id)]
+          jobs[('run_inventory', project)] = pool.submit(lambda f=cat_fut: set((f.result() or {}).keys()))
+        else:
+          jobs[('run_inventory', project)] = pool.submit(self._cloud_run_services, project)
       jobs[('model_usage',)] = pool.submit(self._model_usage, window_s)
       jobs[('model_usage_prev',)] = pool.submit(self._model_usage, window_s, window_s)
       jobs[('ge_traffic',)] = pool.submit(self._ge_traffic, window_s)
       jobs[('ge_assistant_tokens',)] = pool.submit(self._ge_assistant_usage, window_s)
 
       if self.discover_unregistered:
-        unreg_jobs[('discover_re', self.project_id)] = pool.submit(self._discover_reasoning_engines, self.project_id)
-        unreg_jobs[('run_catalog', self.project_id)] = pool.submit(self._cloud_run_services_catalog, self.project_id)
-        unreg_jobs[('discover_gke', self.project_id)] = pool.submit(self._discover_gke_workloads, self.project_id, window_s)
         if ('re_trace_tokens', self.project_id) not in jobs:
           unreg_jobs[('unreg_trace_tokens', self.project_id)] = pool.submit(
               self._trace_usage, self.project_id, [], window_s
@@ -1911,6 +1919,10 @@ class GeminiEnterpriseFleetService:
     if aliases:
       for key, val in list(results.items()):
         if len(key) == 2 and key[1] == self.project_id:
+          for alias in aliases:
+            results.setdefault((key[0], alias), val)
+        elif len(key) == 2 and key[1] in aliases:
+          results.setdefault((key[0], self.project_id), val)
           for alias in aliases:
             results.setdefault((key[0], alias), val)
 

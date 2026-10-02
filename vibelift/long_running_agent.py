@@ -133,12 +133,28 @@ class LongRunningVibeLiftAgent:
         status_code=200,
     )
 
+  def _trim_to_max_turns(self) -> None:
+    """Enforces self.max_turns on _turns and _step_descriptions to prevent unbounded growth."""
+    if self.max_turns and self.max_turns > 0:
+      if len(self._turns) > self.max_turns:
+        self._turns = self._turns[-self.max_turns :]
+      if len(self._step_descriptions) > self.max_turns:
+        self._step_descriptions = self._step_descriptions[: self.max_turns]
+
   def ingest_gcp_cloud_turns(
       self,
       cloud_turns: Sequence[telemetry.TurnUsageLog],
   ) -> None:
     """Ingests live turns fetched from Google Cloud Logging and Gemini Enterprise."""
+    seen = {
+        (t.timestamp, t.agent_name, t.turn_index, t.prompt_prefix_hash)
+        for t in self._turns
+    }
     for turn in cloud_turns:
+      key = (turn.timestamp, turn.agent_name, turn.turn_index, turn.prompt_prefix_hash)
+      if key in seen:
+        continue
+      seen.add(key)
       self._turns.append(turn)
       naive_usd, actual_usd, saved_usd = turn.compute_costs()
       self._step_descriptions.insert(
@@ -159,6 +175,7 @@ class LongRunningVibeLiftAgent:
               'breakpoint_reason': turn.cache_breakpoint_reason,
           },
       )
+    self._trim_to_max_turns()
 
   def _append_turn(
       self,
@@ -220,4 +237,6 @@ class LongRunningVibeLiftAgent:
             'breakpoint_reason': breakpoint_reason,
         },
     )
+    self._trim_to_max_turns()
     return log_entry
+

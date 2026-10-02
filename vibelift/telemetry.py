@@ -176,7 +176,12 @@ class TurnUsageLog:
 
   def compute_costs(self) -> tuple[float, float, float]:
     """Computes (naive_raw_usd, actual_log_cached_usd, net_savings_usd)."""
-    card = RATE_CARDS.get(self.model, RATE_CARDS['gemini-3.1-flash'])
+    card = (
+        RATE_CARDS.get(self.model)
+        or RATE_CARDS.get('gemini-3.1-flash')
+        or RATE_CARDS.get('gemini-2.5-flash')
+        or next(iter(RATE_CARDS.values()))
+    )
     total_out = self.candidates_token_count + self.thoughts_token_count
     naive_in_usd = (self.prompt_token_count / 1_000_000.0) * (
         card.input_per_million_usd

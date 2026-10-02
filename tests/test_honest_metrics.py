@@ -344,6 +344,103 @@ class BlindspotRemediationTest(unittest.TestCase):
     with mock.patch.dict(os.environ, {'ALLOWED_ORIGINS': 'https://a.example.com, https://b.example.com'}):
       self.assertEqual(server.resolve_allowed_origins(), ['https://a.example.com', 'https://b.example.com'])
 
+  def test_cold_start_live_gcp_mode_detected_in_validator(self):
+    from vibelift import validator
+    cold_state = {
+        'gcp_project': 'live-customer-proj',
+        'live_data': True,
+        'user_centric': {
+            'live': True,
+            'collection_mode': 'LIVE GCP: BigQuery principals still loading (no demo data shown)',
+            'power_users_ldap': [],
+        },
+    }
+    self.assertTrue(validator._is_live_gcp_mode(cold_state))
+    # Even if live_data is omitted, the 'LIVE GCP:' prefix is recognized
+    self.assertTrue(validator._is_live_gcp_mode({
+        'gcp_project': 'live-customer-proj',
+        'user_centric': {'collection_mode': 'LIVE GCP: BigQuery principals still loading (no demo data shown)'},
+    }))
+
+  def test_trigger_alpha_evolve_returns_newest_action_and_telemetry_hours(self):
+    import json
+
+    from app import agent as adk_agent
+    from vibelift import server
+    ctrl = server._global_controller
+    ctrl.reset()
+    res = json.loads(adk_agent.trigger_alpha_evolve_cycle('it_service_desk'))
+    active = ctrl.optimizer.active_agent
+    self.assertEqual(res['latest_action'], active.actions[0].to_dict())
+    self.assertNotEqual(res['latest_action'], active.actions[-1].to_dict())
+
+    with mock.patch.object(ctrl.gcp_telemetry, 'fetch_live_cloud_turns', return_value=[]) as m_turns:
+      payload = json.loads(adk_agent.query_gcp_telemetry(hours_ago=72))
+      self.assertEqual(payload['window_hours'], 72)
+      m_turns.assert_called_once_with(hours_ago=72, max_results=15)
+
+  def test_long_running_agent_enforces_max_turns_and_deduplicates_cloud_turns(self):
+    from vibelift import long_running_agent, telemetry
+    opt = alpha_evolve_optimizer.VibeLiftAlphaEvolveOptimizer()
+    agent = long_running_agent.LongRunningVibeLiftAgent(opt, max_turns=10)
+    for _ in range(15):
+      agent.step_turn()
+    self.assertEqual(len(agent.turns), 10)
+    self.assertEqual(len(agent.step_descriptions), 10)
+
+    cloud_turn = telemetry.TurnUsageLog(
+        timestamp='2026-09-30T12:00:00Z',
+        agent_name='live-agent',
+        model='gemini-2.5-flash',
+        turn_index=1,
+        prompt_prefix_hash='hash123456',
+        cache_breakpoint_line=None,
+        cache_breakpoint_reason='Mart turn',
+        prompt_token_count=4000,
+        cached_content_token_count=3000,
+        cache_creation_input_tokens=0,
+        uncached_input_tokens=1000,
+        candidates_token_count=200,
+        thoughts_token_count=50,
+        status_code=200,
+        tool_called='search',
+        evolution_generation=0,
+    )
+    agent.ingest_gcp_cloud_turns([cloud_turn, cloud_turn])
+    matching = [t for t in agent.turns if t.prompt_prefix_hash == 'hash123456']
+    self.assertEqual(len(matching), 1)
+    self.assertLessEqual(len(agent.turns), 10)
+
+  def test_domain_scoped_project_ids_and_fct_turns_partition_pruning(self):
+    from vibelift import billing_export, ge_mart
+    domain_proj = 'google.com:enterprise-prod-01'
+    self.assertEqual(ge_mart.mart_ref(domain_proj), f'{domain_proj}.vibelift_mart')
+    sql_support = ge_mart.build_support_turns_sql(domain_proj, hours=48)
+    sql_recent = ge_mart.build_recent_turns_sql(domain_proj, hours=48)
+    sql_rollup = ge_mart.build_user_engine_rollup_sql(domain_proj, hours=48)
+    for sql in (sql_support, sql_recent, sql_rollup):
+      self.assertIn('event_date >= DATE(TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 48 HOUR))', sql)
+    bill_sql = billing_export.build_billing_sql(
+        f'{domain_proj}.billing_ds.gcp_billing_export_v1_123', domain_proj, window_days=30
+    )
+    self.assertIn(domain_proj, bill_sql)
+
+  def test_refresh_ge_mart_invalidates_all_caches_and_bq_rest_safeguards(self):
+    from vibelift import gcp_telemetry
+    svc = gcp_telemetry.GoogleCloudTelemetryService(project_id='example-project', region='us-central1')
+    svc._cli_token = 'tok'
+    svc._cli_token_ts = 1e12
+    svc._cached_support_events = [{'id': 'old'}]
+    svc._cached_live_turns = []
+    svc._cached_bq_summary = {'total_turns': 5}
+    svc._cached_bq_insights = {'cached': True}
+    with mock.patch.object(svc, '_query_bigquery_rest', side_effect=[[], [{'row_count': '10', 'refreshed_at': 'now'}]]):
+      svc.refresh_ge_mart_turns()
+    self.assertIsNone(svc._cached_support_events)
+    self.assertIsNone(svc._cached_live_turns)
+    self.assertIsNone(svc._cached_bq_summary)
+    self.assertIsNone(svc._cached_bq_insights)
+
 
 if __name__ == '__main__':
   unittest.main()

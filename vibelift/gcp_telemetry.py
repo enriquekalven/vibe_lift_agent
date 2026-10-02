@@ -154,6 +154,9 @@ class GoogleCloudTelemetryService:
     self._cached_services: list[dict[str, Any]] | None = None
     self._cached_support_events: list[dict[str, Any]] | None = None
     self._cached_live_turns: list[telemetry.TurnUsageLog] | None = None
+    self._cached_bq_summary: dict[str, Any] | None = None
+    self._cached_bq_summary_ts: float = 0.0
+    self._cached_bq_summary_hours: int = 168
     self._cached_bq_insights: dict[str, Any] | None = None
     self._cached_bq_insights_ts: float = 0.0
     self._cli_token: str | None = None
@@ -229,12 +232,16 @@ class GoogleCloudTelemetryService:
     if not token:
       return []
     url = f'https://bigquery.googleapis.com/bigquery/v2/projects/{self.project_id}/queries'
-    payload = {
+    payload: dict[str, Any] = {
         'query': sql,
         'useLegacySql': False,
         'timeoutMs': int(timeout_s * 1000),
         'labels': {'datacloud': 'jetski'},
     }
+    if not sql.lstrip().upper().startswith(('CREATE ', 'DROP ', 'ALTER ')):
+      max_bytes = os.environ.get('VIBELIFT_BQ_MAX_BYTES_BILLED', str(10 * 1024 * 1024 * 1024)).strip()
+      if max_bytes.isdigit() and int(max_bytes) > 0:
+        payload['maximumBytesBilled'] = max_bytes
     try:
       req = urllib.request.Request(
           url,
@@ -248,7 +255,9 @@ class GoogleCloudTelemetryService:
       )
       with urllib.request.urlopen(req, timeout=timeout_s + 1.0) as resp:
         res = json.loads(resp.read().decode('utf-8'))
-      if not res or 'rows' not in res:
+      if not res or res.get('jobComplete') is False or 'rows' not in res:
+        if res and res.get('jobComplete') is False:
+          logger.debug('BigQuery REST query timed out before jobComplete (%s)', sql[:60])
         return []
       fields = [f.get('name', f'col_{i}') for i, f in enumerate(res.get('schema', {}).get('fields', []))]
       out: list[dict[str, Any]] = []
@@ -362,6 +371,8 @@ class GoogleCloudTelemetryService:
         ROUND(AVG(httpRequest.latency * 1000), 1) AS avg_latency_ms,
         ROUND(APPROX_QUANTILES(httpRequest.latency * 1000, 100)[OFFSET(95)], 1) AS p95_latency_ms
       FROM `{self.project_id}.{analytics_ds}.run_googleapis_com_requests_*`
+      WHERE _TABLE_SUFFIX >= FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY))
+        AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
       GROUP BY 1
     """, timeout_s=5.0)
     rev_by_svc = {str(r.get('service_name')): r for r in bq_rev_rows}
@@ -413,13 +424,29 @@ class GoogleCloudTelemetryService:
     self._cached_support_events = events
     return events
 
-  def fetch_bigquery_fleet_summary(self, hours_ago: int = 168) -> dict[str, Any] | None:
+  def fetch_bigquery_fleet_summary(
+      self,
+      hours_ago: int = 168,
+      force_refresh: bool = False,
+  ) -> dict[str, Any] | None:
     """Per agent/model usage from vibelift_mart.agg_daily_usage (tokens None when not logged).
 
     Spend is not modelled here: billed cost comes only from the Cloud Billing export.
     """
+    import time
+
+    eff_hours = max(1, int(hours_ago))
+    now_mono = time.monotonic()
+    if (
+        self._cached_bq_summary is not None
+        and not force_refresh
+        and getattr(self, '_cached_bq_summary_hours', 168) == eff_hours
+        and (now_mono - getattr(self, '_cached_bq_summary_ts', 0.0)) < 60.0
+    ):
+      return self._cached_bq_summary
+
     try:
-      sql = ge_mart.build_daily_usage_sql(self.project_id, days=max(1, int(hours_ago) // 24))
+      sql = ge_mart.build_daily_usage_sql(self.project_id, days=max(1, eff_hours // 24))
     except ValueError:
       return None
     rows = [ge_mart.daily_usage_from_row(r) for r in self._query_bigquery_rest(sql, timeout_s=6.0)]
@@ -456,7 +483,7 @@ class GoogleCloudTelemetryService:
     cached_vals = [g['cached_tokens'] for g in breakdown if g['cached_tokens'] is not None]
     total_prompts = sum(prompts) if prompts else None  # type: ignore[arg-type]
     total_cached = sum(cached_vals) if cached_vals else None  # type: ignore[arg-type]
-    return {
+    summary = {
         'source': f'BigQuery ({ge_mart.mart_ref(self.project_id)}.agg_daily_usage)',
         'fleet_breakdown': breakdown,
         'total_turns': sum(int(g['total_turns']) for g in breakdown),  # type: ignore[arg-type]
@@ -469,6 +496,10 @@ class GoogleCloudTelemetryService:
         'total_actual_spend_usd': None,
         'total_finops_savings_usd': None,
     }
+    self._cached_bq_summary = summary
+    self._cached_bq_summary_ts = now_mono
+    self._cached_bq_summary_hours = eff_hours
+    return summary
 
   def fetch_live_cloud_turns(
       self,
@@ -677,7 +708,9 @@ class GoogleCloudTelemetryService:
     self._cached_bq_insights = None
     self._cached_bq_insights_ts = 0.0
     self._cached_bq_summary = None
-    self._cached_ge_support_events = None
+    self._cached_bq_summary_ts = 0.0
+    self._cached_support_events = None
+    self._cached_live_turns = None
     row = rows[0] if rows else {}
     return {
         'status': 'REFRESHED',
@@ -1389,12 +1422,13 @@ class GoogleCloudTelemetryService:
     self._cached_bq_insights_hours = eff_hours
     return insights
 
-  def get_telemetry_summary_payload(self) -> dict[str, Any]:
+  def get_telemetry_summary_payload(self, hours_ago: int = 48) -> dict[str, Any]:
     """Aggregates project info, deployed services, BigQuery triage, and Cloud Logging turns."""
+    eff_hours = max(1, int(hours_ago))
     services = self.list_cloud_run_agent_services()
     support_events = self.fetch_gemini_enterprise_support_telemetry(limit=10)
-    live_turns = self.fetch_live_cloud_turns(max_results=15)
-    bq_fleet = self.fetch_bigquery_fleet_summary()
+    live_turns = self.fetch_live_cloud_turns(hours_ago=eff_hours, max_results=15)
+    bq_fleet = self.fetch_bigquery_fleet_summary(hours_ago=max(168, eff_hours))
 
     summary_stats = telemetry.summarize_log_stream(live_turns)
     otel_ds = ge_mart.otel_dataset_name()
@@ -1403,6 +1437,7 @@ class GoogleCloudTelemetryService:
     return {
         'project_id': self.project_id,
         'region': self.region,
+        'window_hours': eff_hours,
         'provider': 'Google Cloud Platform (BigQuery + Cloud Run + Cloud Logging)',
         'services_count': len(services),
         'cloud_run_agent_count': len(services),
@@ -1422,9 +1457,9 @@ class GoogleCloudTelemetryService:
         'timestamp_utc': datetime.datetime.now(datetime.UTC).isoformat(),
     }
 
-  def get_cloud_telemetry_summary(self) -> dict[str, Any]:
+  def get_cloud_telemetry_summary(self, hours_ago: int = 48) -> dict[str, Any]:
     """Alias for get_telemetry_summary_payload."""
-    return self.get_telemetry_summary_payload()
+    return self.get_telemetry_summary_payload(hours_ago=hours_ago)
 
 
 def get_gcp_telemetry_service(

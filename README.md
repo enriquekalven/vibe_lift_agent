@@ -97,6 +97,9 @@ vibe_lift_agent/
 │   ├── finops.py                # Live token economics, spend drift, what-if projections
 │   ├── billing_export.py        # Cloud Billing export (BigQuery) reader
 │   ├── gcp_telemetry.py         # Cloud Run, Logging and BigQuery collectors
+│   ├── ge_mart.py               # BigQuery vibelift_mart SQL builders and readers
+│   ├── prompt_xray.py           # Character-level Prompt Cache X-Ray & cache-friendly rewriter
+│   ├── sme_eval.py              # 6-Persona x 5-Dimension (30-check) SME evaluation engine
 │   ├── telemetry.py             # Rate cards, cache economics, @vibelift_telemetry
 │   ├── validator.py             # Deterministic checks + LLM-as-judge audit
 │   ├── optimizer.py             # Optimization engine and user analytics
@@ -105,7 +108,7 @@ vibe_lift_agent/
 │       ├── template.py          # Dashboard HTML/JS
 │       ├── logo_asset.py        # Embedded brand assets
 │       └── static/              # Source logo images
-├── tests/                       # Offline test suite, no live API calls (see docs/TESTING.md)
+├── tests/                       # Offline test suite (204 tests, no live API calls; see docs/TESTING.md)
 ├── deploy/
 │   ├── deploy_cloud_run.sh      # Tests, then idempotent Cloud Run + IAM deploy
 │   ├── cloudbuild.yaml          # Build -> test -> push -> deploy
@@ -122,6 +125,8 @@ vibe_lift_agent/
 │   ├── PERMISSIONS.md           # Every IAM role, API and org policy VibeLift needs
 │   ├── spec.md                  # Architecture and data-source specification
 │   ├── GE_MART.md               # Gemini Enterprise curated views and reporting mart
+│   ├── SME_EVALUATION_REPORT.md # 6-Persona x 5-Dimension (30-check) SME evaluation report
+│   ├── HACKATHON_DEMO_SCRIPT.md # 3-minute high-impact demo script & Q&A cheat sheet
 │   ├── TESTING.md               # Requirement -> test map, CI gates
 │   ├── SKILL.md                 # Agent skill reference
 │   └── mcp_spec.json            # MCP tool catalog
@@ -141,7 +146,7 @@ Runtime variables are read by the service (set on Cloud Run by `deploy/deploy_cl
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `GOOGLE_CLOUD_PROJECT` | Metadata server / active `gcloud` project | Target GCP Project ID. Falls back to `UNCONFIGURED-PROJECT` if unset so it never queries an unintended project. |
+| `GOOGLE_CLOUD_PROJECT` | Metadata server / active `gcloud` project | Target GCP Project ID (supports both standard and domain-scoped `domain:project-id`). Falls back to `UNCONFIGURED-PROJECT` if unset so it never queries an unintended project. |
 | `GOOGLE_CLOUD_REGION` | `us-central1` | Primary region for Cloud Run and Vertex AI. |
 | `GOOGLE_GENAI_USE_VERTEXAI` | `TRUE` (when no API key is set) | Routes ADK `root_agent` model calls through Vertex AI using the runtime service account. |
 | `GOOGLE_CLOUD_LOCATION` | `GOOGLE_CLOUD_REGION` | Vertex AI location for ADK model calls. |
@@ -178,6 +183,7 @@ Runtime variables are read by the service (set on Cloud Run by `deploy/deploy_cl
 | `VIBELIFT_GE_CURATED_DATASET` | `ds_ge_curated_staging` | Curated views dataset (see [docs/GE_MART.md](docs/GE_MART.md)). |
 | `VIBELIFT_GE_MART_DATASET` | `vibelift_mart` | Reporting mart dataset (`fct_turns`, `fct_sessions`, `agg_daily_usage`). |
 | `VIBELIFT_BILLING_EXPORT_TABLE` | *(empty)* | Cloud Billing BigQuery export table (`project.dataset.gcp_billing_export_v1_XXXX`). Empty = billed cost shown as unknown. |
+| `VIBELIFT_BQ_MAX_BYTES_BILLED` | `10737418240` (10 GB) | FinOps safeguard capping `maximumBytesBilled` per BigQuery REST query (`0` disables the cap). |
 | `VIBELIFT_RATE_CARDS_JSON` | *(empty)* | Optional JSON override for model token pricing rate cards. |
 | `VIBELIFT_JUDGE_MODEL` | `gemini-2.5-flash` | Model used by the LLM-as-judge audit. |
 | `VIBELIFT_JUDGE_LOCATION` | `us-central1` | Vertex AI location for the judge model. |

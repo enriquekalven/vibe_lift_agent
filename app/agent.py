@@ -52,7 +52,7 @@ def query_gcp_telemetry(hours_ago: int = 48) -> str:
   """
   from vibelift import server as vibelift_server
   svc = vibelift_server._global_controller.gcp_telemetry
-  summary = svc.get_telemetry_summary_payload()
+  summary = svc.get_telemetry_summary_payload(hours_ago=hours_ago)
   return json.dumps(summary, indent=2)
 
 
@@ -72,6 +72,8 @@ def calculate_cache_economics(
     prompt_token_count: int,
     cached_content_token_count: int,
     model: str = MODEL_NAME,
+    candidates_token_count: int = 500,
+    thoughts_token_count: int = 100,
 ) -> str:
   """Calculates prompt cache hit ratio and dollar savings vs naive pricing.
 
@@ -79,11 +81,12 @@ def calculate_cache_economics(
       prompt_token_count: Total prompt token count.
       cached_content_token_count: Tokens read from prompt cache.
       model: Gemini model identifier (defaults to gemini-2.5-flash).
+      candidates_token_count: Output candidate token count (defaults to 500).
+      thoughts_token_count: Reasoning/thought token count (defaults to 100).
 
   Returns:
       JSON string with cache hit ratio, naive cost, actual cost, and net savings in USD.
   """
-  telemetry.RATE_CARDS.get(model, telemetry.RATE_CARDS[MODEL_NAME])
   uncached = max(0, prompt_token_count - cached_content_token_count)
   log = telemetry.TurnUsageLog(
       timestamp="2026-09-25T15:00:00Z",
@@ -97,8 +100,8 @@ def calculate_cache_economics(
       cached_content_token_count=cached_content_token_count,
       cache_creation_input_tokens=0,
       uncached_input_tokens=uncached,
-      candidates_token_count=500,
-      thoughts_token_count=100,
+      candidates_token_count=max(0, int(candidates_token_count)),
+      thoughts_token_count=max(0, int(thoughts_token_count)),
       status_code=200,
       tool_called="eval.calc",
       evolution_generation=14,
@@ -186,7 +189,7 @@ def trigger_alpha_evolve_cycle(agent_id: str = "it_service_desk") -> str:
     ctrl.optimizer.run_next_generation()
     ctrl.agent.step_turn()
     active = ctrl.optimizer.active_agent
-    last_action = active.actions[-1] if active.actions else None
+    last_action = active.actions[0] if active.actions else None
     result = {
         "agent_id": active.agent_id,
         "active_generation": active.timeline[-1].generation if active.timeline else 14,

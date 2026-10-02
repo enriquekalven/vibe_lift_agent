@@ -27,8 +27,10 @@ BILLING_TABLE_ENV = 'VIBELIFT_BILLING_EXPORT_TABLE'
 WINDOW_DAYS = 30
 CACHE_TTL_S = 900.0
 
-_TABLE_RE = re.compile(r'^[a-z][a-z0-9\-]{4,61}[a-z0-9]\.[A-Za-z0-9_]{1,1024}\.[A-Za-z0-9_]{1,1024}$')
-_PROJECT_RE = re.compile(r'^[a-z][a-z0-9\-]{4,61}[a-z0-9]$')
+_TABLE_RE = re.compile(
+    r'^(?:[a-z][a-z0-9\-]{1,61}[a-z0-9]\.[a-z]{2,}:)?[a-z][a-z0-9\-]{4,61}[a-z0-9]\.[A-Za-z0-9_]{1,1024}\.[A-Za-z0-9_]{1,1024}$'
+)
+_PROJECT_RE = re.compile(r'^(?:[a-z][a-z0-9\-]{1,61}[a-z0-9]\.[a-z]{2,}:)?[a-z][a-z0-9\-]{4,61}[a-z0-9]$')
 
 HOW_TO_CONNECT = (
     'Enable Cloud Billing export to BigQuery (Billing > Billing export), then set '

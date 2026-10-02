@@ -15,6 +15,7 @@ Design invariants:
 from __future__ import annotations
 
 import datetime
+import functools
 import json
 import os
 import re
@@ -333,10 +334,17 @@ def get_sme_evaluation_store() -> SmeEvaluationStore:
     return _GLOBAL_SME_STORE
 
 
+@functools.lru_cache(maxsize=4)
+def _extract_html_ids_cached(rendered_html: str) -> frozenset[str]:
+    if not rendered_html:
+        return frozenset()
+    return frozenset(re.findall(r'\bid="([^"]+)"', rendered_html))
+
+
 def _extract_html_ids(rendered_html: str) -> set[str]:
     if not rendered_html:
         return set()
-    return set(re.findall(r'\bid="([^"]+)"', rendered_html))
+    return set(_extract_html_ids_cached(rendered_html))
 
 
 def evaluate_persona_rubric(

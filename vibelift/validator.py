@@ -38,9 +38,13 @@ def _is_live_gcp_mode(state: Mapping[str, Any], ge_fleet: Mapping[str, Any] | No
   proj = fleet_proj or state_proj
   if not proj or proj in ('test-project', 'UNCONFIGURED-PROJECT'):
     return False
+  if state.get('live_data') is True:
+    return True
   uc = as_mapping(state.get('user_centric'))
+  if uc.get('live') is True:
+    return True
   mode = str(uc.get('collection_mode') or '')
-  return 'LIVE GCP TELEMETRY' in mode
+  return 'LIVE GCP TELEMETRY' in mode or mode.startswith('LIVE GCP:')
 
 
 def validate_dashboard_state(

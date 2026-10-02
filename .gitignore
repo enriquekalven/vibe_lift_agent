@@ -21,3 +21,8 @@ ENV/
 # Legacy internal build configs
 Build
 *.borg
+
+# Release archives
+*.zip
+*.tar.gz
+
