@@ -11,7 +11,7 @@ The Cloud Run service reads every metric as this account, never with the end use
 | Role | Scope | Why | Granted by |
 | :--- | :--- | :--- | :--- |
 | `roles/discoveryengine.viewer` | Project | List Gemini Enterprise apps, assistants, agents | `deploy_cloud_run.sh` |
-| Custom `vibeLiftGeFleetReader` (`discoveryengine.engines.get`, `assistants.list`, `agents.list`, `agents.get`, `agents.manage`) | Project | Without `agents.manage`, `agents.list` returns only the caller's own agents. No create/update/delete. | `deploy_cloud_run.sh` |
+| Custom `vibeLiftGeFleetReader` (`discoveryengine.engines.get`, `assistants.list`, `agents.list`, `agents.get`, `agents.manage`, `agents.update`) | Project | Without `agents.manage`, `agents.list` returns only the caller's own agents. `agents.update` is used only by the dashboard's trace logging buttons, which set an agent's `observabilityConfig` as the runtime service account. No create/delete. | `deploy_cloud_run.sh` |
 | `roles/aiplatform.viewer` | Project | Agent Engine (Reasoning Engine) metadata | `deploy_cloud_run.sh` |
 | `roles/aiplatform.user` | Project | Gemini calls from the ADK agent and the LLM judge | `deploy_cloud_run.sh` |
 | `roles/logging.viewer` | Project | OpenTelemetry `gen_ai` logs, audit logs | `deploy_cloud_run.sh` |

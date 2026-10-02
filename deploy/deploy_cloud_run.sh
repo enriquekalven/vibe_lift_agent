@@ -80,17 +80,20 @@ fi
 
 # Gemini Enterprise fleet inventory: the assistants/*/agents list only returns agents created by the
 # caller unless the caller also holds discoveryengine.agents.manage, which roles/discoveryengine.viewer
-# does not include. This custom role adds just that permission to the read path, so the runtime SA
-# does not need roles/discoveryengine.agentAdmin (no create/update/delete/setIamPolicy).
+# does not include. This custom role adds just that permission to the read path, plus
+# discoveryengine.agents.update, which the dashboard's trace logging buttons use to set an agent's
+# observabilityConfig. The runtime SA does not need roles/discoveryengine.agentAdmin
+# (no create/delete/setIamPolicy).
 FLEET_ROLE_ID="vibeLiftGeFleetReader"
 FLEET_ROLE_PERMISSIONS="discoveryengine.engines.get,discoveryengine.assistants.list,discoveryengine.agents.list,discoveryengine.agents.get,discoveryengine.agents.manage,discoveryengine.agents.update"
+FLEET_ROLE_DESCRIPTION="GE agent inventory for the VibeLift runtime SA. agents.manage lets agents.list return agents created by other users; agents.update is used only to toggle trace logging. No create, delete or setIamPolicy."
 FLEET_ROLE_STATE="$(gcloud iam roles describe "${FLEET_ROLE_ID}" --project="${PROJECT_ID}" --format='value(deleted)' 2>/dev/null || echo missing)"
 if [[ "${FLEET_ROLE_STATE}" == "missing" ]]; then
   echo "Creating custom role ${FLEET_ROLE_ID}..."
   gcloud iam roles create "${FLEET_ROLE_ID}" \
       --project="${PROJECT_ID}" \
       --title="VibeLift GE Fleet Reader" \
-      --description="Least-privilege Gemini Enterprise agent inventory for the VibeLift dashboard runtime SA. agents.manage is required for agents.list to return agents created by other users. No create, update, delete or setIamPolicy." \
+      --description="${FLEET_ROLE_DESCRIPTION}" \
       --permissions="${FLEET_ROLE_PERMISSIONS}" \
       --stage=GA \
       --quiet > /dev/null
@@ -102,6 +105,7 @@ else
   echo "Updating custom role ${FLEET_ROLE_ID}..."
   gcloud iam roles update "${FLEET_ROLE_ID}" \
       --project="${PROJECT_ID}" \
+      --description="${FLEET_ROLE_DESCRIPTION}" \
       --permissions="${FLEET_ROLE_PERMISSIONS}" \
       --quiet > /dev/null
 fi
