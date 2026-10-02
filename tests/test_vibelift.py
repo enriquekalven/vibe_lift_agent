@@ -528,7 +528,7 @@ class VibeLiftFrameworkTest(unittest.TestCase):
     })
     self.assertEqual(code_tools, 200)
     self.assertEqual(len(json.loads(body_tools)['result']['tools']), len(mcp_server._TOOLS))
-    self.assertEqual(len(mcp_server._TOOLS), 8)
+    self.assertEqual(len(mcp_server._TOOLS), 9)
 
     # Test resources/read with invalid URI
     code_inv_uri, _, body_inv_uri = mcp_server.handle_jsonrpc_sync({
@@ -615,9 +615,11 @@ class ProductionAppTest(unittest.TestCase):
     self.assertEqual(sorted(tools), sorted([
         'open_dashboard', 'query_ge_agent_fleet', 'query_project_telemetry',
         'calculate_prompt_cache_economics', 'run_alpha_evolve_generation', 'get_vibelift_state',
-        'xray_prompt_cache', 'list_prompt_snapshot_turns']))
+        'xray_prompt_cache', 'list_prompt_snapshot_turns', 'set_agent_trace_logging']))
     self.assertTrue(tools['open_dashboard']['annotations']['readOnlyHint'])
     self.assertTrue(tools['query_ge_agent_fleet']['annotations']['readOnlyHint'])
+    # Changes live agent settings, so it must never claim to be read-only.
+    self.assertFalse(tools['set_agent_trace_logging']['annotations']['readOnlyHint'])
 
     opened = self._rpc('tools/call', {'name': 'open_dashboard', 'arguments': {}}, rpc_id=3, session=session).json()['result']
     self.assertFalse(opened['isError'])

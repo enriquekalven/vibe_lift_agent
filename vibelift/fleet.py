@@ -608,7 +608,10 @@ def _registration_action(agent: dict[str, Any]) -> dict[str, str]:
   name = str(agent.get('resource_name') or '')
   loc_match = _RESOURCE_LOCATION_RE.search(name)
   proj_match = _RESOURCE_PROJECT_RE.match(name)
-  base = _de_base(loc_match.group(1) if loc_match else 'global')
+  try:
+    base = _de_base(loc_match.group(1) if loc_match else 'global')
+  except InvalidAgentRequestError:
+    base = _de_base('global')
   project = proj_match.group(1) if proj_match else ''
   return {
       'summary': ('Remove this agent from Gemini Enterprise, or redeploy its backend and update the '
@@ -692,9 +695,36 @@ def _parse_engine_spec(spec: str, default_location: str = 'global') -> tuple[str
   return (default_location, cleaned)
 
 
+class InvalidAgentRequestError(ValueError):
+  """Raised when a trace-logging request names a malformed agent, engine, project or location."""
+
+
+# Discovery Engine locations are short lowercase IDs (global, us, eu, ...). They become part of an API
+# hostname, so anything else is rejected before a URL is built.
+_DE_LOCATION_RE = re.compile(r'^[a-z0-9-]{1,63}\Z')
+_GOOGLE_API_HOST_RE = re.compile(r'^(?:[a-z0-9-]+\.)*googleapis\.com\Z')
+
+
+def _is_google_api_url(url: str) -> bool:
+  """True only for https URLs on *.googleapis.com (default port, no userinfo)."""
+  try:
+    parsed = urllib.parse.urlsplit(str(url))
+    port = parsed.port
+  except ValueError:
+    return False
+  return (
+      parsed.scheme == 'https'
+      and '@' not in parsed.netloc
+      and port in (None, 443)
+      and bool(_GOOGLE_API_HOST_RE.match(parsed.hostname or ''))
+  )
+
+
 def _de_base(location: str = 'global') -> str:
   """Returns the regional or global Discovery Engine v1alpha base URL."""
   loc = (location or 'global').strip().lower()
+  if not _DE_LOCATION_RE.match(loc):
+    raise InvalidAgentRequestError('Invalid Discovery Engine location.')
   if loc == 'global':
     return 'https://discoveryengine.googleapis.com/v1alpha'
   return f'https://{loc}-discoveryengine.googleapis.com/v1alpha'
@@ -779,10 +809,32 @@ def classify_agent(engine_id: str, assistant_id: str, raw: dict[str, Any]) -> di
   }
 
 
+# Each segment allows only the characters Google resource IDs use: no '/', '?', '#', '@', quotes or
+# whitespace, so a resource name can neither change the API host nor break out of the shell snippets.
 _GE_AGENT_RESOURCE_RE = re.compile(
-    r'^projects/(?P<project>[^/]+)/locations/(?P<location>[^/]+)/collections/(?P<collection>[^/]+)/'
-    r'engines/(?P<engine>[^/]+)/assistants/(?P<assistant>[^/]+)/agents/(?P<agent>[^/]+)$'
+    r'^projects/(?P<project>[A-Za-z0-9][A-Za-z0-9.:_-]{0,127})/locations/(?P<location>[a-z0-9-]{1,63})/'
+    r'collections/(?P<collection>[A-Za-z0-9_-]{1,128})/engines/(?P<engine>[A-Za-z0-9_-]{1,128})/'
+    r'assistants/(?P<assistant>[A-Za-z0-9_-]{1,128})/agents/(?P<agent>[A-Za-z0-9_-]{1,128})\Z'
 )
+_PROJECT_ID_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9.:_-]{0,127}\Z')
+_RESOURCE_ID_RE = re.compile(r'^[A-Za-z0-9_-]{1,128}\Z')
+_ENGINE_SPEC_RE = re.compile(r'^(?:[a-z0-9-]{1,63}/)?[A-Za-z0-9_-]{1,128}\Z')
+# Concurrent observabilityConfig PATCHes for bulk enable/disable (each call has its own HTTP timeout).
+_TRACE_PATCH_WORKERS = 8
+
+
+def _or_placeholder(value: Any, pattern: re.Pattern[str], placeholder: str) -> str:
+  """Returns value if it fully matches pattern, else the placeholder (for shell snippet fields)."""
+  text = str(value or '')
+  return text if pattern.match(text) else placeholder
+
+
+def _trace_error_message(exc: FleetSourceError) -> str:
+  """API error text for a failed observabilityConfig PATCH, naming the missing permission on 403."""
+  text = str(exc)
+  if exc.status == 403:
+    text += ' (the runtime service account needs discoveryengine.agents.update)'
+  return text[:400]
 
 
 def build_enable_agent_logging_script(
@@ -795,17 +847,28 @@ def build_enable_agent_logging_script(
     only_low_code: bool = False,
     enabled: bool = True,
 ) -> dict[str, str]:
-  """Builds the enable/disable_agent_logging.sh bulk script and single-agent PATCH curl command."""
+  """Builds the enable/disable_agent_logging.sh bulk script and single-agent PATCH curl command.
+
+  Raises InvalidAgentRequestError if any value that would be written into the shell text is malformed.
+  """
   proj = project_id or '<PROJECT_ID>'
   loc = (location or 'global').strip().lower()
   coll = collection or 'default_collection'
   eng = engine_id or '<ENGINE_ID>'
+  target_res = (agent_resource or agent_resource_name or '').strip() or None
+  if proj != '<PROJECT_ID>' and not _PROJECT_ID_RE.match(proj):
+    raise InvalidAgentRequestError('Invalid Google Cloud project ID.')
+  if not _RESOURCE_ID_RE.match(coll):
+    raise InvalidAgentRequestError('Invalid Discovery Engine collection ID.')
+  if eng != '<ENGINE_ID>' and not _RESOURCE_ID_RE.match(eng):
+    raise InvalidAgentRequestError('Invalid Gemini Enterprise engine ID.')
+  if target_res and not _GE_AGENT_RESOURCE_RE.match(target_res):
+    raise InvalidAgentRequestError('Invalid Gemini Enterprise agent resource name.')
   base = _de_base(loc)
   bool_str = 'true' if enabled else 'false'
   action_verb = 'Enables' if enabled else 'Disables'
   action_ing = 'Enabling' if enabled else 'Disabling'
   script_name = 'enable_agent_logging.sh' if enabled else 'disable_agent_logging.sh'
-  target_res = agent_resource or agent_resource_name
   single_target = target_res or (
       f'projects/{proj}/locations/{loc}/collections/{coll}/engines/{eng}/assistants/default_assistant/agents/<AGENT_ID>'
   )
@@ -928,6 +991,9 @@ class _GoogleApi:
       return self._credentials.token
 
   def call(self, method: str, url: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not _is_google_api_url(url):
+      # Never attach the runtime service account's bearer token to a non-Google host.
+      raise FleetSourceError(0, 'Refusing to send credentials to a non-Google API URL')
     headers = {'Authorization': f'Bearer {self._token()}', 'Content-Type': 'application/json'}
     if self._is_user_credentials and self._quota_project:
       # End-user ADC (local development) needs an explicit quota project.
@@ -1044,6 +1110,21 @@ class GeminiEnterpriseFleetService:
 
     return self._refresh_sync(hours, force_refresh=force_refresh)
 
+  def _list_trace_inventory(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+    """Lists the Gemini Enterprise apps and their agents directly (no telemetry), plus listing errors."""
+    errors: list[dict[str, str]] = []
+    engines: list[dict[str, Any]] = []
+    agents: list[dict[str, Any]] = []
+    for spec in self._resolve_engine_specs(errors):
+      try:
+        meta, engine_agents = self._list_engine_agents(spec)
+      except FleetSourceError as exc:
+        errors.append({'source': f'Discovery Engine agents ({spec})', 'detail': str(exc)})
+        continue
+      engines.append(meta)
+      agents.extend(engine_agents)
+    return engines, agents, [str(e.get('detail') or e.get('source')) for e in errors]
+
   def enable_agent_observability(
       self,
       resource_name: str | None = None,
@@ -1053,41 +1134,72 @@ class GeminiEnterpriseFleetService:
       sensitive_logging: bool | None = None,
       only_low_code: bool = False,
   ) -> dict[str, Any]:
-    """Enables or disables Discovery Engine trace logging (observabilityConfig) on one or all registered GE agents."""
+    """Enables or disables Discovery Engine trace logging (observabilityConfig) on one or all registered GE agents.
+
+    All request inputs are validated before any API call (InvalidAgentRequestError). PATCHes run in
+    parallel, and only agents the API confirmed are marked as updated in the fleet cache.
+    """
     obs_enabled = bool(enabled)
     sens_enabled = obs_enabled if sensitive_logging is None else (bool(sensitive_logging) and obs_enabled)
+    res_clean = str(resource_name or '').strip() or None
+    engine_filter = str(engine_id or '').strip() or None
+    loc_arg = str(location or '').strip().lower() or None
+    res_match = _GE_AGENT_RESOURCE_RE.match(res_clean) if res_clean else None
+    if res_clean and not res_match:
+      raise InvalidAgentRequestError('Invalid Gemini Enterprise agent resource name.')
+    if engine_filter and not _ENGINE_SPEC_RE.match(engine_filter):
+      raise InvalidAgentRequestError('Invalid Gemini Enterprise engine ID.')
+    if loc_arg and not _DE_LOCATION_RE.match(loc_arg):
+      raise InvalidAgentRequestError('Invalid Discovery Engine location.')
+
     fleet_snapshot = self.collect(allow_stale=True, max_wait_s=5.0)
     agents = list(fleet_snapshot.get('agents') or [])
     engines = list(fleet_snapshot.get('engines') or [])
-    default_engine = engine_id or (engines[0].get('engine_id') if engines else '<ENGINE_ID>')
-    default_loc = location or (engines[0].get('location') if engines else self.location) or 'global'
+    listing_errors: list[str] = []
+    if not res_match and (fleet_snapshot.get('source_status') or {}).get('inventory') == 'warming':
+      # Cold cache (e.g. a new instance still collecting telemetry): list the agents directly instead
+      # of reporting that there are none.
+      engines, agents, listing_errors = self._list_trace_inventory()
+    first_engine = engines[0] if engines else {}
 
     targets: list[dict[str, Any]] = []
-    if resource_name:
-      match = _GE_AGENT_RESOURCE_RE.match(resource_name.strip())
-      if not match:
-        raise ValueError(f'Invalid Gemini Enterprise agent resource path: {resource_name!r}')
-      default_loc = match['location']
-      default_engine = match['engine']
-      existing = next((a for a in agents if a.get('resource_name') == resource_name.strip()), None)
+    if res_match:
+      script_loc, script_engine = res_match['location'], res_match['engine']
+      existing = next((a for a in agents if a.get('resource_name') == res_clean), None)
       targets.append(existing or {
-          'agent_id': match['agent'],
-          'display_name': match['agent'],
-          'resource_name': resource_name.strip(),
-          'engine_id': match['engine'],
-          'location': match['location'],
-          'type': 'LOW_CODE',
+          'agent_id': res_match['agent'],
+          'display_name': res_match['agent'],
+          'resource_name': res_clean,
+          'engine_id': res_match['engine'],
+          'location': res_match['location'],
+          'type': None,  # Not in the current snapshot, so the agent type is unknown.
       })
     else:
+      default_loc = loc_arg or str(first_engine.get('location') or self.location or 'global')
+      script_loc, script_engine = _parse_engine_spec(
+          engine_filter or str(first_engine.get('engine_id') or '<ENGINE_ID>'), default_loc)
       for a in agents:
         res_name = str(a.get('resource_name') or '')
         if not _GE_AGENT_RESOURCE_RE.match(res_name):
           continue
-        if engine_id and a.get('engine_id') != engine_id and f"{a.get('location')}/{a.get('engine_id')}" != engine_id:
+        if engine_filter and a.get('engine_id') != engine_filter and f"{a.get('location')}/{a.get('engine_id')}" != engine_filter:
           continue
         if only_low_code and a.get('type') != 'LOW_CODE':
           continue
         targets.append(a)
+
+    # Built before any PATCH. Request inputs were validated above; snapshot/config values that do not
+    # fit the shell-safe patterns fall back to placeholders instead of failing the request.
+    snippets = build_enable_agent_logging_script(
+        project_id=_or_placeholder(self.project_id, _PROJECT_ID_RE, '<PROJECT_ID>'),
+        location=_or_placeholder(str(script_loc).lower(), _DE_LOCATION_RE, 'global'),
+        collection=_or_placeholder(self.collection, _RESOURCE_ID_RE, 'default_collection'),
+        engine_id=_or_placeholder(script_engine, _RESOURCE_ID_RE, '<ENGINE_ID>'),
+        agent_resource=res_clean or (
+            str(targets[0].get('resource_name')) if len(targets) == 1 else None),
+        only_low_code=only_low_code,
+        enabled=obs_enabled,
+    )
 
     patch_body = {
         'observabilityConfig': {
@@ -1095,75 +1207,109 @@ class GeminiEnterpriseFleetService:
             'sensitiveLoggingEnabled': sens_enabled,
         }
     }
-    results: list[dict[str, Any]] = []
-    updated_count = 0
-    for target in targets:
-      res_name = str(target.get('resource_name') or '')
-      match = _GE_AGENT_RESOURCE_RE.match(res_name)
-      loc = (match['location'] if match else target.get('location')) or default_loc
-      url = f'{_de_base(loc)}/{res_name}?updateMask=observabilityConfig'
-      try:
-        resp = self._api.call('PATCH', url, patch_body)
-        obs_cfg = (resp or {}).get('observabilityConfig') or patch_body['observabilityConfig']
-        updated_count += 1
-        results.append({
-            'agent_id': target.get('agent_id'),
-            'display_name': target.get('display_name') or target.get('agent_id'),
-            'resource_name': res_name,
-            'type': target.get('type'),
-            'status': 'OK',
-            'observability_config': {
-                'observability_enabled': bool(obs_cfg.get('observabilityEnabled', obs_enabled)),
-                'sensitive_logging_enabled': bool(obs_cfg.get('sensitiveLoggingEnabled', sens_enabled)),
-            },
-        })
-      except FleetSourceError as exc:
-        results.append({
-            'agent_id': target.get('agent_id'),
-            'display_name': target.get('display_name') or target.get('agent_id'),
-            'resource_name': res_name,
-            'type': target.get('type'),
-            'status': 'CLI_REQUIRED',
-            'error': str(exc),
-            'observability_config': {
-                'observability_enabled': obs_enabled,
-                'sensitive_logging_enabled': sens_enabled,
-            },
-        })
 
-    # Update cached fleet entries so the UI reflects the new state immediately
-    if targets:
-      target_names = {str(t.get('resource_name') or '') for t in targets}
+    def _patch(target: dict[str, Any]) -> dict[str, Any]:
+      res_name = str(target.get('resource_name') or '')
+      entry: dict[str, Any] = {
+          'agent_id': target.get('agent_id'),
+          'display_name': target.get('display_name') or target.get('agent_id'),
+          'resource_name': res_name,
+          'type': target.get('type'),
+      }
+      match = _GE_AGENT_RESOURCE_RE.match(res_name)
+      try:
+        if not match:
+          raise FleetSourceError(0, 'Invalid agent resource name')
+        resp = self._api.call(
+            'PATCH', f"{_de_base(match['location'])}/{res_name}?updateMask=observabilityConfig", patch_body)
+      except FleetSourceError as exc:
+        previous = target.get('observability_config')
+        entry.update({
+            'status': 'ERROR',
+            'error': _trace_error_message(exc),
+            'http_status': exc.status or None,
+            # Nothing changed, so report the agent's last known state.
+            'observability_config': dict(previous) if isinstance(previous, Mapping) else None,
+        })
+        return entry
+      returned = (resp or {}).get('observabilityConfig')
+      cfg = returned if isinstance(returned, Mapping) else patch_body['observabilityConfig']
+      entry.update({
+          'status': 'OK',
+          'observability_config': {
+              # Proto3 JSON omits false fields, so a missing key means false.
+              'observability_enabled': bool(cfg.get('observabilityEnabled', False)),
+              'sensitive_logging_enabled': bool(cfg.get('sensitiveLoggingEnabled', False)),
+          },
+      })
+      return entry
+
+    results: list[dict[str, Any]] = []
+    if len(targets) == 1:
+      results = [_patch(targets[0])]
+    elif targets:
+      with concurrent.futures.ThreadPoolExecutor(
+          max_workers=min(_TRACE_PATCH_WORKERS, len(targets)), thread_name_prefix='vibelift-trace') as pool:
+        results = list(pool.map(_patch, targets))
+
+    # Only agents the API confirmed change in the cache, so the next refresh cannot show a state that
+    # was never applied.
+    confirmed = {r['resource_name']: r['observability_config'] for r in results if r['status'] == 'OK'}
+    if confirmed:
       with self._cache_lock:
         for _, (_, cached_payload) in self._cache.items():
           for cached_agent in cached_payload.get('agents') or []:
-            if str(cached_agent.get('resource_name') or '') in target_names:
-              cached_agent['observability_config'] = {
-                  'observability_enabled': obs_enabled,
-                  'sensitive_logging_enabled': sens_enabled,
-              }
+            cfg_now = confirmed.get(str(cached_agent.get('resource_name') or ''))
+            if cfg_now is not None:
+              cached_agent['observability_config'] = dict(cfg_now)
 
-    snippets = build_enable_agent_logging_script(
-        project_id=self.project_id,
-        location=default_loc,
-        collection=self.collection,
-        engine_id=default_engine,
-        agent_resource=resource_name or (targets[0].get('resource_name') if len(targets) == 1 else None),
-        only_low_code=only_low_code,
-        enabled=obs_enabled,
-    )
+    updated_count = sum(1 for r in results if r['status'] == 'OK')
+    failed = [r for r in results if r['status'] != 'OK']
+    verb = 'enabled' if obs_enabled else 'disabled'
+    action = 'enable' if obs_enabled else 'disable'
+    if not targets and listing_errors:
+      status = 'FAILED'
+      message = f'Could not list the Gemini Enterprise agents: {listing_errors[0]}'[:400]
+    elif not targets:
+      status = 'NO_AGENTS_MATCHED'
+      message = ('No No-Code / Low-Code agents found to update.' if only_low_code
+                 else 'No registered agents found to update.')
+    elif not failed:
+      status = 'OK'
+      message = (f"Trace logging {verb} for {results[0]['display_name']}." if len(results) == 1
+                 else f'Trace logging {verb} on {updated_count} agents.')
+    elif updated_count:
+      status = 'PARTIAL'
+      message = (f'Trace logging {verb} on {updated_count} of {len(results)} agents; {len(failed)} failed '
+                 f"({failed[0]['display_name']}: {failed[0]['error']}).")
+    else:
+      status = 'FAILED'
+      message = (f"Could not {action} trace logging for {failed[0]['display_name']}: {failed[0]['error']}"
+                 if len(failed) == 1 else
+                 f"Could not {action} trace logging on any of {len(failed)} agents ({failed[0]['error']}).")
+    if targets and listing_errors:
+      # Agents on apps that could not be listed were never attempted.
+      status = 'PARTIAL' if status == 'OK' else status
+      message += f' {len(listing_errors)} app(s) could not be listed ({listing_errors[0]}).'
+    logger.info(
+        'Trace logging %s: status=%s targeted=%d updated=%d failed=%d resource=%s only_low_code=%s',
+        verb, status, len(targets), updated_count, len(failed), res_clean or '-', bool(only_low_code))
     return {
-        'status': 'OK' if updated_count == len(targets) and targets else ('PARTIAL' if updated_count > 0 else ('SCRIPT_READY' if targets else 'NO_AGENTS_MATCHED')),
+        'status': status,
+        'message': message,
         'action': 'ENABLED' if obs_enabled else 'DISABLED',
         'enabled': obs_enabled,
+        'sensitive_logging': sens_enabled,
         'project_id': self.project_id,
-        'location': default_loc,
+        'location': script_loc,
         'collection': self.collection,
-        'engine_id': default_engine,
+        'engine_id': script_engine,
         'only_low_code': bool(only_low_code),
         'targeted_count': len(targets),
         'total_targeted': len(targets),
         'updated_count': updated_count,
+        'failed_count': len(failed),
+        'updated_at': _iso(_utcnow()),
         'results': results,
         'script_name': snippets['script_name'],
         'script': snippets['script'],

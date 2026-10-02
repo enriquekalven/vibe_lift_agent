@@ -371,6 +371,34 @@ async def _tool_list_prompt_snapshot_turns(session_key: str, args: dict[str, Any
   return {'content': [{'type': 'text', 'text': text}], 'structuredContent': listing}
 
 
+_TRACE_TOOL_ARGS = ('resource_name', 'enabled', 'sensitive_logging', 'only_low_code', 'engine_id', 'location')
+
+
+async def _tool_set_agent_trace_logging(session_key: str, args: dict[str, Any]) -> dict[str, Any]:
+  """Enables or disables trace logging (observabilityConfig) on one agent or on all registered agents.
+
+  Called by the dashboard's confirmed Enable/Disable trace buttons through the MCP App host bridge, or
+  by the assistant when the user asks. The PATCH runs as the server's runtime service account.
+  """
+  if args.get('enabled') is None:
+    result: dict[str, Any] = {
+        'status': 'INVALID_REQUEST',
+        'message': "'enabled' is required (true to enable trace logging, false to disable it).",
+        'targeted_count': 0,
+        'updated_count': 0,
+        'results': [],
+    }
+  else:
+    ctrl = _get_controller()
+    body = {k: args[k] for k in _TRACE_TOOL_ARGS if args.get(k) is not None}
+    result = await asyncio.to_thread(ctrl.enable_agent_observability, body)
+  structured = {k: v for k, v in result.items() if k not in ('script', 'curl_command')}
+  return {
+      'content': [{'type': 'text', 'text': str(result.get('message') or result.get('status'))}],
+      'structuredContent': structured,
+  }
+
+
 # ---------------------------------------------------------------------------
 # MCP Tool Registry
 # ---------------------------------------------------------------------------
@@ -576,6 +604,56 @@ _TOOLS: list[dict[str, Any]] = [
         'inputSchema': {'type': 'object', 'properties': {}},
         'annotations': _READ_ONLY_CLOUD,
         'handler': _tool_list_prompt_snapshot_turns,
+    },
+    {
+        'name': 'set_agent_trace_logging',
+        'title': 'Enable or Disable Agent Trace Logging',
+        'description': (
+            'Enables or disables Discovery Engine trace logging (observabilityConfig: observabilityEnabled '
+            'and sensitiveLoggingEnabled) on one Gemini Enterprise agent, or on all registered agents '
+            '(optionally only No-Code / Low-Code agents). This changes live agent settings: only call it when '
+            'the user explicitly asks to enable or disable trace logging, and pass resource_name for a single '
+            'agent (omitting it updates every registered agent). Runs as the server service account, which '
+            'needs discoveryengine.agents.update.'
+        ),
+        # Same visibility as the other tools the dashboard calls through the Gemini Enterprise host bridge
+        # (the Enable / Disable trace buttons, after the admin confirms). It is not read-only, so Gemini
+        # Enterprise asks the user to confirm before the assistant runs it.
+        'visibility': ['model', 'app'],
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'enabled': {
+                    'type': 'boolean',
+                    'description': 'true to enable trace logging, false to disable it.',
+                },
+                'resource_name': {
+                    'type': 'string',
+                    'description': (
+                        'Full agent resource name (projects/.../locations/.../collections/.../engines/.../'
+                        'assistants/.../agents/...). Omit to update every registered agent.'
+                    ),
+                },
+                'only_low_code': {
+                    'type': 'boolean',
+                    'description': 'With no resource_name, only update No-Code / Low-Code agents.',
+                },
+                'sensitive_logging': {
+                    'type': 'boolean',
+                    'description': 'Also log prompts and responses (defaults to the value of enabled).',
+                },
+                'engine_id': {
+                    'type': 'string',
+                    'description': "Optional 'engine_id' or 'location/engine_id' to limit a bulk update.",
+                },
+                'location': {'type': 'string', 'description': 'Optional Discovery Engine location.'},
+            },
+            'required': ['enabled'],
+        },
+        'annotations': {
+            'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True, 'openWorldHint': True,
+        },
+        'handler': _tool_set_agent_trace_logging,
     },
 ]
 

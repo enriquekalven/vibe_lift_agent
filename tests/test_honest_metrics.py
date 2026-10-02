@@ -534,7 +534,10 @@ class BlindspotRemediationTest(unittest.TestCase):
     self.assertIn('id="enableAllObsBtn"', html)
     self.assertIn('id="disableAllObsBtn"', html)
     self.assertIn('id="agentObsDrawer"', html)
-    self.assertIn('toggleAgentObservability', html)
+    self.assertIn('id="traceBulkBar"', html)
+    self.assertIn('askBulkTrace(true, true)', html)
+    self.assertIn('function fillTraceRow(', html)
+    self.assertNotIn('toggleAgentObservability', html)
 
 
 if __name__ == '__main__':

@@ -467,6 +467,14 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .fleet-empty { color: var(--text-secondary); text-align: center; }
     .fleet-notice { font-size: 12px; padding: 8px 12px; border-radius: 6px; background: #f1f5f9; color: #334155; margin-bottom: 12px; }
     .fleet-notice-error { background: #fefce8; color: #854d0e; }
+    .btn.btn-xs { padding: 2px 8px; font-size: 11px; }
+    .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .trace-row { align-items: center; }
+    .trace-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; padding: 8px 12px; border-radius: 6px; background: #eff6ff; border: 1px solid #bfdbfe; color: #1e3a8a; margin-bottom: 12px; }
+    .trace-confirm { font-size: 11.5px; font-weight: 600; color: #1e3a8a; }
+    .trace-msg { font-size: 11.5px; font-weight: 600; word-break: break-word; }
+    .trace-msg-ok { color: #166534; }
+    .trace-msg-err { color: #991b1b; }
     .fleet-errors { margin-top: 12px; font-size: 12px; }
     .fleet-error { background: #fef2f2; color: #991b1b; padding: 6px 10px; border-radius: 6px; margin-bottom: 6px; word-break: break-word; }
     .fleet-notes { font-size: 11px; color: var(--text-secondary); margin: 12px 0 0 16px; padding: 0; }
@@ -1047,39 +1055,39 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
             <span id="fleetEngineBadge" class="badge badge-blue">Loading&hellip;</span>
           </div>
           <div class="fleet-controls">
-            <button class="btn btn-primary" id="enableLowCodeObsBtn" onclick="toggleAgentObservability(null, true, true)" title="Enable Discovery Engine trace logging (observabilityConfig) on all No-Code / Low-Code agents">Enable No-Code Trace</button>
-            <button class="btn" id="disableLowCodeObsBtn" onclick="toggleAgentObservability(null, false, true)" title="Disable Discovery Engine trace logging (observabilityConfig) on all No-Code / Low-Code agents">Disable No-Code Trace</button>
-            <button class="btn" id="enableAllObsBtn" onclick="toggleAgentObservability(null, true, false)" title="Enable Discovery Engine trace logging (observabilityConfig) across all registered Gemini Enterprise agents">Enable All Trace</button>
-            <button class="btn" id="disableAllObsBtn" onclick="toggleAgentObservability(null, false, false)" title="Disable Discovery Engine trace logging (observabilityConfig) across all registered Gemini Enterprise agents">Disable All Trace</button>
-            <button class="btn" id="toggleObsScriptBtn" onclick="toggleAgentObsDrawer()" title="View or copy enable_agent_logging.sh script for Cloud Shell">Trace Script</button>
+            <button class="btn btn-primary" id="enableLowCodeObsBtn" onclick="askBulkTrace(true, true)" title="Enable Discovery Engine trace logging (observabilityConfig) on all No-Code / Low-Code agents">Enable No-Code Trace</button>
+            <button class="btn" id="disableLowCodeObsBtn" onclick="askBulkTrace(false, true)" title="Disable Discovery Engine trace logging (observabilityConfig) on all No-Code / Low-Code agents">Disable No-Code Trace</button>
+            <button class="btn" id="enableAllObsBtn" onclick="askBulkTrace(true, false)" title="Enable Discovery Engine trace logging (observabilityConfig) across all registered Gemini Enterprise agents">Enable All Trace</button>
+            <button class="btn" id="disableAllObsBtn" onclick="askBulkTrace(false, false)" title="Disable Discovery Engine trace logging (observabilityConfig) across all registered Gemini Enterprise agents">Disable All Trace</button>
+            <button class="btn" id="toggleObsScriptBtn" onclick="toggleAgentObsDrawer()" title="Optional: view the equivalent Cloud Shell script">Trace Script</button>
             <label><input type="checkbox" id="fleetAuto" checked onchange="scheduleFleetRefresh()" /> Auto-refresh (60 s)</label>
             <button class="btn" id="fleetRefreshBtn" onclick="refreshFleet(true)">Refresh now</button>
           </div>
         </div>
+        <div id="traceBulkBar" class="trace-bar hidden" role="status" aria-live="polite"></div>
         <div id="fleetNotice" class="fleet-notice hidden"></div>
         <div id="agentObsDrawer" class="hidden" style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin:8px 0 12px;">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
             <div>
               <div style="font-size:12.5px;font-weight:700;color:var(--text-primary);" id="agentObsDrawerTitle">
-                No-Code / Low-Code &amp; Registered Agent Trace Logging (<span class="mono">observabilityConfig</span>)
+                Trace logging from Cloud Shell (<span class="mono">observabilityConfig</span>)
               </div>
               <div style="font-size:11.5px;color:var(--text-secondary);" id="agentObsDrawerSub">
-                Updates <span class="mono">observabilityEnabled</span> &amp; <span class="mono">sensitiveLoggingEnabled</span> via Discovery Engine <span class="mono">PATCH ?updateMask=observabilityConfig</span>, or copy <span class="mono">deploy/enable_agent_logging.sh</span> for Cloud Shell.
+                Optional. The Enable / Disable trace buttons apply the change directly. Use this only to run the same <span class="mono">PATCH ?updateMask=observabilityConfig</span> yourself, or see <span class="mono">deploy/enable_agent_logging.sh</span>.
               </div>
             </div>
             <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-              <button class="btn" id="copyObsCurlBtn" onclick="copyText(document.getElementById('agentObsCurlCode').textContent, this)" style="padding:4px 9px;font-size:11.5px;">Copy curl Command</button>
-              <button class="btn" id="copyObsScriptBtn" onclick="copyText(document.getElementById('agentObsScriptCode').textContent, this)" style="padding:4px 9px;font-size:11.5px;">Copy enable_agent_logging.sh</button>
-              <button class="btn" onclick="document.getElementById('agentObsDrawer').classList.add('hidden')" style="padding:4px 9px;font-size:11.5px;">Close</button>
+              <button class="btn" id="copyObsCurlBtn" onclick="copyText(document.getElementById('agentObsCurlCode').textContent, this)" style="padding:4px 9px;font-size:11.5px;">Copy curl command</button>
+              <button class="btn" id="copyObsScriptBtn" onclick="copyText(document.getElementById('agentObsScriptCode').textContent, this)" style="padding:4px 9px;font-size:11.5px;">Copy script</button>
+              <button class="btn" onclick="document.getElementById('agentObsDrawer').classList.add('hidden'); notifyHostSizeChanged();" style="padding:4px 9px;font-size:11.5px;">Close</button>
             </div>
           </div>
-          <div id="agentObsResultBox" style="font-size:12px;margin-bottom:8px;"></div>
           <div style="margin-bottom:8px;">
-            <div style="font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:4px;">Direct API Command (<span class="mono">curl -X PATCH ?updateMask=observabilityConfig</span>):</div>
+            <div style="font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:4px;">Single agent (<span class="mono">curl -X PATCH ?updateMask=observabilityConfig</span>):</div>
             <pre id="agentObsCurlCode" class="diff-pre" style="max-height:130px;overflow:auto;font-size:11px;margin:0;"></pre>
           </div>
           <details>
-            <summary style="cursor:pointer;font-size:11.5px;font-weight:600;color:var(--g-blue);">Show Bulk Cloud Shell Script (<span class="mono">deploy/enable_agent_logging.sh</span>)</summary>
+            <summary style="cursor:pointer;font-size:11.5px;font-weight:600;color:var(--g-blue);">Show bulk Cloud Shell script</summary>
             <pre id="agentObsScriptCode" class="diff-pre" style="max-height:220px;overflow:auto;font-size:11px;margin-top:6px;"></pre>
           </details>
         </div>
@@ -5811,10 +5819,11 @@ async def handle_agent_turn(message_envelope):
     }
 
     function copyText(text, btn) {
+      if (btn && !btn.dataset.label) btn.dataset.label = btn.textContent;
       const done = function(ok) {
         if (!btn) return;
         btn.textContent = ok ? 'Copied' : 'Copy blocked: select the text';
-        setTimeout(function() { btn.textContent = 'Copy'; }, 2500);
+        setTimeout(function() { btn.textContent = btn.dataset.label || 'Copy'; }, 2500);
       };
       try {
         navigator.clipboard.writeText(text).then(function() { done(true); }, function() { done(false); });
@@ -6018,6 +6027,7 @@ async def handle_agent_turn(message_envelope):
 
     function renderFleet(fleet) {
       if (fleet && Array.isArray(fleet.agents) && !fleet.__scoped) {
+        applyTraceOverrides(fleet);
         geRawFleet = fleet;
         populateGeScopeSelect(fleet);
         fleet = applyGeScope(fleet);
@@ -6085,6 +6095,7 @@ async def handle_agent_turn(message_envelope):
 
       const body = document.getElementById('fleetAgentsBody');
       body.replaceChildren();
+      traceRowEls = {};
       if (!fleet.agents.length) body.appendChild(emptyRow(10, 'No agents found on this Gemini Enterprise app.'));
       fleet.agents.forEach(function(a) {
         const m = a.metrics || {};
@@ -6111,38 +6122,13 @@ async def handle_agent_turn(message_envelope):
         const scope = {agent: 'per-agent telemetry', service: 'service-level telemetry'}[a.telemetry_scope] || 'inventory only';
         const lastCell = el('td', 'mono', [m.last_activity ? fmtAgo(m.last_activity) : '—']);
         if (m.last_activity) lastCell.title = m.last_activity;
-        const obsCfg = a.observability_config || {};
-        const obsOn = !!obsCfg.observability_enabled;
         const hasAgentResource = !!(a.resource_name && String(a.resource_name).indexOf('/agents/') >= 0);
-        const obsBadge = hasAgentResource
-          ? badge(obsOn ? 'Trace: ON' : 'Trace: OFF', obsOn ? 'badge-green' : 'badge-yellow')
-          : null;
-        if (obsBadge) {
-          obsBadge.title = obsOn
-            ? 'Discovery Engine trace logging (observabilityEnabled + sensitiveLoggingEnabled) is active.'
-            : 'Discovery Engine trace logging is currently off.';
-        }
         let obsActionRow = null;
         if (hasAgentResource) {
-          const btnEn = el('button', 'btn' + (!obsOn ? ' btn-primary' : ''), ['Enable Trace']);
-          btnEn.style.padding = '2px 7px';
-          btnEn.style.fontSize = '11px';
-          btnEn.title = 'Enable trace logging (observabilityConfig) for ' + (a.display_name || a.agent_id);
-          btnEn.addEventListener('click', function() {
-            toggleAgentObservability(a.resource_name, true, false, a.display_name || a.agent_id, a);
-          });
-          const btnDis = el('button', 'btn', ['Disable Trace']);
-          btnDis.style.padding = '2px 7px';
-          btnDis.style.fontSize = '11px';
-          btnDis.title = 'Disable trace logging (observabilityConfig) for ' + (a.display_name || a.agent_id);
-          btnDis.addEventListener('click', function() {
-            toggleAgentObservability(a.resource_name, false, false, a.display_name || a.agent_id, a);
-          });
-          obsActionRow = el('div', 'fleet-agent-tags', [
-            obsBadge,
-            btnEn,
-            btnDis,
-          ]);
+          // Rendered by fillTraceRow so a confirmation or in-flight request survives auto-refresh.
+          obsActionRow = el('div', 'fleet-agent-tags trace-row', []);
+          traceRowEls[String(a.resource_name)] = {wrap: obsActionRow, agent: a};
+          fillTraceRow(obsActionRow, a);
         }
         body.appendChild(el('tr', a.telemetry_scope === 'none' ? 'fleet-row-muted' : null, [
           el('td', null, [
@@ -6233,7 +6219,7 @@ async def handle_agent_turn(message_envelope):
       const script = [
         '#!/bin/bash',
         '# -------------------------------------------------------------',
-        '# Script: enable_agent_logging.sh',
+        '# Script: ' + (enabled ? 'enable_agent_logging.sh' : 'disable_agent_logging.sh'),
         '# Purpose: ' + (enabled ? 'Enables' : 'Disables') + ' trace logging across registered agents',
         '# -------------------------------------------------------------',
         '',
@@ -6287,98 +6273,259 @@ async def handle_agent_turn(message_envelope):
       const wasHidden = drawer.classList.contains('hidden');
       drawer.classList.toggle('hidden', !wasHidden);
       if (wasHidden) {
+        // Rebuilt on every open so the project and engine values match the latest fleet.
         const info = buildClientObsScript(null, true, false, null);
         const curlEl = document.getElementById('agentObsCurlCode');
         const scriptEl = document.getElementById('agentObsScriptCode');
-        if (curlEl && !curlEl.textContent) curlEl.textContent = info.curl_command;
-        if (scriptEl && !scriptEl.textContent) scriptEl.textContent = info.script;
+        if (curlEl) curlEl.textContent = info.curl_command;
+        if (scriptEl) scriptEl.textContent = info.script;
       }
       notifyHostSizeChanged();
     }
 
-    async function toggleAgentObservability(resourceName, enabled, onlyLowCode, displayName, agentObj) {
-      const drawer = document.getElementById('agentObsDrawer');
-      const resBox = document.getElementById('agentObsResultBox');
-      const curlEl = document.getElementById('agentObsCurlCode');
-      const scriptEl = document.getElementById('agentObsScriptCode');
-      if (drawer) drawer.classList.remove('hidden');
+    // ---------------- Trace logging (observabilityConfig) ----------------
+    // Enable / Disable asks "Are you sure?" inline, then applies the change through the server: a direct
+    // POST, or (inside Gemini Enterprise) the app-only set_agent_trace_logging tool via the host bridge.
+    // State lives outside the DOM so the 60 s auto-refresh cannot wipe a confirmation or a pending call.
+    var TRACE_TOOL = 'set_agent_trace_logging';
+    var traceRowState = {};   // resource_name -> {phase: 'confirm'|'busy'|'done'|'error', enabled, text}
+    var traceOverrides = {};  // resource_name -> {config, at}: API-confirmed state newer than the snapshot
+    var traceRowEls = {};     // resource_name -> {wrap, agent} for the rows currently rendered
+    var traceBulkState = null;  // {phase, enabled, onlyLowCode, count, text}
 
-      const fallbackInfo = buildClientObsScript(resourceName, enabled, onlyLowCode, agentObj);
-      if (curlEl) curlEl.textContent = fallbackInfo.curl_command;
-      if (scriptEl) scriptEl.textContent = fallbackInfo.script;
+    function traceAgentName(a) {
+      return (a && (a.display_name || a.agent_id)) || 'this agent';
+    }
 
-      const targetLabel = displayName || (onlyLowCode ? 'all No-Code / Low-Code agents' : (resourceName || 'all registered agents'));
-      const actWord = enabled ? 'Enabling' : 'Disabling';
-      if (resBox) {
-        resBox.replaceChildren(el('span', 'badge badge-blue', [actWord + ' trace logging on ' + targetLabel + '…']));
+    function traceButton(label, extraCls) {
+      const b = el('button', 'btn btn-xs' + (extraCls ? ' ' + extraCls : ''), [label]);
+      b.type = 'button';
+      return b;
+    }
+
+    function traceErrorMessage(err) {
+      const msg = String((err && err.message) || err || 'unknown error');
+      if (msg.indexOf('Timeout waiting') === 0) {
+        return 'Gemini Enterprise did not answer in time. Refresh to check whether the change was applied.';
       }
-      notifyHostSizeChanged();
+      return msg;
+    }
 
-      try {
-        const payload = {
-          resource_name: resourceName || undefined,
-          enabled: !!enabled,
-          sensitive_logging: !!enabled,
-          only_low_code: !!onlyLowCode,
-          engine_id: (agentObj && agentObj.engine_id) || undefined,
-          location: (agentObj && agentObj.location) || undefined,
-        };
-        const resp = await fetch('/api/enable_agent_observability', {
-          method: 'POST',
-          credentials: 'same-origin',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify(payload),
+    // A snapshot collected before a confirmed change (e.g. another instance's cache) must not flip the
+    // badge back; a snapshot collected after it is the API's truth and replaces the override.
+    function applyTraceOverrides(fleet) {
+      if (!fleet || !Array.isArray(fleet.agents)) return;
+      const generated = Date.parse(fleet.generated_at || '') || 0;
+      fleet.agents.forEach(function(ag) {
+        const ov = ag && ag.resource_name ? traceOverrides[ag.resource_name] : null;
+        if (!ov) return;
+        if (generated > ov.at) {
+          delete traceOverrides[ag.resource_name];
+          return;
+        }
+        ag.observability_config = Object.assign({}, ov.config);
+      });
+    }
+
+    // Only agents the API confirmed (status OK) change, using the configuration the API returned.
+    function recordTraceResults(data) {
+      const confirmed = {};
+      ((data && data.results) || []).forEach(function(r) {
+        if (r && r.status === 'OK' && r.resource_name && r.observability_config) {
+          confirmed[r.resource_name] = r.observability_config;
+        }
+      });
+      const at = Date.parse((data && data.updated_at) || '') || Date.now();
+      Object.keys(confirmed).forEach(function(res) {
+        traceOverrides[res] = {config: confirmed[res], at: at};
+        const ref = traceRowEls[res];
+        if (ref && ref.agent) ref.agent.observability_config = Object.assign({}, confirmed[res]);
+      });
+      [geRawFleet, lastFleet].forEach(function(fl) {
+        if (!fl || !Array.isArray(fl.agents)) return;
+        fl.agents.forEach(function(ag) {
+          if (ag && confirmed[ag.resource_name]) {
+            ag.observability_config = Object.assign({}, confirmed[ag.resource_name]);
+          }
         });
-        const data = resp.ok ? await resp.json() : null;
-        if (data && data.curl_command && curlEl) curlEl.textContent = data.curl_command;
-        if (data && data.script && scriptEl) scriptEl.textContent = data.script;
+      });
+      return confirmed;
+    }
 
-        if (data && (data.status === 'OK' || data.status === 'PARTIAL')) {
-          const okCls = data.status === 'OK' ? 'badge-green' : 'badge-yellow';
-          const summaryMsg = (enabled ? 'Trace: ON' : 'Trace: OFF') + ' — Updated ' +
-            fmtInt(data.updated_count || 0) + ' of ' + fmtInt(data.total_targeted || 0) + ' agent(s) (' + targetLabel + ').';
-          if (resBox) {
-            resBox.replaceChildren(el('span', 'badge ' + okCls, [summaryMsg]));
-          }
-          const updatedSet = {};
-          (data.results || []).forEach(function(r) {
-            if (r && r.status === 'OK' && r.resource_name) {
-              updatedSet[r.resource_name] = r.observability_config || {
-                observability_enabled: !!enabled,
-                sensitive_logging_enabled: !!enabled,
-              };
-            }
-          });
-          [geRawFleet, lastFleet].forEach(function(fl) {
-            if (!fl || !Array.isArray(fl.agents)) return;
-            fl.agents.forEach(function(ag) {
-              if (ag && ag.resource_name && updatedSet[ag.resource_name]) {
-                ag.observability_config = updatedSet[ag.resource_name];
-              }
-            });
-          });
-          if (geRawFleet || lastFleet) renderFleet(geRawFleet || lastFleet);
-        } else {
-          const errDetail = (data && (data.message || ((data.results || [])[0] && data.results[0].error))) ||
-            'Direct API PATCH requires discoveryengine.agents.update on the service account. Copy the pre-filled command or script below to run in Cloud Shell.';
-          if (resBox) {
-            resBox.replaceChildren(
-              el('span', 'badge badge-yellow', [(enabled ? 'Enable' : 'Disable') + ' Script Ready']),
-              ' ',
-              el('span', null, [String(errDetail)])
-            );
-          }
+    async function callTraceApi(payload, timeoutMs) {
+      if (isEmbedded()) {
+        // Inside Gemini Enterprise the dashboard is a sandboxed MCP App with no route to /api, so the
+        // host proxies the call to the server's app-only trace logging tool.
+        const result = await callHost('tools/call', {name: TRACE_TOOL, arguments: payload}, timeoutMs);
+        if (result && !result.isError && result.structuredContent) return result.structuredContent;
+        const text = ((result && result.content) || []).map(function(c) { return (c && c.text) || ''; }).join(' ').trim();
+        throw new Error(text || 'Gemini Enterprise returned no result for the trace logging change.');
+      }
+      const resp = await fetch('/api/enable_agent_observability', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      let data = null;
+      try { data = await resp.json(); } catch (e) { data = null; }
+      if (!resp.ok || !data) {
+        const detail = data && [data.message, data.error, data.detail].filter(function(v) {
+          return typeof v === 'string' && v;
+        })[0];
+        throw new Error(detail || ('HTTP ' + resp.status));
+      }
+      return data;
+    }
+
+    function fillTraceRow(wrap, a) {
+      const res = String(a.resource_name || '');
+      const name = traceAgentName(a);
+      const cfg = a.observability_config || {};
+      const on = !!cfg.observability_enabled;
+      const st = traceRowState[res] || null;
+      const stateBadge = badge(on ? 'Trace: ON' : 'Trace: OFF', on ? 'badge-green' : 'badge-yellow');
+      stateBadge.title = on
+        ? 'Discovery Engine trace logging is on' + (cfg.sensitive_logging_enabled ? ', including prompts and responses.' : '.')
+        : 'Discovery Engine trace logging is off.';
+      const kids = [stateBadge];
+      if (st && st.phase === 'confirm') {
+        const yes = traceButton(st.enabled ? 'Yes, enable' : 'Yes, disable', 'btn-primary');
+        yes.addEventListener('click', function() { runAgentTrace(res); });
+        const cancel = traceButton('Cancel', '');
+        cancel.addEventListener('click', function() { setTraceRowState(res, null); });
+        kids.push(el('span', 'trace-confirm', [
+          'Are you sure? ' + (st.enabled ? 'Enable' : 'Disable') + ' trace logging for ' + name
+            + (st.enabled ? ' (prompts and responses will be logged)?' : '?'),
+        ]), yes, cancel);
+      } else if (st && st.phase === 'busy') {
+        const busy = traceButton(st.enabled ? 'Enabling…' : 'Disabling…', '');
+        busy.disabled = true;
+        kids.push(busy);
+      } else {
+        const next = !on;
+        const toggle = traceButton(next ? 'Enable trace' : 'Disable trace', next ? 'btn-primary' : '');
+        toggle.title = (next ? 'Enable' : 'Disable') + ' trace logging (observabilityConfig) for ' + name;
+        toggle.addEventListener('click', function() { setTraceRowState(res, {phase: 'confirm', enabled: next}); });
+        kids.push(toggle);
+        if (st && st.text) {
+          kids.push(el('span', 'trace-msg ' + (st.phase === 'done' ? 'trace-msg-ok' : 'trace-msg-err'), [st.text]));
+        }
+      }
+      wrap.replaceChildren.apply(wrap, kids);
+    }
+
+    function setTraceRowState(res, st) {
+      if (st) traceRowState[res] = st; else delete traceRowState[res];
+      const ref = traceRowEls[res];
+      if (ref) fillTraceRow(ref.wrap, ref.agent);
+      notifyHostSizeChanged();
+    }
+
+    async function runAgentTrace(res) {
+      const st = traceRowState[res];
+      if (!st || st.phase !== 'confirm') return;
+      const enabled = !!st.enabled;
+      setTraceRowState(res, {phase: 'busy', enabled: enabled});
+      let next;
+      try {
+        const data = await callTraceApi({resource_name: res, enabled: enabled, sensitive_logging: enabled}, 60000);
+        const confirmed = recordTraceResults(data);
+        next = (data.status === 'OK' && confirmed[res])
+          ? {phase: 'done', enabled: enabled, text: '✓ Trace logging ' + (enabled ? 'enabled' : 'disabled') + '.'}
+          : {phase: 'error', enabled: enabled, text: String(data.message || ('Not applied (' + (data.status || 'no status') + ').'))};
+      } catch (err) {
+        next = {phase: 'error', enabled: enabled,
+          text: 'Could not ' + (enabled ? 'enable' : 'disable') + ' trace logging: ' + traceErrorMessage(err)};
+      }
+      setTraceRowState(res, next);
+      if (next.phase === 'done') {
+        setTimeout(function() { if (traceRowState[res] === next) setTraceRowState(res, null); }, 8000);
+      }
+    }
+
+    function traceCandidates(onlyLowCode) {
+      const fl = geRawFleet || lastFleet;
+      return ((fl && fl.agents) || []).filter(function(a) {
+        return a && a.resource_name && String(a.resource_name).indexOf('/agents/') >= 0
+          && (!onlyLowCode || a.type === 'LOW_CODE');
+      });
+    }
+
+    function setBulkTraceButtonsDisabled(disabled) {
+      ['enableLowCodeObsBtn', 'disableLowCodeObsBtn', 'enableAllObsBtn', 'disableAllObsBtn'].forEach(function(id) {
+        const b = document.getElementById(id);
+        if (b) b.disabled = !!disabled;
+      });
+    }
+
+    function askBulkTrace(enabled, onlyLowCode) {
+      if (traceBulkState && traceBulkState.phase === 'busy') return;
+      traceBulkState = {
+        phase: 'confirm', enabled: !!enabled, onlyLowCode: !!onlyLowCode,
+        count: traceCandidates(onlyLowCode).length,
+      };
+      renderTraceBulkBar();
+    }
+
+    function renderTraceBulkBar() {
+      const bar = document.getElementById('traceBulkBar');
+      if (!bar) return;
+      const st = traceBulkState;
+      if (!st) {
+        bar.replaceChildren();
+        bar.classList.add('hidden');
+        notifyHostSizeChanged();
+        return;
+      }
+      const kind = st.onlyLowCode ? 'No-Code / Low-Code agent' : 'registered agent';
+      const noun = st.count + ' ' + kind + (st.count === 1 ? '' : 's');
+      const close = traceButton('Close', '');
+      close.addEventListener('click', function() { traceBulkState = null; renderTraceBulkBar(); });
+      const kids = [];
+      if (st.phase === 'confirm' && !st.count) {
+        kids.push(el('span', 'trace-msg trace-msg-err', ['No ' + kind + 's found to update.']), close);
+      } else if (st.phase === 'confirm') {
+        const yes = traceButton(st.enabled ? 'Yes, enable' : 'Yes, disable', 'btn-primary');
+        yes.addEventListener('click', confirmBulkTrace);
+        const cancel = traceButton('Cancel', '');
+        cancel.addEventListener('click', function() { traceBulkState = null; renderTraceBulkBar(); });
+        kids.push(el('span', 'trace-confirm', [
+          'Are you sure? ' + (st.enabled ? 'Enable' : 'Disable') + ' trace logging on ' + noun
+            + ' across all Gemini Enterprise apps' + (st.enabled ? ' (prompts and responses will be logged)?' : '?'),
+        ]), yes, cancel);
+      } else if (st.phase === 'busy') {
+        kids.push(el('span', 'trace-confirm', [(st.enabled ? 'Enabling' : 'Disabling') + ' trace logging on ' + noun + '…']));
+      } else {
+        kids.push(el('span', 'trace-msg ' + (st.phase === 'done' ? 'trace-msg-ok' : 'trace-msg-err'), [st.text || '']), close);
+      }
+      bar.replaceChildren.apply(bar, kids);
+      bar.classList.remove('hidden');
+      notifyHostSizeChanged();
+    }
+
+    async function confirmBulkTrace() {
+      const st = traceBulkState;
+      if (!st || st.phase !== 'confirm') return;
+      st.phase = 'busy';
+      setBulkTraceButtonsDisabled(true);
+      renderTraceBulkBar();
+      try {
+        const data = await callTraceApi({enabled: st.enabled, sensitive_logging: st.enabled, only_low_code: st.onlyLowCode}, 120000);
+        recordTraceResults(data);
+        st.phase = data.status === 'OK' ? 'done' : 'error';
+        st.text = (data.status === 'OK' ? '✓ ' : '') + String(data.message || ('Not applied (' + (data.status || 'no status') + ').'));
+        const failed = (data.results || []).filter(function(r) { return r && r.status !== 'OK'; });
+        if (data.status === 'PARTIAL' && failed.length) {
+          st.text += ' Not updated: ' + failed.map(function(r) { return r.display_name || r.agent_id; }).join(', ') + '.';
         }
       } catch (err) {
-        if (resBox) {
-          resBox.replaceChildren(
-            el('span', 'badge badge-yellow', [(enabled ? 'Enable' : 'Disable') + ' Script Ready']),
-            ' ',
-            el('span', null, ['Copy the pre-filled curl command or enable_agent_logging.sh script below to run in Cloud Shell.'])
-          );
-        }
+        st.phase = 'error';
+        st.text = 'Could not ' + (st.enabled ? 'enable' : 'disable') + ' trace logging: ' + traceErrorMessage(err);
       }
-      notifyHostSizeChanged();
+      setBulkTraceButtonsDisabled(false);
+      if (traceBulkState === st) renderTraceBulkBar();
+      if (geRawFleet || lastFleet) renderFleet(geRawFleet || lastFleet);
     }
 
     let fleetRequestSeq = 0;

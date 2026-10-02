@@ -389,7 +389,10 @@ class VibeLiftRuntimeController:
     return {'refresh': result, 'state': self.get_state_payload(include_fleet=False)}
 
   def enable_agent_observability(self, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """Enables or disables trace logging (observabilityConfig) on one or all Gemini Enterprise agents."""
+    """Enables or disables trace logging (observabilityConfig) on one or all Gemini Enterprise agents.
+
+    Malformed input returns status INVALID_REQUEST (with a message) before any API call is made.
+    """
     raw = body or {}
     resource_name = str(raw.get('resource_name') or raw.get('agent_name') or '').strip() or None
     engine_id = str(raw.get('engine_id') or '').strip() or None
@@ -409,31 +412,44 @@ class VibeLiftRuntimeController:
     else:
       sensitive_logging = ge_fleet.parse_bool(raw_sens)
     only_low_code = ge_fleet.parse_bool(raw.get('only_low_code'))
-    if ge_fleet.parse_bool(raw.get('script_only')):
-      default_eng = self.ge_fleet.engine_ids[0] if self.ge_fleet.engine_ids else '<ENGINE_ID>'
-      script_info = ge_fleet.build_enable_agent_logging_script(
-          project_id=self.ge_fleet.project_id,
-          location=location or self.ge_fleet.location,
-          collection=self.ge_fleet.collection,
-          engine_id=engine_id or default_eng,
-          agent_resource_name=resource_name,
-          only_low_code=only_low_code,
+    try:
+      if ge_fleet.parse_bool(raw.get('script_only')):
+        default_spec = self.ge_fleet.engine_ids[0] if self.ge_fleet.engine_ids else '<ENGINE_ID>'
+        spec_loc, spec_engine = ge_fleet._parse_engine_spec(  # pylint: disable=protected-access
+            engine_id or default_spec, location or self.ge_fleet.location)
+        script_info = ge_fleet.build_enable_agent_logging_script(
+            project_id=self.ge_fleet.project_id,
+            location=spec_loc,
+            collection=self.ge_fleet.collection,
+            engine_id='<ENGINE_ID>' if spec_engine.lower() == 'auto' else spec_engine,
+            agent_resource_name=resource_name,
+            only_low_code=only_low_code,
+            enabled=enabled,
+        )
+        return {
+            'status': 'SCRIPT_ONLY',
+            'action': 'ENABLED' if enabled else 'DISABLED',
+            'enabled': enabled,
+            **script_info,
+        }
+      return self.ge_fleet.enable_agent_observability(
+          resource_name=resource_name,
+          engine_id=engine_id,
+          location=location,
           enabled=enabled,
+          sensitive_logging=sensitive_logging,
+          only_low_code=only_low_code,
       )
+    except ge_fleet.InvalidAgentRequestError as exc:
       return {
-          'status': 'SCRIPT_ONLY',
+          'status': 'INVALID_REQUEST',
+          'message': str(exc),
           'action': 'ENABLED' if enabled else 'DISABLED',
           'enabled': enabled,
-          **script_info,
+          'targeted_count': 0,
+          'updated_count': 0,
+          'results': [],
       }
-    return self.ge_fleet.enable_agent_observability(
-        resource_name=resource_name,
-        engine_id=engine_id,
-        location=location,
-        enabled=enabled,
-        sensitive_logging=sensitive_logging,
-        only_low_code=only_low_code,
-    )
 
   def _live_finops(self, fleet: Mapping[str, Any] | None) -> dict[str, Any]:
     payload = live_finops.build_live_finops(fleet)
