@@ -6223,13 +6223,13 @@ async def handle_agent_turn(message_envelope):
         : '.agents[]?.name // empty';
       const targetRes = resourceName || ('projects/' + proj + '/locations/' + loc + '/collections/' + col + '/engines/' + eng + '/assistants/default_assistant/agents/<AGENT_ID>');
       const curlCmd = [
-        'curl -s -X PATCH \\',
-        '  -H "Authorization: Bearer $(gcloud auth print-access-token)" \\',
-        '  -H "X-Goog-User-Project: ' + proj + '" \\',
-        '  -H "Content-Type: application/json" \\',
-        '  "https://' + host + '/v1alpha/' + targetRes + '?updateMask=observabilityConfig" \\',
-        '  -d \'{"observabilityConfig":{"observabilityEnabled":' + boolVal + ',"sensitiveLoggingEnabled":' + boolVal + '}}\''
-      ].join('\n');
+        'curl -s -X PATCH \\\\',
+        '  -H "Authorization: Bearer $(gcloud auth print-access-token)" \\\\',
+        '  -H "X-Goog-User-Project: ' + proj + '" \\\\',
+        '  -H "Content-Type: application/json" \\\\',
+        '  "https://' + host + '/v1alpha/' + targetRes + '?updateMask=observabilityConfig" \\\\',
+        '  -d \\'{"observabilityConfig":{"observabilityEnabled":' + boolVal + ',"sensitiveLoggingEnabled":' + boolVal + '}}\\''
+      ].join('\\n');
       const script = [
         '#!/bin/bash',
         '# -------------------------------------------------------------',
@@ -6247,37 +6247,37 @@ async def handle_agent_turn(message_envelope):
         'echo "Fetching active agents for Engine: ${ENGINE_ID}..."',
         'ACCESS_TOKEN=$(gcloud auth print-access-token)',
         '',
-        'RESPONSE=$(curl -s -X GET \\',
-        '  -H "Authorization: Bearer ${ACCESS_TOKEN}" \\',
-        '  -H "X-Goog-User-Project: ${PROJECT_ID}" \\',
+        'RESPONSE=$(curl -s -X GET \\\\',
+        '  -H "Authorization: Bearer ${ACCESS_TOKEN}" \\\\',
+        '  -H "X-Goog-User-Project: ${PROJECT_ID}" \\\\',
         '  "https://' + host + '/v1alpha/projects/${PROJECT_ID}/locations/${LOCATION}/collections/${COLLECTION}/engines/${ENGINE_ID}/assistants/default_assistant/agents")',
         '',
-        'AGENTS=$(echo "${RESPONSE}" | jq -r \'' + jqExpr + '\')',
+        'AGENTS=$(echo "${RESPONSE}" | jq -r \\'' + jqExpr + '\\')',
         '',
         'if [ -z "$AGENTS" ]; then',
-        '  echo "⚠️ No active agents found under \'default_assistant\'."',
+        '  echo "⚠️ No active agents found under \\'default_assistant\\'."',
         '  exit 0',
         'fi',
         '',
         'for AGENT in $AGENTS; do',
         '  echo "--------------------------------------------------------"',
         '  echo "' + actionVerb + ' trace logging for: ${AGENT}"',
-        '  RESULT=$(curl -s -X PATCH \\',
-        '    -H "Authorization: Bearer ${ACCESS_TOKEN}" \\',
-        '    -H "X-Goog-User-Project: ${PROJECT_ID}" \\',
-        '    -H "Content-Type: application/json" \\',
-        '    "https://' + host + '/v1alpha/${AGENT}?updateMask=observabilityConfig" \\',
-        '    -d \'{',
+        '  RESULT=$(curl -s -X PATCH \\\\',
+        '    -H "Authorization: Bearer ${ACCESS_TOKEN}" \\\\',
+        '    -H "X-Goog-User-Project: ${PROJECT_ID}" \\\\',
+        '    -H "Content-Type: application/json" \\\\',
+        '    "https://' + host + '/v1alpha/${AGENT}?updateMask=observabilityConfig" \\\\',
+        '    -d \\'{',
         '      "observabilityConfig": {',
         '        "observabilityEnabled": ' + boolVal + ',',
         '        "sensitiveLoggingEnabled": ' + boolVal,
         '      }',
-        '    }\')',
-        '  echo "Status: $(echo "${RESULT}" | jq -c \'.observabilityConfig // .error.message\')"',
+        '    }\\')',
+        '  echo "Status: $(echo "${RESULT}" | jq -c \\'.observabilityConfig // .error.message\\')"',
         'done',
         'echo "--------------------------------------------------------"',
         'echo "✅ All agents updated successfully."'
-      ].join('\n');
+      ].join('\\n');
       return {curl_command: curlCmd, script: script};
     }
 

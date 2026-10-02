@@ -148,6 +148,11 @@ def _clamp_window(hours: Any, default: int) -> int:
   return max(1, min(value, MAX_WINDOW_HOURS))
 
 
+def _future_result_keys(fut: concurrent.futures.Future[Any]) -> set[str]:
+  """Key set of a dict-valued future's result (empty when it resolves to None). Blocks on the future."""
+  return set((fut.result() or {}).keys())
+
+
 def parse_window_hours(value: Any) -> int | None:
   """Validates an untrusted window value: an integer number of hours in [1, 8760], else None."""
   if value is None or isinstance(value, bool):
@@ -2049,7 +2054,7 @@ class GeminiEnterpriseFleetService:
       for project in sorted(run_projects):
         if self.discover_unregistered and project == self.project_id and ('run_catalog', self.project_id) in unreg_jobs:
           cat_fut = unreg_jobs[('run_catalog', self.project_id)]
-          jobs[('run_inventory', project)] = pool.submit(lambda f=cat_fut: set((f.result() or {}).keys()))
+          jobs[('run_inventory', project)] = pool.submit(_future_result_keys, cat_fut)
         else:
           jobs[('run_inventory', project)] = pool.submit(self._cloud_run_services, project)
       jobs[('model_usage',)] = pool.submit(self._model_usage, window_s)
