@@ -730,6 +730,11 @@ def classify_agent(engine_id: str, assistant_id: str, raw: dict[str, Any]) -> di
     backend = {'kind': 'dialogflow', 'resource': raw['dialogflowAgentDefinition'].get('dialogflowAgent')}
 
   description = str(raw.get('description') or '')
+  obs_raw = raw.get('observabilityConfig') or {}
+  observability_config = {
+      'observability_enabled': bool(obs_raw.get('observabilityEnabled')),
+      'sensitive_logging_enabled': bool(obs_raw.get('sensitiveLoggingEnabled')),
+  }
   return {
       'agent_id': str(raw.get('name', '')).rsplit('/', 1)[-1],
       'resource_name': raw.get('name'),
@@ -745,6 +750,7 @@ def classify_agent(engine_id: str, assistant_id: str, raw: dict[str, Any]) -> di
       'updated': raw.get('updateTime'),
       'starter_prompts': len(raw.get('starterPrompts') or []),
       'backend': backend,
+      'observability_config': observability_config,
       'telemetry_scope': {'ADK': 'agent', 'A2A': 'service' if backend.get('kind') == 'cloud_run' else 'none'}.get(kind, 'none'),
       'metrics': {
           'requests': None,
@@ -766,6 +772,106 @@ def classify_agent(engine_id: str, assistant_id: str, raw: dict[str, Any]) -> di
       'data_sources': [],
       'notes': [],
   }
+
+
+_GE_AGENT_RESOURCE_RE = re.compile(
+    r'^projects/(?P<project>[^/]+)/locations/(?P<location>[^/]+)/collections/(?P<collection>[^/]+)/'
+    r'engines/(?P<engine>[^/]+)/assistants/(?P<assistant>[^/]+)/agents/(?P<agent>[^/]+)$'
+)
+
+
+def build_enable_agent_logging_script(
+    project_id: str,
+    location: str = 'global',
+    collection: str = 'default_collection',
+    engine_id: str = '<ENGINE_ID>',
+    agent_resource: str | None = None,
+    agent_resource_name: str | None = None,
+    only_low_code: bool = False,
+    enabled: bool = True,
+) -> dict[str, str]:
+  """Builds the enable/disable_agent_logging.sh bulk script and single-agent PATCH curl command."""
+  proj = project_id or '<PROJECT_ID>'
+  loc = (location or 'global').strip().lower()
+  coll = collection or 'default_collection'
+  eng = engine_id or '<ENGINE_ID>'
+  base = _de_base(loc)
+  bool_str = 'true' if enabled else 'false'
+  action_verb = 'Enables' if enabled else 'Disables'
+  action_ing = 'Enabling' if enabled else 'Disabling'
+  script_name = 'enable_agent_logging.sh' if enabled else 'disable_agent_logging.sh'
+  target_res = agent_resource or agent_resource_name
+  single_target = target_res or (
+      f'projects/{proj}/locations/{loc}/collections/{coll}/engines/{eng}/assistants/default_assistant/agents/<AGENT_ID>'
+  )
+  jq_expr = (
+      '.agents[]? | select(.lowCodeAgentDefinition != null or .workflowAgentDefinition != null) | .name // empty'
+      if only_low_code
+      else '.agents[].name // empty'
+  )
+  curl_cmd = (
+      'curl -s -X PATCH '
+      '-H "Authorization: Bearer $(gcloud auth print-access-token)" '
+      f'-H "X-Goog-User-Project: {proj}" '
+      '-H "Content-Type: application/json" '
+      f'"{base}/{single_target}?updateMask=observabilityConfig" '
+      f'-d \'{{"observabilityConfig":{{"observabilityEnabled":{bool_str},"sensitiveLoggingEnabled":{bool_str}}}}}\''
+  )
+  script = f"""#!/bin/bash
+# -------------------------------------------------------------
+# Script: {script_name}
+# Purpose: {action_verb} trace logging across all registered agents
+# -------------------------------------------------------------
+
+set -e
+
+# Configuration
+PROJECT_ID="{proj}"
+LOCATION="{loc}"
+COLLECTION="{coll}"
+ENGINE_ID="{eng}"
+
+echo "Fetching active agents for Engine: ${{ENGINE_ID}}..."
+ACCESS_TOKEN=$(gcloud auth print-access-token)
+
+# 1. Retrieve list of registered agents
+RESPONSE=$(curl -s -X GET \\
+  -H "Authorization: Bearer ${{ACCESS_TOKEN}}" \\
+  -H "X-Goog-User-Project: ${{PROJECT_ID}}" \\
+  "{base}/projects/${{PROJECT_ID}}/locations/${{LOCATION}}/collections/${{COLLECTION}}/engines/${{ENGINE_ID}}/assistants/default_assistant/agents")
+
+# Extract agent resource paths
+AGENTS=$(echo "$RESPONSE" | jq -r '{jq_expr}')
+
+if [ -z "$AGENTS" ]; then
+  echo "⚠️ No agents found under 'default_assistant'. Raw response:"
+  echo "$RESPONSE"
+  exit 0
+fi
+
+# 2. Iterate and patch observabilityConfig on each agent
+for AGENT in $AGENTS; do
+  echo "--------------------------------------------------------"
+  echo "{action_ing} trace logging for: ${{AGENT}}"
+
+  RESULT=$(curl -s -X PATCH \\
+    -H "Authorization: Bearer ${{ACCESS_TOKEN}}" \\
+    -H "X-Goog-User-Project: ${{PROJECT_ID}}" \\
+    -H "Content-Type: application/json" \\
+    "{base}/${{AGENT}}?updateMask=observabilityConfig" \\
+    -d '{{
+      "observabilityConfig": {{
+        "observabilityEnabled": {bool_str},
+        "sensitiveLoggingEnabled": {bool_str}
+      }}
+    }}')
+
+  echo "Status: $(echo "$RESULT" | jq -r '.observabilityConfig // .error.message')"
+done
+echo "--------------------------------------------------------"
+echo "✅ All agents in ${{ENGINE_ID}} updated successfully (observabilityEnabled={bool_str})."
+"""
+  return {'script': script, 'curl_command': curl_cmd, 'script_name': script_name}
 
 
 class _GoogleApi:
@@ -932,6 +1038,132 @@ class GeminiEnterpriseFleetService:
         return self._warming_placeholder(hours)
 
     return self._refresh_sync(hours, force_refresh=force_refresh)
+
+  def enable_agent_observability(
+      self,
+      resource_name: str | None = None,
+      engine_id: str | None = None,
+      location: str | None = None,
+      enabled: bool = True,
+      sensitive_logging: bool | None = None,
+      only_low_code: bool = False,
+  ) -> dict[str, Any]:
+    """Enables or disables Discovery Engine trace logging (observabilityConfig) on one or all registered GE agents."""
+    obs_enabled = bool(enabled)
+    sens_enabled = obs_enabled if sensitive_logging is None else (bool(sensitive_logging) and obs_enabled)
+    fleet_snapshot = self.collect(allow_stale=True, max_wait_s=5.0)
+    agents = list(fleet_snapshot.get('agents') or [])
+    engines = list(fleet_snapshot.get('engines') or [])
+    default_engine = engine_id or (engines[0].get('engine_id') if engines else '<ENGINE_ID>')
+    default_loc = location or (engines[0].get('location') if engines else self.location) or 'global'
+
+    targets: list[dict[str, Any]] = []
+    if resource_name:
+      match = _GE_AGENT_RESOURCE_RE.match(resource_name.strip())
+      if not match:
+        raise ValueError(f'Invalid Gemini Enterprise agent resource path: {resource_name!r}')
+      default_loc = match['location']
+      default_engine = match['engine']
+      existing = next((a for a in agents if a.get('resource_name') == resource_name.strip()), None)
+      targets.append(existing or {
+          'agent_id': match['agent'],
+          'display_name': match['agent'],
+          'resource_name': resource_name.strip(),
+          'engine_id': match['engine'],
+          'location': match['location'],
+          'type': 'LOW_CODE',
+      })
+    else:
+      for a in agents:
+        res_name = str(a.get('resource_name') or '')
+        if not _GE_AGENT_RESOURCE_RE.match(res_name):
+          continue
+        if engine_id and a.get('engine_id') != engine_id and f"{a.get('location')}/{a.get('engine_id')}" != engine_id:
+          continue
+        if only_low_code and a.get('type') != 'LOW_CODE':
+          continue
+        targets.append(a)
+
+    patch_body = {
+        'observabilityConfig': {
+            'observabilityEnabled': obs_enabled,
+            'sensitiveLoggingEnabled': sens_enabled,
+        }
+    }
+    results: list[dict[str, Any]] = []
+    updated_count = 0
+    for target in targets:
+      res_name = str(target.get('resource_name') or '')
+      match = _GE_AGENT_RESOURCE_RE.match(res_name)
+      loc = (match['location'] if match else target.get('location')) or default_loc
+      url = f'{_de_base(loc)}/{res_name}?updateMask=observabilityConfig'
+      try:
+        resp = self._api.call('PATCH', url, patch_body)
+        obs_cfg = (resp or {}).get('observabilityConfig') or patch_body['observabilityConfig']
+        updated_count += 1
+        results.append({
+            'agent_id': target.get('agent_id'),
+            'display_name': target.get('display_name') or target.get('agent_id'),
+            'resource_name': res_name,
+            'type': target.get('type'),
+            'status': 'OK',
+            'observability_config': {
+                'observability_enabled': bool(obs_cfg.get('observabilityEnabled', obs_enabled)),
+                'sensitive_logging_enabled': bool(obs_cfg.get('sensitiveLoggingEnabled', sens_enabled)),
+            },
+        })
+      except FleetSourceError as exc:
+        results.append({
+            'agent_id': target.get('agent_id'),
+            'display_name': target.get('display_name') or target.get('agent_id'),
+            'resource_name': res_name,
+            'type': target.get('type'),
+            'status': 'CLI_REQUIRED',
+            'error': str(exc),
+            'observability_config': {
+                'observability_enabled': obs_enabled,
+                'sensitive_logging_enabled': sens_enabled,
+            },
+        })
+
+    # Update cached fleet entries so the UI reflects the new state immediately
+    if targets:
+      target_names = {str(t.get('resource_name') or '') for t in targets}
+      with self._cache_lock:
+        for _, (_, cached_payload) in self._cache.items():
+          for cached_agent in cached_payload.get('agents') or []:
+            if str(cached_agent.get('resource_name') or '') in target_names:
+              cached_agent['observability_config'] = {
+                  'observability_enabled': obs_enabled,
+                  'sensitive_logging_enabled': sens_enabled,
+              }
+
+    snippets = build_enable_agent_logging_script(
+        project_id=self.project_id,
+        location=default_loc,
+        collection=self.collection,
+        engine_id=default_engine,
+        agent_resource=resource_name or (targets[0].get('resource_name') if len(targets) == 1 else None),
+        only_low_code=only_low_code,
+        enabled=obs_enabled,
+    )
+    return {
+        'status': 'OK' if updated_count == len(targets) and targets else ('PARTIAL' if updated_count > 0 else ('SCRIPT_READY' if targets else 'NO_AGENTS_MATCHED')),
+        'action': 'ENABLED' if obs_enabled else 'DISABLED',
+        'enabled': obs_enabled,
+        'project_id': self.project_id,
+        'location': default_loc,
+        'collection': self.collection,
+        'engine_id': default_engine,
+        'only_low_code': bool(only_low_code),
+        'targeted_count': len(targets),
+        'total_targeted': len(targets),
+        'updated_count': updated_count,
+        'results': results,
+        'script_name': snippets['script_name'],
+        'script': snippets['script'],
+        'curl_command': snippets['curl_command'],
+    }
 
   # ------------------------------------------------------------------ internals
 

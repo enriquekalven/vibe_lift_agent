@@ -83,7 +83,7 @@ fi
 # does not include. This custom role adds just that permission to the read path, so the runtime SA
 # does not need roles/discoveryengine.agentAdmin (no create/update/delete/setIamPolicy).
 FLEET_ROLE_ID="vibeLiftGeFleetReader"
-FLEET_ROLE_PERMISSIONS="discoveryengine.engines.get,discoveryengine.assistants.list,discoveryengine.agents.list,discoveryengine.agents.get,discoveryengine.agents.manage"
+FLEET_ROLE_PERMISSIONS="discoveryengine.engines.get,discoveryengine.assistants.list,discoveryengine.agents.list,discoveryengine.agents.get,discoveryengine.agents.manage,discoveryengine.agents.update"
 FLEET_ROLE_STATE="$(gcloud iam roles describe "${FLEET_ROLE_ID}" --project="${PROJECT_ID}" --format='value(deleted)' 2>/dev/null || echo missing)"
 if [[ "${FLEET_ROLE_STATE}" == "missing" ]]; then
   echo "Creating custom role ${FLEET_ROLE_ID}..."

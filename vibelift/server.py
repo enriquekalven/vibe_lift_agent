@@ -388,6 +388,53 @@ class VibeLiftRuntimeController:
       self.gcp_telemetry.fetch_live_bigquery_project_insights(force_refresh=True, non_blocking=False)
     return {'refresh': result, 'state': self.get_state_payload(include_fleet=False)}
 
+  def enable_agent_observability(self, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Enables or disables trace logging (observabilityConfig) on one or all Gemini Enterprise agents."""
+    raw = body or {}
+    resource_name = str(raw.get('resource_name') or raw.get('agent_name') or '').strip() or None
+    engine_id = str(raw.get('engine_id') or '').strip() or None
+    location = str(raw.get('location') or '').strip() or None
+    raw_enabled = raw.get('enabled')
+    if raw_enabled is None:
+      enabled = str(raw.get('action') or 'enable').strip().lower() not in ('disable', 'off', 'false', '0')
+    elif isinstance(raw_enabled, bool):
+      enabled = raw_enabled
+    else:
+      enabled = ge_fleet.parse_bool(raw_enabled)
+    raw_sens = raw.get('sensitive_logging')
+    if raw_sens is None:
+      sensitive_logging = enabled
+    elif isinstance(raw_sens, bool):
+      sensitive_logging = raw_sens
+    else:
+      sensitive_logging = ge_fleet.parse_bool(raw_sens)
+    only_low_code = ge_fleet.parse_bool(raw.get('only_low_code'))
+    if ge_fleet.parse_bool(raw.get('script_only')):
+      default_eng = self.ge_fleet.engine_ids[0] if self.ge_fleet.engine_ids else '<ENGINE_ID>'
+      script_info = ge_fleet.build_enable_agent_logging_script(
+          project_id=self.ge_fleet.project_id,
+          location=location or self.ge_fleet.location,
+          collection=self.ge_fleet.collection,
+          engine_id=engine_id or default_eng,
+          agent_resource_name=resource_name,
+          only_low_code=only_low_code,
+          enabled=enabled,
+      )
+      return {
+          'status': 'SCRIPT_ONLY',
+          'action': 'ENABLED' if enabled else 'DISABLED',
+          'enabled': enabled,
+          **script_info,
+      }
+    return self.ge_fleet.enable_agent_observability(
+        resource_name=resource_name,
+        engine_id=engine_id,
+        location=location,
+        enabled=enabled,
+        sensitive_logging=sensitive_logging,
+        only_low_code=only_low_code,
+    )
+
   def _live_finops(self, fleet: Mapping[str, Any] | None) -> dict[str, Any]:
     payload = live_finops.build_live_finops(fleet)
     payload['rate_card_models'] = sorted(self._rate_cards())
@@ -1030,6 +1077,9 @@ class VibeLiftRequestHandler(http.server.BaseHTTPRequestHandler):
     if self.path == '/api/ge_mart/refresh':
       self._send_json(srv.controller.refresh_ge_mart())
       return
+    if self.path in ('/api/enable_agent_observability', '/api/agent_observability'):
+      self._send_json(srv.controller.enable_agent_observability(body))
+      return
     self.send_error(404, 'Not Found')
 
   def do_DELETE(self) -> None:  # pylint: disable=invalid-name
@@ -1208,6 +1258,11 @@ def register_api_routes(app: Any, controller: VibeLiftRuntimeController) -> None
   @app.post('/api/ge_mart/refresh')
   def post_refresh_ge_mart():
     return controller.refresh_ge_mart()
+
+  @app.post('/api/enable_agent_observability')
+  @app.post('/api/agent_observability')
+  def post_enable_agent_observability(payload: dict = fastapi.Body(default={})):
+    return controller.enable_agent_observability(payload)
 
   @app.get('/api/gcp_telemetry')
   def get_gcp_telemetry_endpoint():

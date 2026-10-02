@@ -441,6 +441,101 @@ class BlindspotRemediationTest(unittest.TestCase):
     self.assertIsNone(svc._cached_bq_summary)
     self.assertIsNone(svc._cached_bq_insights)
 
+  def test_enable_and_disable_agent_observability_and_ui_buttons(self):
+    from vibelift import fleet, server
+    from vibelift.ui import template as ui_template
+
+    raw_low_code = {
+        'name': 'projects/p1/locations/global/collections/default_collection/engines/eng1/assistants/default_assistant/agents/lc1',
+        'displayName': 'No-Code Support Agent',
+        'state': 'ENABLED',
+        'lowCodeAgentDefinition': {'nodes': []},
+        'observabilityConfig': {'observabilityEnabled': False, 'sensitiveLoggingEnabled': False},
+    }
+    raw_adk = {
+        'name': 'projects/p1/locations/global/collections/default_collection/engines/eng1/assistants/default_assistant/agents/adk1',
+        'displayName': 'ADK Agent',
+        'state': 'ENABLED',
+        'adkAgentDefinition': {'provisionedReasoningEngine': {'reasoningEngine': 'projects/p1/locations/us-central1/reasoningEngines/123'}},
+        'observabilityConfig': {'observabilityEnabled': True, 'sensitiveLoggingEnabled': True},
+    }
+    classified_lc = fleet.classify_agent('eng1', 'Engine 1', raw_low_code)
+    self.assertEqual(classified_lc['type'], 'LOW_CODE')
+    self.assertEqual(
+        classified_lc['observability_config'],
+        {'observability_enabled': False, 'sensitive_logging_enabled': False},
+    )
+
+    svc = fleet.GeminiEnterpriseFleetService(
+        project_id='p1',
+        engine_ids=['eng1'],
+        location='global',
+        discover_unregistered=False,
+    )
+    calls = []
+
+    def fake_call(method, url, body=None):
+      calls.append((method, url, body))
+      if method == 'GET' and url.endswith('/engines/eng1'):
+        return {
+            'name': 'projects/p1/locations/global/collections/default_collection/engines/eng1',
+            'displayName': 'Engine 1',
+        }
+      if method == 'GET' and '/agents' in url:
+        return {'agents': [raw_low_code, raw_adk]}
+      if method == 'PATCH':
+        cfg = (body or {}).get('observabilityConfig') or {}
+        return {'name': url.split('/v1alpha/', 1)[-1].split('?', 1)[0], 'observabilityConfig': cfg}
+      return {}
+
+    with mock.patch.object(svc._api, 'call', side_effect=fake_call):
+      # 1. Enable only low-code agents
+      res_en = svc.enable_agent_observability(enabled=True, only_low_code=True)
+      self.assertEqual(res_en['status'], 'OK')
+      self.assertEqual(res_en['action'], 'ENABLED')
+      self.assertEqual(res_en['updated_count'], 1)
+      self.assertIn('"observabilityEnabled": true', res_en['script'])
+      # 2. Disable all agents
+      res_dis = svc.enable_agent_observability(enabled=False, only_low_code=False)
+      self.assertEqual(res_dis['status'], 'OK')
+      self.assertEqual(res_dis['action'], 'DISABLED')
+      self.assertEqual(res_dis['updated_count'], 2)
+      self.assertIn('"observabilityEnabled": false', res_dis['script'])
+      # 3. Single agent disable via controller
+      res_single = svc.enable_agent_observability(
+          resource_name=raw_low_code['name'],
+          enabled=False,
+      )
+      self.assertEqual(res_single['status'], 'OK')
+      self.assertEqual(res_single['action'], 'DISABLED')
+      self.assertEqual(res_single['updated_count'], 1)
+
+    patch_calls = [c for c in calls if c[0] == 'PATCH']
+    self.assertEqual(len(patch_calls), 4)
+    self.assertIn('?updateMask=observabilityConfig', patch_calls[0][1])
+    self.assertEqual(
+        patch_calls[0][2],
+        {'observabilityConfig': {'observabilityEnabled': True, 'sensitiveLoggingEnabled': True}},
+    )
+    self.assertEqual(
+        patch_calls[-1][2],
+        {'observabilityConfig': {'observabilityEnabled': False, 'sensitiveLoggingEnabled': False}},
+    )
+
+    ctrl_res = server._global_controller.enable_agent_observability(
+        {'enabled': False, 'only_low_code': True, 'script_only': True}
+    )
+    self.assertEqual(ctrl_res['status'], 'SCRIPT_ONLY')
+    self.assertEqual(ctrl_res['action'], 'DISABLED')
+
+    html = ui_template.render_dashboard_html()
+    self.assertIn('id="enableLowCodeObsBtn"', html)
+    self.assertIn('id="disableLowCodeObsBtn"', html)
+    self.assertIn('id="enableAllObsBtn"', html)
+    self.assertIn('id="disableAllObsBtn"', html)
+    self.assertIn('id="agentObsDrawer"', html)
+    self.assertIn('toggleAgentObservability', html)
+
 
 if __name__ == '__main__':
   unittest.main()

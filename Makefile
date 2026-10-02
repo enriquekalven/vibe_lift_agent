@@ -33,3 +33,10 @@ demo: playground
 
 deploy:
 	./deploy/deploy_cloud_run.sh
+
+enable-agent-logging:
+	./deploy/enable_agent_logging.sh
+
+disable-agent-logging:
+	./deploy/enable_agent_logging.sh --disable
+

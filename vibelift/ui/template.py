@@ -1047,11 +1047,42 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
             <span id="fleetEngineBadge" class="badge badge-blue">Loading&hellip;</span>
           </div>
           <div class="fleet-controls">
+            <button class="btn btn-primary" id="enableLowCodeObsBtn" onclick="toggleAgentObservability(null, true, true)" title="Enable Discovery Engine trace logging (observabilityConfig) on all No-Code / Low-Code agents">Enable No-Code Trace</button>
+            <button class="btn" id="disableLowCodeObsBtn" onclick="toggleAgentObservability(null, false, true)" title="Disable Discovery Engine trace logging (observabilityConfig) on all No-Code / Low-Code agents">Disable No-Code Trace</button>
+            <button class="btn" id="enableAllObsBtn" onclick="toggleAgentObservability(null, true, false)" title="Enable Discovery Engine trace logging (observabilityConfig) across all registered Gemini Enterprise agents">Enable All Trace</button>
+            <button class="btn" id="disableAllObsBtn" onclick="toggleAgentObservability(null, false, false)" title="Disable Discovery Engine trace logging (observabilityConfig) across all registered Gemini Enterprise agents">Disable All Trace</button>
+            <button class="btn" id="toggleObsScriptBtn" onclick="toggleAgentObsDrawer()" title="View or copy enable_agent_logging.sh script for Cloud Shell">Trace Script</button>
             <label><input type="checkbox" id="fleetAuto" checked onchange="scheduleFleetRefresh()" /> Auto-refresh (60 s)</label>
             <button class="btn" id="fleetRefreshBtn" onclick="refreshFleet(true)">Refresh now</button>
           </div>
         </div>
         <div id="fleetNotice" class="fleet-notice hidden"></div>
+        <div id="agentObsDrawer" class="hidden" style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin:8px 0 12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+            <div>
+              <div style="font-size:12.5px;font-weight:700;color:var(--text-primary);" id="agentObsDrawerTitle">
+                No-Code / Low-Code &amp; Registered Agent Trace Logging (<span class="mono">observabilityConfig</span>)
+              </div>
+              <div style="font-size:11.5px;color:var(--text-secondary);" id="agentObsDrawerSub">
+                Updates <span class="mono">observabilityEnabled</span> &amp; <span class="mono">sensitiveLoggingEnabled</span> via Discovery Engine <span class="mono">PATCH ?updateMask=observabilityConfig</span>, or copy <span class="mono">deploy/enable_agent_logging.sh</span> for Cloud Shell.
+              </div>
+            </div>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+              <button class="btn" id="copyObsCurlBtn" onclick="copyText(document.getElementById('agentObsCurlCode').textContent, this)" style="padding:4px 9px;font-size:11.5px;">Copy curl Command</button>
+              <button class="btn" id="copyObsScriptBtn" onclick="copyText(document.getElementById('agentObsScriptCode').textContent, this)" style="padding:4px 9px;font-size:11.5px;">Copy enable_agent_logging.sh</button>
+              <button class="btn" onclick="document.getElementById('agentObsDrawer').classList.add('hidden')" style="padding:4px 9px;font-size:11.5px;">Close</button>
+            </div>
+          </div>
+          <div id="agentObsResultBox" style="font-size:12px;margin-bottom:8px;"></div>
+          <div style="margin-bottom:8px;">
+            <div style="font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:4px;">Direct API Command (<span class="mono">curl -X PATCH ?updateMask=observabilityConfig</span>):</div>
+            <pre id="agentObsCurlCode" class="diff-pre" style="max-height:130px;overflow:auto;font-size:11px;margin:0;"></pre>
+          </div>
+          <details>
+            <summary style="cursor:pointer;font-size:11.5px;font-weight:600;color:var(--g-blue);">Show Bulk Cloud Shell Script (<span class="mono">deploy/enable_agent_logging.sh</span>)</summary>
+            <pre id="agentObsScriptCode" class="diff-pre" style="max-height:220px;overflow:auto;font-size:11px;margin-top:6px;"></pre>
+          </details>
+        </div>
         <div id="fleetMeta" class="fleet-meta">Waiting for live data from Google Cloud&hellip;</div>
         <div id="fleetSources" class="fleet-sources"></div>
         <div id="fleetKpis" class="kpi-grid fleet-kpis"></div>
@@ -6080,6 +6111,39 @@ async def handle_agent_turn(message_envelope):
         const scope = {agent: 'per-agent telemetry', service: 'service-level telemetry'}[a.telemetry_scope] || 'inventory only';
         const lastCell = el('td', 'mono', [m.last_activity ? fmtAgo(m.last_activity) : '—']);
         if (m.last_activity) lastCell.title = m.last_activity;
+        const obsCfg = a.observability_config || {};
+        const obsOn = !!obsCfg.observability_enabled;
+        const hasAgentResource = !!(a.resource_name && String(a.resource_name).indexOf('/agents/') >= 0);
+        const obsBadge = hasAgentResource
+          ? badge(obsOn ? 'Trace: ON' : 'Trace: OFF', obsOn ? 'badge-green' : 'badge-yellow')
+          : null;
+        if (obsBadge) {
+          obsBadge.title = obsOn
+            ? 'Discovery Engine trace logging (observabilityEnabled + sensitiveLoggingEnabled) is active.'
+            : 'Discovery Engine trace logging is currently off.';
+        }
+        let obsActionRow = null;
+        if (hasAgentResource) {
+          const btnEn = el('button', 'btn' + (!obsOn ? ' btn-primary' : ''), ['Enable Trace']);
+          btnEn.style.padding = '2px 7px';
+          btnEn.style.fontSize = '11px';
+          btnEn.title = 'Enable trace logging (observabilityConfig) for ' + (a.display_name || a.agent_id);
+          btnEn.addEventListener('click', function() {
+            toggleAgentObservability(a.resource_name, true, false, a.display_name || a.agent_id, a);
+          });
+          const btnDis = el('button', 'btn', ['Disable Trace']);
+          btnDis.style.padding = '2px 7px';
+          btnDis.style.fontSize = '11px';
+          btnDis.title = 'Disable trace logging (observabilityConfig) for ' + (a.display_name || a.agent_id);
+          btnDis.addEventListener('click', function() {
+            toggleAgentObservability(a.resource_name, false, false, a.display_name || a.agent_id, a);
+          });
+          obsActionRow = el('div', 'fleet-agent-tags', [
+            obsBadge,
+            btnEn,
+            btnDis,
+          ]);
+        }
         body.appendChild(el('tr', a.telemetry_scope === 'none' ? 'fleet-row-muted' : null, [
           el('td', null, [
             el('div', 'fleet-agent-name', [a.display_name || a.agent_id]),
@@ -6090,6 +6154,7 @@ async def handle_agent_turn(message_envelope):
               a.sharing_scope ? badge(String(a.sharing_scope).replace(/_/g, ' ').toLowerCase(), 'badge-blue') : null,
               registrationBadge(a),
             ]),
+            obsActionRow,
           ]),
           el('td', null, [badge(a.type_label || a.type, 'badge-blue')]),
           el('td', null, [el('div', null, [runsOn]), el('div', 'fleet-agent-desc', [[runsOnSub, scope].filter(Boolean).join(' · ')])]),
@@ -6140,6 +6205,180 @@ async def handle_agent_turn(message_envelope):
         notes.appendChild(el('li', null, ['Trace scan reached its page cap (' + fleet.token_log_scan.traces_scanned
           + ' traces); trace-based token totals are lower bounds for this window.']));
       }
+    }
+
+    function buildClientObsScript(resourceName, enabled, onlyLowCode, agentObj) {
+      const fl = lastFleet || geRawFleet || {};
+      const proj = fl.project_id || '<PROJECT_ID>';
+      const engList = Array.isArray(fl.engines) ? fl.engines : [];
+      const firstEng = engList[0] || {};
+      const loc = (agentObj && agentObj.location) || firstEng.location || fl.location || 'global';
+      const col = fl.collection || 'default_collection';
+      const eng = (agentObj && agentObj.engine_id) || firstEng.engine_id || fl.engine_id || '<ENGINE_ID>';
+      const host = (!loc || loc === 'global') ? 'discoveryengine.googleapis.com' : (loc + '-discoveryengine.googleapis.com');
+      const boolVal = enabled ? 'true' : 'false';
+      const actionVerb = enabled ? 'Enabling' : 'Disabling';
+      const jqExpr = onlyLowCode
+        ? '.agents[]? | select(.lowCodeAgentDefinition != null or .workflowAgentDefinition != null) | .name // empty'
+        : '.agents[]?.name // empty';
+      const targetRes = resourceName || ('projects/' + proj + '/locations/' + loc + '/collections/' + col + '/engines/' + eng + '/assistants/default_assistant/agents/<AGENT_ID>');
+      const curlCmd = [
+        'curl -s -X PATCH \\',
+        '  -H "Authorization: Bearer $(gcloud auth print-access-token)" \\',
+        '  -H "X-Goog-User-Project: ' + proj + '" \\',
+        '  -H "Content-Type: application/json" \\',
+        '  "https://' + host + '/v1alpha/' + targetRes + '?updateMask=observabilityConfig" \\',
+        '  -d \'{"observabilityConfig":{"observabilityEnabled":' + boolVal + ',"sensitiveLoggingEnabled":' + boolVal + '}}\''
+      ].join('\n');
+      const script = [
+        '#!/bin/bash',
+        '# -------------------------------------------------------------',
+        '# Script: enable_agent_logging.sh',
+        '# Purpose: ' + (enabled ? 'Enables' : 'Disables') + ' trace logging across registered agents',
+        '# -------------------------------------------------------------',
+        '',
+        'set -e',
+        '',
+        'PROJECT_ID="' + proj + '"',
+        'LOCATION="' + loc + '"',
+        'COLLECTION="' + col + '"',
+        'ENGINE_ID="' + eng + '"',
+        '',
+        'echo "Fetching active agents for Engine: ${ENGINE_ID}..."',
+        'ACCESS_TOKEN=$(gcloud auth print-access-token)',
+        '',
+        'RESPONSE=$(curl -s -X GET \\',
+        '  -H "Authorization: Bearer ${ACCESS_TOKEN}" \\',
+        '  -H "X-Goog-User-Project: ${PROJECT_ID}" \\',
+        '  "https://' + host + '/v1alpha/projects/${PROJECT_ID}/locations/${LOCATION}/collections/${COLLECTION}/engines/${ENGINE_ID}/assistants/default_assistant/agents")',
+        '',
+        'AGENTS=$(echo "${RESPONSE}" | jq -r \'' + jqExpr + '\')',
+        '',
+        'if [ -z "$AGENTS" ]; then',
+        '  echo "⚠️ No active agents found under \'default_assistant\'."',
+        '  exit 0',
+        'fi',
+        '',
+        'for AGENT in $AGENTS; do',
+        '  echo "--------------------------------------------------------"',
+        '  echo "' + actionVerb + ' trace logging for: ${AGENT}"',
+        '  RESULT=$(curl -s -X PATCH \\',
+        '    -H "Authorization: Bearer ${ACCESS_TOKEN}" \\',
+        '    -H "X-Goog-User-Project: ${PROJECT_ID}" \\',
+        '    -H "Content-Type: application/json" \\',
+        '    "https://' + host + '/v1alpha/${AGENT}?updateMask=observabilityConfig" \\',
+        '    -d \'{',
+        '      "observabilityConfig": {',
+        '        "observabilityEnabled": ' + boolVal + ',',
+        '        "sensitiveLoggingEnabled": ' + boolVal,
+        '      }',
+        '    }\')',
+        '  echo "Status: $(echo "${RESULT}" | jq -c \'.observabilityConfig // .error.message\')"',
+        'done',
+        'echo "--------------------------------------------------------"',
+        'echo "✅ All agents updated successfully."'
+      ].join('\n');
+      return {curl_command: curlCmd, script: script};
+    }
+
+    function toggleAgentObsDrawer() {
+      const drawer = document.getElementById('agentObsDrawer');
+      if (!drawer) return;
+      const wasHidden = drawer.classList.contains('hidden');
+      drawer.classList.toggle('hidden', !wasHidden);
+      if (wasHidden) {
+        const info = buildClientObsScript(null, true, false, null);
+        const curlEl = document.getElementById('agentObsCurlCode');
+        const scriptEl = document.getElementById('agentObsScriptCode');
+        if (curlEl && !curlEl.textContent) curlEl.textContent = info.curl_command;
+        if (scriptEl && !scriptEl.textContent) scriptEl.textContent = info.script;
+      }
+      notifyHostSizeChanged();
+    }
+
+    async function toggleAgentObservability(resourceName, enabled, onlyLowCode, displayName, agentObj) {
+      const drawer = document.getElementById('agentObsDrawer');
+      const resBox = document.getElementById('agentObsResultBox');
+      const curlEl = document.getElementById('agentObsCurlCode');
+      const scriptEl = document.getElementById('agentObsScriptCode');
+      if (drawer) drawer.classList.remove('hidden');
+
+      const fallbackInfo = buildClientObsScript(resourceName, enabled, onlyLowCode, agentObj);
+      if (curlEl) curlEl.textContent = fallbackInfo.curl_command;
+      if (scriptEl) scriptEl.textContent = fallbackInfo.script;
+
+      const targetLabel = displayName || (onlyLowCode ? 'all No-Code / Low-Code agents' : (resourceName || 'all registered agents'));
+      const actWord = enabled ? 'Enabling' : 'Disabling';
+      if (resBox) {
+        resBox.replaceChildren(el('span', 'badge badge-blue', [actWord + ' trace logging on ' + targetLabel + '…']));
+      }
+      notifyHostSizeChanged();
+
+      try {
+        const payload = {
+          resource_name: resourceName || undefined,
+          enabled: !!enabled,
+          sensitive_logging: !!enabled,
+          only_low_code: !!onlyLowCode,
+          engine_id: (agentObj && agentObj.engine_id) || undefined,
+          location: (agentObj && agentObj.location) || undefined,
+        };
+        const resp = await fetch('/api/enable_agent_observability', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload),
+        });
+        const data = resp.ok ? await resp.json() : null;
+        if (data && data.curl_command && curlEl) curlEl.textContent = data.curl_command;
+        if (data && data.script && scriptEl) scriptEl.textContent = data.script;
+
+        if (data && (data.status === 'OK' || data.status === 'PARTIAL')) {
+          const okCls = data.status === 'OK' ? 'badge-green' : 'badge-yellow';
+          const summaryMsg = (enabled ? 'Trace: ON' : 'Trace: OFF') + ' — Updated ' +
+            fmtInt(data.updated_count || 0) + ' of ' + fmtInt(data.total_targeted || 0) + ' agent(s) (' + targetLabel + ').';
+          if (resBox) {
+            resBox.replaceChildren(el('span', 'badge ' + okCls, [summaryMsg]));
+          }
+          const updatedSet = {};
+          (data.results || []).forEach(function(r) {
+            if (r && r.status === 'OK' && r.resource_name) {
+              updatedSet[r.resource_name] = r.observability_config || {
+                observability_enabled: !!enabled,
+                sensitive_logging_enabled: !!enabled,
+              };
+            }
+          });
+          [geRawFleet, lastFleet].forEach(function(fl) {
+            if (!fl || !Array.isArray(fl.agents)) return;
+            fl.agents.forEach(function(ag) {
+              if (ag && ag.resource_name && updatedSet[ag.resource_name]) {
+                ag.observability_config = updatedSet[ag.resource_name];
+              }
+            });
+          });
+          if (geRawFleet || lastFleet) renderFleet(geRawFleet || lastFleet);
+        } else {
+          const errDetail = (data && (data.message || ((data.results || [])[0] && data.results[0].error))) ||
+            'Direct API PATCH requires discoveryengine.agents.update on the service account. Copy the pre-filled command or script below to run in Cloud Shell.';
+          if (resBox) {
+            resBox.replaceChildren(
+              el('span', 'badge badge-yellow', [(enabled ? 'Enable' : 'Disable') + ' Script Ready']),
+              ' ',
+              el('span', null, [String(errDetail)])
+            );
+          }
+        }
+      } catch (err) {
+        if (resBox) {
+          resBox.replaceChildren(
+            el('span', 'badge badge-yellow', [(enabled ? 'Enable' : 'Disable') + ' Script Ready']),
+            ' ',
+            el('span', null, ['Copy the pre-filled curl command or enable_agent_logging.sh script below to run in Cloud Shell.'])
+          );
+        }
+      }
+      notifyHostSizeChanged();
     }
 
     let fleetRequestSeq = 0;
