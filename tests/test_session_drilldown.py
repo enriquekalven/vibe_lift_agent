@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import threading
+import time
 import unittest
 import urllib.request
 from unittest import mock
@@ -242,6 +244,115 @@ class UserCentricFinopsEndpointTest(unittest.TestCase):
     start = html.index('function renderGeSessionTurns')
     end = html.index('function renderGeMartDaily')
     self.assertNotIn('innerHTML', html[start:end])
+
+
+def _is_sessions_query(sql: str) -> bool:
+  """True for build_recent_sessions_sql (build_session_turns_sql reads fct_sessions in a recent_sessions CTE)."""
+  return 'fct_sessions' in sql and 'recent_sessions' not in sql
+
+
+class ColdStartInsightsTest(unittest.TestCase):
+  """A new Cloud Run instance must not serve the MCP app an empty Users tab, or make its tool calls wait."""
+
+  def _service(self) -> gcp_telemetry.GoogleCloudTelemetryService:
+    service = gcp_telemetry.GoogleCloudTelemetryService('example-project', region='us-central1')
+    service._cli_token = 'token'  # skip ADC and the gcloud CLI
+    service._cli_token_ts = time.monotonic()
+    return service
+
+  @staticmethod
+  def _fake_query(calls: list[str], release: threading.Event | None = None):
+    """Fake _query_bigquery_rest: only the sessions query returns rows, held until `release` is set."""
+    def fake(sql: str, timeout_s: float = 7.0) -> list[dict[str, str | None]]:
+      del timeout_s
+      if not _is_sessions_query(sql):
+        return []
+      calls.append(sql)
+      if release is not None:
+        release.wait(5.0)
+      return [dict(r) for r in _SESSION_ROWS]
+    return fake
+
+  def test_prime_waits_for_the_first_fetch(self):
+    service = self._service()
+    calls: list[str] = []
+    with mock.patch.object(service, '_query_bigquery_rest', side_effect=self._fake_query(calls)):
+      insights = service.prime_bigquery_insights(timeout_s=5.0)
+    self.assertIsNotNone(insights)
+    self.assertEqual([s['session_id'] for s in insights['ge_sessions']], ['s-1', 's-2', 's-9'])
+    self.assertEqual(len(calls), 1)
+
+  def test_prime_skips_offline_projects(self):
+    service = gcp_telemetry.GoogleCloudTelemetryService('test-project', region='us-central1')
+    with mock.patch.object(service, '_query_bigquery_rest') as query:
+      self.assertIsNone(service.prime_bigquery_insights(timeout_s=5.0))
+    query.assert_not_called()
+
+  def test_cold_non_blocking_calls_answer_fast_and_share_one_refresh(self):
+    service = self._service()
+    calls: list[str] = []
+    release = threading.Event()
+    with mock.patch.object(service, '_query_bigquery_rest', side_effect=self._fake_query(calls, release)):
+      started = time.monotonic()
+      with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(
+            lambda _: service.fetch_live_bigquery_project_insights(non_blocking=True), range(4)))
+      elapsed = time.monotonic() - started
+      refresh = service._bq_refresh_event
+      release.set()
+      self.assertIsNotNone(refresh)
+      self.assertTrue(refresh.wait(5.0))
+      warm = service.fetch_live_bigquery_project_insights(non_blocking=True)
+    self.assertEqual(results, [None] * 4)
+    self.assertLess(elapsed, 1.0)  # Gemini Enterprise fails MCP app tool calls after about 2 s
+    self.assertEqual(len(calls), 1)  # one shared refresh, not one per call
+    self.assertEqual(len(warm['ge_sessions']), 3)
+
+  def test_stale_cache_is_served_while_the_refresh_runs(self):
+    service = self._service()
+    stale = {'ge_sessions': [{'session_id': 'old'}]}
+    service._cached_bq_insights = stale
+    service._cached_bq_insights_ts = time.monotonic() - 3600.0
+    calls: list[str] = []
+    release = threading.Event()
+    with mock.patch.object(service, '_query_bigquery_rest', side_effect=self._fake_query(calls, release)):
+      started = time.monotonic()
+      out = service.fetch_live_bigquery_project_insights(non_blocking=True)
+      elapsed = time.monotonic() - started
+      refresh = service._bq_refresh_event
+      release.set()
+      self.assertIsNotNone(refresh)
+      self.assertTrue(refresh.wait(5.0))
+    self.assertIs(out, stale)
+    self.assertLess(elapsed, 1.0)
+    self.assertEqual(len(service._cached_bq_insights['ge_sessions']), 3)
+    self.assertIsNone(service._bq_refresh_event)
+
+  def test_empty_fetch_logs_a_warning(self):
+    service = self._service()
+    with mock.patch.object(service, '_query_bigquery_rest', return_value=[]), \
+         self.assertLogs(gcp_telemetry.logger, level='WARNING') as logs:
+      self.assertIsNone(service.fetch_live_bigquery_project_insights(force_refresh=True))
+    self.assertIn('every query returned no rows', '\n'.join(logs.output))
+
+  def test_controller_prime_reports_the_outcome(self):
+    ctrl = server.VibeLiftRuntimeController(fleet_service=_FAKE_FLEET)
+    insights = {'ge_sessions': _uc_with_sessions()['ge_sessions'], 'power_users_ldap': [{'ldap': 'user-a'}]}
+    with mock.patch.object(ctrl, '_is_live_gcp', return_value=True), \
+         mock.patch.object(ctrl.gcp_telemetry, 'prime_bigquery_insights', return_value=insights) as prime, \
+         self.assertLogs(server.logger, level='INFO') as logs:
+      self.assertTrue(ctrl.prime_live_caches(timeout_s=3.0))
+    prime.assert_called_once_with(3.0)
+    self.assertIn('3 sessions, 1 users', '\n'.join(logs.output))
+    with mock.patch.object(ctrl, '_is_live_gcp', return_value=True), \
+         mock.patch.object(ctrl.gcp_telemetry, 'prime_bigquery_insights', return_value=None), \
+         self.assertLogs(server.logger, level='WARNING') as logs:
+      self.assertFalse(ctrl.prime_live_caches(timeout_s=3.0))
+    self.assertIn('not ready', '\n'.join(logs.output))
+    with mock.patch.object(ctrl, '_is_live_gcp', return_value=False), \
+         mock.patch.object(ctrl.gcp_telemetry, 'prime_bigquery_insights') as prime:
+      self.assertFalse(ctrl.prime_live_caches())
+    prime.assert_not_called()
 
 
 if __name__ == '__main__':

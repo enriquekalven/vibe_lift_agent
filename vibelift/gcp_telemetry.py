@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import subprocess
+import threading
 import urllib.error
 import urllib.request
 from typing import Any
@@ -159,6 +160,9 @@ class GoogleCloudTelemetryService:
     self._cached_bq_summary_hours: int = 168
     self._cached_bq_insights: dict[str, Any] | None = None
     self._cached_bq_insights_ts: float = 0.0
+    # At most one background insights refresh runs at a time; concurrent callers share its event.
+    self._bq_refresh_lock = threading.Lock()
+    self._bq_refresh_event: threading.Event | None = None
     self._cli_token: str | None = None
     self._cli_token_ts: float = 0.0
 
@@ -850,6 +854,40 @@ class GoogleCloudTelemetryService:
       if not page_token:
         return names
 
+  def _start_bq_insights_refresh(self, window_hours: int | None) -> threading.Event:
+    """Starts a background insights refresh, or returns the event of the one already running."""
+    with self._bq_refresh_lock:
+      if self._bq_refresh_event is not None:
+        return self._bq_refresh_event
+      evt = threading.Event()
+      self._bq_refresh_event = evt
+
+    def _bg() -> None:
+      try:
+        self.fetch_live_bigquery_project_insights(
+            force_refresh=True, non_blocking=False, window_hours=window_hours
+        )
+      except Exception:  # pylint: disable=broad-except
+        logger.debug('Background BigQuery insights refresh failed', exc_info=True)
+      finally:
+        with self._bq_refresh_lock:
+          self._bq_refresh_event = None
+        evt.set()
+
+    threading.Thread(target=_bg, daemon=True, name='vibelift-bq-insights').start()
+    return evt
+
+  def prime_bigquery_insights(self, timeout_s: float) -> dict[str, Any] | None:
+    """Fetches the BigQuery insights, waiting up to timeout_s; returns them if they are cached by then.
+
+    Used at startup, before the server takes traffic. A fetch that outlives timeout_s keeps running in
+    the background, and later non-blocking callers share it.
+    """
+    if not self.project_id or self.project_id in (UNCONFIGURED_PROJECT_ID, 'test-project'):
+      return None
+    self._start_bq_insights_refresh(None).wait(timeout=timeout_s)
+    return self._cached_bq_insights
+
   def fetch_live_bigquery_project_insights(
       self,
       force_refresh: bool = False,
@@ -858,7 +896,6 @@ class GoogleCloudTelemetryService:
   ) -> dict[str, Any] | None:
     """Queries real BigQuery telemetry datasets in the project for user, session, tool, and turn grounding."""
     import concurrent.futures
-    import threading
     import time
 
     if not self.project_id or self.project_id in (UNCONFIGURED_PROJECT_ID, 'test-project'):
@@ -878,16 +915,9 @@ class GoogleCloudTelemetryService:
       return self._cached_bq_insights
 
     if non_blocking and not force_refresh:
-      evt = threading.Event()
-      def _bg() -> None:
-        try:
-          self.fetch_live_bigquery_project_insights(
-              force_refresh=True, non_blocking=False, window_hours=window_hours
-          )
-        finally:
-          evt.set()
-      threading.Thread(target=_bg, daemon=True).start()
-      evt.wait(timeout=0.05)
+      # Return the cached insights (possibly stale) almost at once: Gemini Enterprise fails MCP app tool
+      # calls that run past about 2 s ("Deadline expired"). All callers share one background refresh.
+      self._start_bq_insights_refresh(window_hours).wait(timeout=0.05)
       return self._cached_bq_insights
 
     token = self._get_access_token()
@@ -1003,6 +1033,8 @@ class GoogleCloudTelemetryService:
 
     if not any((ge_audit, ge_rollup, ge_recent, ge_daily, ge_daily_by_app, ge_sessions, ge_session_turns,
                 sre_turns, cr_reqs, vx_audit)):
+      # _query_bigquery_rest logs failures at DEBUG only, so record that this fetch got nothing back.
+      logger.warning('BigQuery insights for %s: every query returned no rows; keeping the previous cache', p)
       return self._cached_bq_insights
 
     # 1. Usage logs for Tab 5 (aive_logs): GE turns from the mart plus Agent Engine OTel turns.

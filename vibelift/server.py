@@ -41,6 +41,11 @@ logging.basicConfig(level=logging.INFO)
 # Opt-in for the Prompt Cache X-Ray live mode, which reads logged (raw) user prompts from Cloud Storage.
 PROMPT_XRAY_LIVE_ENV = 'VIBELIFT_PROMPT_XRAY_LIVE'
 
+# How long a new Cloud Run instance waits at startup for the BigQuery insights before it takes traffic
+# (VibeLiftRuntimeController.prime_live_caches). A fetch normally takes 2-3 s; this stays well inside
+# the startup probe budget in deploy/cloud_run_service.yaml (2 s + 6 x 5 s).
+STARTUP_INSIGHTS_TIMEOUT_S = 15.0
+
 
 import threading
 
@@ -75,6 +80,35 @@ class VibeLiftRuntimeController:
     """Returns True when connected to a real GCP project (not the offline unit-test fake)."""
     proj = str(getattr(self.ge_fleet, 'project_id', '') or '').strip()
     return bool(proj and proj not in ('test-project', gcp_telemetry.UNCONFIGURED_PROJECT_ID))
+
+  def prime_live_caches(self, timeout_s: float = STARTUP_INSIGHTS_TIMEOUT_S) -> bool:
+    """Loads the BigQuery insights before this instance takes traffic; returns True if they loaded.
+
+    Runs at import time on Cloud Run, before uvicorn opens the port, so the fetch gets full (boosted)
+    startup CPU. MCP app tool calls only read cached insights (Gemini Enterprise gives them about 2 s),
+    and once CPU is only allocated during requests a background refresh can take minutes. Without this
+    step a new instance shows the Users tab empty after every deploy.
+    """
+    if not self._is_live_gcp():
+      return False
+    import time
+    started = time.monotonic()
+    insights = self.gcp_telemetry.prime_bigquery_insights(timeout_s)
+    elapsed = time.monotonic() - started
+    if insights:
+      logger.info(
+          'Loaded BigQuery insights in %.1fs before serving: %d sessions, %d users',
+          elapsed,
+          len(insights.get('ge_sessions') or []),
+          len(insights.get('power_users_ldap') or []),
+      )
+      return True
+    logger.warning(
+        'BigQuery insights were not ready %.1fs after startup; the Users tab stays empty until a '
+        'background refresh finishes',
+        elapsed,
+    )
+    return False
 
   def start_background_warmer(self, interval_s: float = 45.0) -> None:
     """Starts a daemon thread that keeps the GE fleet and GCP telemetry caches warm on Cloud Run."""
@@ -863,6 +897,9 @@ class VibeLiftRuntimeController:
 
 # Shared singleton runtime controller
 _global_controller = VibeLiftRuntimeController()
+if os.environ.get('K_SERVICE'):
+  # Cloud Run imports this module before uvicorn opens the port, so this blocks traffic until loaded.
+  _global_controller.prime_live_caches()
 if os.environ.get('K_SERVICE') or os.environ.get('VIBELIFT_BACKGROUND_WARMER') == '1':
   _global_controller.start_background_warmer()
 
