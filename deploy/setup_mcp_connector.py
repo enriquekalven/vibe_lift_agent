@@ -66,6 +66,9 @@ ALL_TOOLS = (
     'calculate_prompt_cache_economics',
     'get_vibelift_state',
     'run_alpha_evolve_generation',
+    'xray_prompt_cache',
+    'list_prompt_snapshot_turns',
+    'set_agent_trace_logging',
 )
 _ID_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_\-]{0,127}$')
 _LOCATIONS = ('global', 'us', 'eu')
