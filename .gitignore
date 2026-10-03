@@ -26,3 +26,7 @@ Build
 *.zip
 *.tar.gz
 
+# Coverage
+.coverage
+.coverage.*
+

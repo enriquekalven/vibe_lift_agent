@@ -4,7 +4,7 @@
 Layers:
 
 #   <curated dataset>  v_user_activity_curated, v_agentic_operations_curated,
-#                      v_consolidated_audit_log (v_model_armor_curated commented out until enabled)
+#                      v_consolidated_audit_log, v_model_armor_curated
 #                      (views, ported from gemini-enterprise-stage ds_ge_curated_staging, bugs fixed)
 #   <mart dataset>     v_fct_turns (turn logic view), fct_turns (its materialized copy, with
 #                      refreshed_at), fct_sessions and agg_daily_usage (views over fct_turns)
@@ -47,7 +47,7 @@ DEFAULT_LOCATION = 'US'
 # Matches the default raw log retention set by deploy/set_log_retention.sh (VIBELIFT_RETENTION_DAYS).
 DEFAULT_LOOKBACK_DAYS = 90
 # The audit entry is written at request start, the activity entry at completion.
-DEFAULT_AUDIT_LAG_S = 300
+DEFAULT_AUDIT_LAG_S = 1800
 DEFAULT_AUDIT_LEAD_S = 30
 JOB_LABELS = {'datacloud': 'jetski', 'app': 'vibelift'}
 
@@ -80,10 +80,9 @@ SOURCES: dict[str, SourceSpec] = {
     'audit_data_access': SourceSpec(
         'ds_ge_audit_raw', 'cloudaudit_googleapis_com_data_access',
         ('protopayload_auditlog', 'resource', 'operation')),
-    # Uncomment when Model Armor log sink (ds_security_guardrails_raw) is enabled:
-    # 'armor': SourceSpec(
-    #     'ds_security_guardrails_raw', 'modelarmor_googleapis_com_sanitize_operations',
-    #     ('jsonpayload_v1_sanitizeoperationlogentry', 'labels', 'resource')),
+    'armor': SourceSpec(
+        'ds_security_guardrails_raw', 'modelarmor_googleapis_com_sanitize_operations',
+        ('jsonpayload_v1_sanitizeoperationlogentry', 'labels', 'resource')),
 }
 
 # (layer, view name, description). Order matters: later views read earlier ones.
@@ -91,8 +90,7 @@ OBJECTS: tuple[tuple[str, str, str], ...] = (
     ('curated', 'v_user_activity_curated', 'GE assistant + search activity (VibeLift port of stage curated view).'),
     ('curated', 'v_agentic_operations_curated', 'Agent inference operations with token usage.'),
     ('curated', 'v_consolidated_audit_log', 'GE admin-activity and data-access audit calls.'),
-    # Uncomment when Model Armor is enabled (along with the armor CTEs in mart/v_fct_turns.sql):
-    # ('curated', 'v_model_armor_curated', 'Model Armor sanitize operations.'),
+    ('curated', 'v_model_armor_curated', 'Model Armor sanitize operations.'),
     ('mart', 'v_fct_turns', 'VibeLift turn logic (always current, slow). fct_turns is its materialized copy.'),
     ('mart', 'fct_turns', 'VibeLift turn fact: one row per user interaction (materialized; see refreshed_at).'),
     ('mart', 'fct_sessions', 'VibeLift session fact: one row per logged session.'),
@@ -157,7 +155,9 @@ def source_sql(table_ref: str | None, schema: Mapping[str, str] | None, json_col
   """Adapter that exposes a log-sink table with a fixed column set.
 
   Record columns become JSON (TO_JSON keeps the sink's exact field names, which are lowercase
-  under jsonPayload/resource/labels and camelCase under protopayload_auditlog).
+  under jsonPayload/resource/labels and camelCase under protopayload_auditlog). Also adapts
+  Cloud Logging `_AllLogs` tables (where `insert_id` and `json_payload` are snake_case and
+  `log_id` filters the stream).
   """
   if not table_ref or not schema or schema.get('timestamp', '').upper() != 'TIMESTAMP':
     return empty_source_sql(json_columns)
@@ -165,20 +165,34 @@ def source_sql(table_ref: str | None, schema: Mapping[str, str] | None, json_col
   days = max(1, min(int(lookback_days), 400))
   cols = []
   for name, sql_type in _SCALAR_COLUMNS:
-    cols.append(f'`{name}`' if name in schema else f'CAST(NULL AS {sql_type}) AS {name}')
+    if name in schema:
+      cols.append(f'`{name}`')
+    elif name == 'insertId' and 'insert_id' in schema:
+      cols.append('`insert_id` AS insertId')
+    else:
+      cols.append(f'CAST(NULL AS {sql_type}) AS {name}')
+  extra_where = ''
   for name in json_columns:
-    col_type = (schema.get(name) or '').upper()
+    actual_col = name
+    if actual_col not in schema and name == 'jsonpayload_v1_sanitizeoperationlogentry' and 'json_payload' in schema:
+      actual_col = 'json_payload'
+      if 'log_id' in schema:
+        extra_where = " AND `log_id` = 'modelarmor.googleapis.com/sanitize_operations'"
+    elif actual_col not in schema and name == 'jsonPayload' and 'json_payload' in schema:
+      actual_col = 'json_payload'
+    col_type = (schema.get(actual_col) or '').upper()
     if col_type in ('RECORD', 'STRUCT'):
-      cols.append(f'TO_JSON(`{name}`) AS {name}')
+      cols.append(f'TO_JSON(`{actual_col}`) AS {name}')
     elif col_type == 'JSON':
-      cols.append(f'`{name}` AS {name}')
+      cols.append(f'`{actual_col}` AS {name}')
     elif col_type == 'STRING':
-      cols.append(f'SAFE.PARSE_JSON(`{name}`) AS {name}')
+      cols.append(f'SAFE.PARSE_JSON(`{actual_col}`) AS {name}')
     else:
       cols.append(f'CAST(NULL AS JSON) AS {name}')
   return (
       'SELECT ' + ', '.join(cols) + f' FROM `{table_ref}`'
       f' WHERE `timestamp` >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {days} DAY)'
+      + extra_where
   )
 
 
@@ -201,6 +215,14 @@ def resolve_sources(raw_project: str, location: str, lookback_days: int, describ
   for key, spec in SOURCES.items():
     ref = validate_table_ref(overrides.get(key) or f'{raw_project}.{spec.dataset}.{spec.table}')
     schema = describe(ref)
+    if schema is None and key == 'armor' and key not in overrides:
+      for fallback_ds in ('ds_security_raw', spec.dataset):
+        candidate_ref = validate_table_ref(f'{raw_project}.{fallback_ds}._AllLogs')
+        candidate_schema = describe(candidate_ref)
+        if candidate_schema is not None:
+          ref = candidate_ref
+          schema = candidate_schema
+          break
     if schema is None:
       resolved[key] = ResolvedSource(key, ref, 'MISSING', 'table not found; view returns no rows',
                                      empty_source_sql(spec.json_columns))
@@ -212,7 +234,8 @@ def resolve_sources(raw_project: str, location: str, lookback_days: int, describ
           f'table is in {table_location}, views are in {location}; BigQuery cannot join across locations',
           empty_source_sql(spec.json_columns))
       continue
-    present = [c for c in spec.json_columns if c in schema]
+    present = [c for c in spec.json_columns if c in schema or (
+        c == 'jsonpayload_v1_sanitizeoperationlogentry' and 'json_payload' in schema)]
     resolved[key] = ResolvedSource(
         key, ref, 'FOUND', f'record columns present: {", ".join(present) or "none"}',
         source_sql(ref, schema, spec.json_columns, lookback_days))
@@ -334,9 +357,7 @@ def _ensure_dataset(client, project: str, dataset: str, location: str) -> None:
 
 
 # Objects that are currently disabled/commented out and should be removed if present during --apply.
-DISABLED_OBJECTS: tuple[tuple[str, str], ...] = (
-    ('curated', 'v_model_armor_curated'),
-)
+DISABLED_OBJECTS: tuple[tuple[str, str], ...] = ()
 
 
 def _drop_if_view(client, ref: str) -> None:
@@ -425,6 +446,8 @@ def main(argv: list[str] | None = None) -> int:
                       help=f'Override a raw source table. Keys: {", ".join(SOURCES)}.')
   parser.add_argument('--gcloud-auth', action='store_true',
                       help='Use `gcloud auth print-access-token` instead of Application Default Credentials.')
+  parser.add_argument('--skip-verify', action='store_true',
+                      help='Skip post-apply conservation invariant checks.')
   mode = parser.add_mutually_exclusive_group()
   mode.add_argument('--print', dest='mode', action='store_const', const='print', help='Print the DDL only.')
   mode.add_argument('--print-refresh', dest='mode', action='store_const', const='print-refresh',
@@ -467,6 +490,7 @@ def main(argv: list[str] | None = None) -> int:
     from google.oauth2 import credentials as oauth_credentials  # pylint: disable=import-outside-toplevel
 
     env = dict(os.environ)
+    env['PATH'] = f"/opt/homebrew/bin:/usr/local/bin:{env.get('PATH', '')}"
     existing_metrics = env.get('CLOUDSDK_METRICS_ENVIRONMENT', '').strip()
     env['CLOUDSDK_METRICS_ENVIRONMENT'] = (f'{existing_metrics} datacloud.antigravity'.strip()
                                            if existing_metrics else 'datacloud.antigravity')
@@ -531,6 +555,28 @@ def main(argv: list[str] | None = None) -> int:
     rows = list(client.query(f'SELECT COUNT(1) AS n FROM `{project}.{name}`',
                              job_config=job_config, location=args.location).result())
     print(f'  {name:45s} {rows[0]["n"]}')
+
+  if not args.skip_verify:
+    import verify_ge_mart_invariants as verifier  # pylint: disable=import-outside-toplevel
+
+    def _client_runner(_p: str, loc: str, sql: str) -> list[dict[str, object]]:
+      return [dict(r.items()) for r in client.query(sql, job_config=job_config, location=loc).result()]
+
+    results = verifier.verify_mart_invariants(
+        project=project,
+        curated_dataset=args.curated_dataset,
+        mart_dataset=args.mart_dataset,
+        location=args.location,
+        query_runner=_client_runner,
+    )
+    failed_invs = [r for r in results if not r.passed]
+    print(f'Invariants ({project}.{args.mart_dataset}):')
+    for r in results:
+      status = 'PASS' if r.passed else 'FAIL'
+      print(f'  [{status}] {r.name:<36} violations={r.violations} ({r.detail})')
+    if failed_invs:
+      print(f'ERROR: {len(failed_invs)} post-apply invariant(s) failed.', file=sys.stderr)
+      return 1
   return 0
 
 

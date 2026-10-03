@@ -22,6 +22,8 @@ fields AS (
     *,
     LAX_STRING(lb.modelarmor_googleapis_com_client_correlation_id) AS correlation_id,
     LAX_STRING(ma.sanitizationresult.sanitizationverdict) AS verdict_raw,
+    LAX_STRING(ma.sanitizationresult.sanitizationverdictreason) AS verdict_reason,
+    LAX_STRING(ma.sanitizationresult.executionstate) AS execution_state,
     LAX_STRING(ma.sanitizationresult.filterresults.pi_and_jailbreak.piandjailbreakfilterresult.matchstate) = 'MATCH_FOUND' AS is_prompt_injection,
     LAX_STRING(ma.sanitizationresult.filterresults.sdp.sdpfilterresult.inspectresult.matchstate) = 'MATCH_FOUND'
       OR LAX_STRING(ma.sanitizationresult.filterresults.sdp.sdpfilterresult.deidentifyresult.matchstate) = 'MATCH_FOUND' AS is_sensitive_data,
@@ -36,7 +38,10 @@ SELECT
   CONCAT('ARMOR:', COALESCE(insert_id, CAST(UNIX_MICROS(event_timestamp) AS STRING))) AS event_id,
   trace_id,
   insert_id,
-  IF(STARTS_WITH(correlation_id, 'AS|'), NULLIF(SPLIT(correlation_id, '|')[SAFE_OFFSET(2)], ''), NULL) AS assist_token,
+  CASE
+    WHEN STARTS_WITH(correlation_id, 'AS|') THEN NULLIF(SPLIT(correlation_id, '|')[SAFE_OFFSET(2)], '')
+    ELSE REGEXP_EXTRACT(correlation_id, r'((?:NMwK|M8gK)[A-Za-z0-9_-]+)')
+  END AS assist_token,
   COALESCE(
     LAX_STRING(res.labels.template_id),
     REGEXP_EXTRACT(correlation_id, r'templates/([^/|]+)')
@@ -48,7 +53,11 @@ SELECT
   ) AS operation_type,
   LAX_STRING(lb.modelarmor_googleapis_com_client_name) AS client_name,
   REGEXP_REPLACE(verdict_raw, r'^MODEL_ARMOR_SANITIZATION_VERDICT_', '') AS sanitization_verdict,
-  REGEXP_CONTAINS(verdict_raw, r'(BLOCK|REDACT)$') AS is_blocked,
+  verdict_reason,
+  execution_state,
+  REGEXP_CONTAINS(verdict_raw, r'(BLOCK|REDACT)$')
+    AND NOT REGEXP_CONTAINS(COALESCE(verdict_reason, ''), r'(?i)not blocked as the enforcement type is inspect only')
+    AND COALESCE(execution_state, 'SANITIZATION_EXECUTION_COMPLETED') NOT IN ('SANITIZATION_EXECUTION_SKIPPED', 'SANITZATION_EXECUTION_SKIPPED') AS is_blocked,
   LAX_STRING(ma.sanitizationresult.filtermatchstate) = 'MATCH_FOUND' AS is_policy_match,
   COALESCE(is_prompt_injection, FALSE) AS is_prompt_injection,
   COALESCE(is_sensitive_data, FALSE) AS is_sensitive_data,

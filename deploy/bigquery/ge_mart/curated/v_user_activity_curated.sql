@@ -66,7 +66,8 @@ unioned AS (
     NULLIF(COALESCE(
       REGEXP_EXTRACT(session_ref, r'sessions/([^/]+)'),
       IF(STRPOS(session_ref, '/') = 0, session_ref, NULL),
-      REGEXP_EXTRACT(answer_name, r'sessions/([^/]+)')
+      REGEXP_EXTRACT(answer_name, r'sessions/([^/]+)'),
+      REGEXP_EXTRACT(resource_path, r'sessions/([^/]+)')
     ), '-') AS session_id,
     COALESCE(LAX_STRING(jp.response.assisttoken), LAX_STRING(jp.assisttoken)) AS assist_token,
     LAX_STRING(jp.response.attributiontoken) AS attribution_token,
@@ -100,7 +101,10 @@ unioned AS (
       SELECT SUM(LENGTH(LAX_STRING(p.text)))
       FROM UNNEST(JSON_QUERY_ARRAY(jp.request.query.parts)) AS p
     ) AS query_chars,
-    REGEXP_CONTAINS(COALESCE(request_str, ''), r'"file[nN]ame"') AS has_uploaded_file,
+    REGEXP_CONTAINS(COALESCE(api_method, ''), r'(?i)(upload|file)')
+      OR NULLIF(LAX_STRING(jp.response.fileid), '') IS NOT NULL
+      OR NULLIF(LAX_STRING(jp.request.fileid), '') IS NOT NULL
+      OR REGEXP_CONTAINS(COALESCE(request_str, ''), r'"file([nN]ame|[iI]ds?)"') AS has_uploaded_file,
     REGEXP_EXTRACT(request_str, r'"mime[tT]ype"\s*:\s*"([^"]+)"') AS uploaded_file_mimetype,
     SAFE_CAST(SAFE_CAST(REGEXP_EXTRACT(request_str, r'"byte[cC]ount"\s*:\s*"?([0-9.eE+]+)') AS FLOAT64) AS INT64) AS uploaded_file_byte_size,
     LAX_STRING(jp.response.sanitizationresult.sanitizationverdict) AS sanitization_verdict_raw,
@@ -123,7 +127,8 @@ unioned AS (
     resource_path,
     NULLIF(COALESCE(
       REGEXP_EXTRACT(session_ref, r'sessions/([^/]+)'),
-      IF(STRPOS(session_ref, '/') = 0, session_ref, NULL)
+      IF(STRPOS(session_ref, '/') = 0, session_ref, NULL),
+      REGEXP_EXTRACT(resource_path, r'sessions/([^/]+)')
     ), '-') AS session_id,
     CAST(NULL AS STRING) AS assist_token,
     LAX_STRING(jp.response.attributiontoken) AS attribution_token,

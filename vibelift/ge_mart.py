@@ -121,9 +121,9 @@ def build_recent_turns_sql(project_id: str, hours: int = 168, limit: int = 20, t
   return f"""
     SELECT
       turn_id, turn_source, turn_kind, CAST(event_timestamp AS STRING) AS ts, session_id, user_email,
-      engine_key, agent_name, model_name, api_method, turn_status, status_message,
+      engine_key, agent_name, model_name, api_method, turn_status, status_message, latency_ms,
       input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, total_tokens, llm_calls,
-      tool_call_count, tool_names
+      tool_call_count, tool_failure_count, tool_names, mcp_server_name
     FROM `{mart_ref(project_id)}.fct_turns`
     WHERE event_date >= DATE(TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {h} HOUR))
       AND event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {h} HOUR)
@@ -220,7 +220,7 @@ def build_daily_usage_sql(project_id: str, days: int = 7) -> str:
   """
 
 
-def build_recent_sessions_sql(project_id: str, days: int = 30, limit: int = 50) -> str:
+def build_recent_sessions_sql(project_id: str, days: int = 30, limit: int = 500) -> str:
   """Recent conversation sessions from fct_sessions."""
   return f"""
     SELECT
@@ -257,7 +257,7 @@ def build_recent_sessions_sql(project_id: str, days: int = 30, limit: int = 50) 
 def build_session_turns_sql(
     project_id: str,
     days: int = 30,
-    session_limit: int = 50,
+    session_limit: int = 500,
     turns_per_session: int = 100,
     limit: int = 2000,
 ) -> str:
@@ -272,27 +272,47 @@ def build_session_turns_sql(
   window = _clamp(days, 1, 400)
   return f"""
     WITH recent_sessions AS (
-      SELECT engine_key, session_id
+      SELECT engine_key, session_id, session_end
       FROM `{mart}.fct_sessions`
       WHERE session_date >= DATE_SUB(CURRENT_DATE(), INTERVAL {window} DAY)
       ORDER BY session_end DESC
       LIMIT {_clamp(session_limit, 1, 500)}
     )
     SELECT
-      t.engine_key, t.session_id, t.turn_id, t.turn_kind, t.turn_status,
-      CAST(t.event_timestamp AS STRING) AS ts, t.user_email, t.agent_name, t.model_name,
-      t.input_tokens, t.output_tokens, t.cached_input_tokens, t.reasoning_tokens, t.total_tokens,
-      t.llm_calls, t.tool_call_count, t.tool_names
+      COALESCE(r.engine_key, t.engine_key) AS engine_key, t.session_id, t.turn_id, t.turn_kind,
+      t.turn_status, CAST(t.event_timestamp AS STRING) AS ts, t.user_email, t.agent_name,
+      t.model_name, t.latency_ms, t.input_tokens, t.output_tokens, t.cached_input_tokens,
+      t.reasoning_tokens, t.total_tokens, t.llm_calls, t.tool_call_count, t.tool_failure_count,
+      t.tool_names, t.mcp_server_name
     FROM `{mart}.fct_turns` AS t
     JOIN recent_sessions AS r
-      ON t.session_id = r.session_id AND COALESCE(t.engine_key, '') = COALESCE(r.engine_key, '')
+      ON t.session_id = r.session_id
     WHERE t.session_id IS NOT NULL
       AND t.event_date >= DATE_SUB(CURRENT_DATE(), INTERVAL {window} DAY)
     QUALIFY ROW_NUMBER() OVER (
-      PARTITION BY t.engine_key, t.session_id ORDER BY t.event_timestamp DESC
+      PARTITION BY t.session_id ORDER BY t.event_timestamp DESC
     ) <= {_clamp(turns_per_session, 1, 500)}
-    ORDER BY t.session_id, t.event_timestamp
+    ORDER BY r.session_end DESC, t.session_id, t.event_timestamp
     LIMIT {_clamp(limit, 1, 5000)}
+  """
+
+
+def build_sessionless_token_turns_sql(project_id: str, days: int = 30, limit: int = 500) -> str:
+  """Token-bearing turns without a session_id (e.g. standalone Vertex Agent Engine traces)."""
+  mart = mart_ref(project_id)
+  window = _clamp(days, 1, 400)
+  return f"""
+    SELECT
+      engine_key, session_id, turn_id, turn_kind, turn_status,
+      CAST(event_timestamp AS STRING) AS ts, user_email, agent_name, model_name,
+      latency_ms, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, total_tokens,
+      llm_calls, tool_call_count, tool_failure_count, tool_names, mcp_server_name
+    FROM `{mart}.fct_turns`
+    WHERE session_id IS NULL
+      AND total_tokens IS NOT NULL
+      AND event_date >= DATE_SUB(CURRENT_DATE(), INTERVAL {window} DAY)
+    ORDER BY event_timestamp DESC
+    LIMIT {_clamp(limit, 1, 500)}
   """
 
 
@@ -401,7 +421,7 @@ def usage_log_from_row(row: Mapping[str, Any], project_id: str) -> dict[str, Any
           'media_type': 'BIGQUERY_ROW',
           'mime_type': 'application/x-bigquery-row',
       }],
-      'latency_ms': None,
+      'latency_ms': int_or_none(row.get('latency_ms')),
       'total_tokens': int_or_none(row.get('total_tokens')),
       'input_tokens': int_or_none(row.get('input_tokens')),
       'output_tokens': int_or_none(row.get('output_tokens')),
@@ -468,7 +488,7 @@ def session_from_row(row: Mapping[str, Any], project_id: str) -> dict[str, Any]:
 
 
 def session_key(engine_key: object, session_id: object) -> str:
-  """Stable key for a fct_sessions row (the view groups by engine_key and session_id)."""
+  """Stable key for a fct_sessions row (the view groups by session_id with primary engine_key)."""
   return f"{_text(engine_key) or ''}|{_text(session_id) or ''}"
 
 
@@ -482,6 +502,7 @@ def session_turn_from_row(row: Mapping[str, Any]) -> dict[str, Any]:
       'user_email': _text(row.get('user_email')),
       'agent_name': _text(row.get('agent_name')),
       'model_name': _text(row.get('model_name')),
+      'latency_ms': int_or_none(row.get('latency_ms')),
       'input_tokens': int_or_none(row.get('input_tokens')),
       'output_tokens': int_or_none(row.get('output_tokens')),
       'cached_input_tokens': int_or_none(row.get('cached_input_tokens')),
@@ -489,7 +510,9 @@ def session_turn_from_row(row: Mapping[str, Any]) -> dict[str, Any]:
       'total_tokens': int_or_none(row.get('total_tokens')),
       'llm_calls': int_or_none(row.get('llm_calls')),
       'tool_calls': int_or_none(row.get('tool_call_count')),
+      'tool_failures': int_or_none(row.get('tool_failure_count')),
       'tool_names': _text(row.get('tool_names')),
+      'mcp_server_name': _text(row.get('mcp_server_name')),
   }
 
 

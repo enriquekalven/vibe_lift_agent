@@ -36,11 +36,12 @@ guardrail_audit AS (
   WHERE activity_category = 'GUARDRAIL_AUDIT' AND trace_id IS NOT NULL
   GROUP BY trace_id
 ),
-inference AS (
+inference_raw AS (
   SELECT
     COALESCE(trace_id, event_id) AS inference_key,
     ANY_VALUE(trace_id) AS trace_id,
     MIN(event_timestamp) AS first_call_at,
+    MAX(event_timestamp) AS last_call_at,
     COUNT(1) AS llm_calls,
     COUNTIF(total_tokens IS NOT NULL) AS llm_calls_with_tokens,
     SUM(input_tokens) AS input_tokens,
@@ -50,7 +51,7 @@ inference AS (
     SUM(total_tokens) AS total_tokens,
     SUM(tool_call_count) AS tool_call_count,
     SUM(tool_failure_count) AS tool_failure_count,
-    NULLIF(ARRAY_TO_STRING(ARRAY_AGG(DISTINCT NULLIF(tool_names, '') IGNORE NULLS), ','), '') AS tool_names,
+    STRING_AGG(tool_names, ',') AS raw_tool_names,
     ARRAY_AGG(model_name IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS model_name,
     ARRAY_AGG(agent_name IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS agent_name,
     ARRAY_AGG(agent_resource_id IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS agent_resource_id,
@@ -58,10 +59,27 @@ inference AS (
     ARRAY_AGG(user_id IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS user_id,
     ARRAY_AGG(engine_id IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS engine_id,
     ARRAY_AGG(location IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS location,
-    ARRAY_AGG(mcp_server_name IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS mcp_server_name,
+    STRING_AGG(mcp_server_name, ',') AS raw_mcp_server_name,
     ARRAY_AGG(finish_reason IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS finish_reason
   FROM `{{curated}}.v_agentic_operations_curated`
   GROUP BY inference_key
+),
+inference AS (
+  SELECT
+    * EXCEPT (raw_tool_names, raw_mcp_server_name),
+    NULLIF(ARRAY_TO_STRING(ARRAY(
+      SELECT DISTINCT tn
+      FROM UNNEST(SPLIT(raw_tool_names, ',')) AS tn
+      WHERE tn != ''
+      ORDER BY tn
+    ), ','), '') AS tool_names,
+    NULLIF(ARRAY_TO_STRING(ARRAY(
+      SELECT DISTINCT srv
+      FROM UNNEST(SPLIT(raw_mcp_server_name, ',')) AS srv
+      WHERE srv != ''
+      ORDER BY srv
+    ), ','), '') AS mcp_server_name
+  FROM inference_raw
 ),
 audit AS (
   SELECT * FROM `{{curated}}.v_consolidated_audit_log` WHERE is_interactive
@@ -155,42 +173,41 @@ audit_resolved AS (
   FROM audit AS a
   LEFT JOIN audit_matches AS m ON m.audit_event_id = a.event_id
 ),
--- Uncomment the three CTEs below (and v_model_armor_curated in provision_ge_mart.py) when
--- Model Armor is enabled:
--- armor AS (
---   SELECT * FROM `{{curated}}.v_model_armor_curated`
--- ),
--- armor_by_token AS (
---   SELECT
---     assist_token,
---     COUNT(1) AS armor_checks,
---     COUNTIF(is_blocked) AS armor_blocks,
---     LOGICAL_OR(is_prompt_injection) AS is_prompt_injection,
---     LOGICAL_OR(is_sensitive_data) AS is_sensitive_data,
---     LOGICAL_OR(is_safety_violation) AS is_safety_violation,
---     LOGICAL_OR(is_malicious_uri) AS is_malicious_uri,
---     STRING_AGG(DISTINCT violation_category, ',' ORDER BY violation_category) AS guardrail_categories
---   FROM armor
---   WHERE assist_token IS NOT NULL
---   GROUP BY assist_token
--- ),
--- armor_by_trace AS (
---   SELECT
---     trace_id,
---     COUNT(1) AS armor_checks,
---     COUNTIF(is_blocked) AS armor_blocks,
---     LOGICAL_OR(is_prompt_injection) AS is_prompt_injection,
---     LOGICAL_OR(is_sensitive_data) AS is_sensitive_data,
---     LOGICAL_OR(is_safety_violation) AS is_safety_violation,
---     LOGICAL_OR(is_malicious_uri) AS is_malicious_uri,
---     STRING_AGG(DISTINCT violation_category, ',' ORDER BY violation_category) AS guardrail_categories
---   FROM armor
---   WHERE assist_token IS NULL AND trace_id IS NOT NULL
---   GROUP BY trace_id
--- ),
+armor AS (
+  SELECT * FROM `{{curated}}.v_model_armor_curated`
+),
+armor_by_token AS (
+  SELECT
+    assist_token,
+    COUNT(1) AS armor_checks,
+    COUNTIF(is_blocked) AS armor_blocks,
+    LOGICAL_OR(is_prompt_injection) AS is_prompt_injection,
+    LOGICAL_OR(is_sensitive_data) AS is_sensitive_data,
+    LOGICAL_OR(is_safety_violation) AS is_safety_violation,
+    LOGICAL_OR(is_malicious_uri) AS is_malicious_uri,
+    STRING_AGG(DISTINCT violation_category, ',' ORDER BY violation_category) AS guardrail_categories
+  FROM armor
+  WHERE assist_token IS NOT NULL
+  GROUP BY assist_token
+),
+armor_by_trace AS (
+  SELECT
+    trace_id,
+    COUNT(1) AS armor_checks,
+    COUNTIF(is_blocked) AS armor_blocks,
+    LOGICAL_OR(is_prompt_injection) AS is_prompt_injection,
+    LOGICAL_OR(is_sensitive_data) AS is_sensitive_data,
+    LOGICAL_OR(is_safety_violation) AS is_safety_violation,
+    LOGICAL_OR(is_malicious_uri) AS is_malicious_uri,
+    STRING_AGG(DISTINCT violation_category, ',' ORDER BY violation_category) AS guardrail_categories
+  FROM armor
+  WHERE assist_token IS NULL AND trace_id IS NOT NULL
+  GROUP BY trace_id
+),
 activity_joined AS (
   SELECT
     t.*,
+    a.event_timestamp AS audit_timestamp,
     a.status_class AS audit_status_class,
     a.status_code AS audit_status_code,
     a.status_message AS audit_status_message,
@@ -202,33 +219,26 @@ activity_joined AS (
     a.engine_id AS audit_engine_id,
     a.agent_id AS audit_agent_id,
     a.match_method AS audit_match_method,
+    i.first_call_at, i.last_call_at,
     i.llm_calls, i.llm_calls_with_tokens, i.input_tokens, i.output_tokens, i.cached_input_tokens,
     i.reasoning_tokens, i.total_tokens, i.tool_call_count, i.tool_failure_count, i.tool_names,
     i.model_name AS inference_model_name, i.agent_name AS inference_agent_name,
     i.conversation_id, i.location AS inference_location, i.engine_id AS inference_engine_id,
     i.mcp_server_name, i.finish_reason,
-    -- Uncomment when Model Armor is enabled:
-    -- COALESCE(tok.armor_checks, tr.armor_checks) AS armor_checks,
-    -- COALESCE(tok.armor_blocks, tr.armor_blocks) AS armor_blocks,
-    -- COALESCE(tok.is_prompt_injection, tr.is_prompt_injection) AS armor_prompt_injection,
-    -- COALESCE(tok.is_sensitive_data, tr.is_sensitive_data) AS armor_sensitive_data,
-    -- COALESCE(tok.is_safety_violation, tr.is_safety_violation) AS armor_safety_violation,
-    -- COALESCE(tok.is_malicious_uri, tr.is_malicious_uri) AS armor_malicious_uri,
-    -- COALESCE(tok.guardrail_categories, tr.guardrail_categories) AS armor_categories,
-    CAST(NULL AS INT64) AS armor_checks,
-    CAST(NULL AS INT64) AS armor_blocks,
-    CAST(NULL AS BOOL) AS armor_prompt_injection,
-    CAST(NULL AS BOOL) AS armor_sensitive_data,
-    CAST(NULL AS BOOL) AS armor_safety_violation,
-    CAST(NULL AS BOOL) AS armor_malicious_uri,
-    CAST(NULL AS STRING) AS armor_categories,
+    COALESCE(tok.armor_checks, tr.armor_checks) AS armor_checks,
+    COALESCE(tok.armor_blocks, tr.armor_blocks) AS armor_blocks,
+    COALESCE(tok.is_prompt_injection, tr.is_prompt_injection) AS armor_prompt_injection,
+    COALESCE(tok.is_sensitive_data, tr.is_sensitive_data) AS armor_sensitive_data,
+    COALESCE(tok.is_safety_violation, tr.is_safety_violation) AS armor_safety_violation,
+    COALESCE(tok.is_malicious_uri, tr.is_malicious_uri) AS armor_malicious_uri,
+    COALESCE(tok.guardrail_categories, tr.guardrail_categories) AS armor_categories,
     g.guardrail_audit_events,
     g.guardrail_audit_blocked
   FROM turn_events AS t
   LEFT JOIN audit_resolved AS a ON a.matched_turn_event_id = t.event_id
   LEFT JOIN inference AS i ON t.trace_rank = 1 AND i.trace_id = t.trace_id
-  -- LEFT JOIN armor_by_token AS tok ON tok.assist_token = t.assist_token
-  -- LEFT JOIN armor_by_trace AS tr ON t.assist_token IS NULL AND t.trace_rank = 1 AND tr.trace_id = t.trace_id
+  LEFT JOIN armor_by_token AS tok ON tok.assist_token = t.assist_token
+  LEFT JOIN armor_by_trace AS tr ON t.assist_token IS NULL AND t.trace_rank = 1 AND tr.trace_id = t.trace_id
   LEFT JOIN guardrail_audit AS g ON t.trace_rank = 1 AND g.trace_id = t.trace_id
 ),
 activity_turns AS (
@@ -267,6 +277,21 @@ activity_turns AS (
     audit_error_reason AS error_reason,
     audit_match_method IS NOT NULL AS audit_matched,
     audit_match_method,
+    NULLIF(TIMESTAMP_DIFF(
+      GREATEST(
+        event_timestamp,
+        COALESCE(audit_timestamp, event_timestamp),
+        COALESCE(first_call_at, event_timestamp),
+        COALESCE(last_call_at, event_timestamp)
+      ),
+      LEAST(
+        event_timestamp,
+        COALESCE(audit_timestamp, event_timestamp),
+        COALESCE(first_call_at, event_timestamp),
+        COALESCE(last_call_at, event_timestamp)
+      ),
+      MILLISECOND
+    ), 0) AS latency_ms,
     llm_calls,
     llm_calls_with_tokens,
     input_tokens,
@@ -285,14 +310,23 @@ activity_turns AS (
     armor_checks,
     armor_blocks,
     IF(
-      armor_checks IS NULL AND sanitization_verdict IS NULL AND guardrail_audit_events IS NULL,
+      armor_checks IS NULL AND sanitization_verdict IS NULL AND guardrail_audit_events IS NULL
+        AND NOT REGEXP_CONTAINS(COALESCE(skipped_reasons, ''), r'CUSTOMER_POLICY_VIOLATION'),
       NULL,
-      COALESCE(armor_blocks, 0) > 0 OR COALESCE(is_guardrail_block, FALSE) OR COALESCE(guardrail_audit_blocked, FALSE)
+      COALESCE(armor_blocks, 0) > 0
+        OR COALESCE(is_guardrail_block, FALSE)
+        OR COALESCE(guardrail_audit_blocked, FALSE)
+        OR REGEXP_CONTAINS(COALESCE(skipped_reasons, ''), r'CUSTOMER_POLICY_VIOLATION')
     ) AS is_guardrail_blocked,
     NULLIF(ARRAY_TO_STRING(ARRAY(
       SELECT DISTINCT c FROM UNNEST(SPLIT(CONCAT(
         COALESCE(armor_categories, ''), ',',
-        IF(COALESCE(is_guardrail_block, FALSE) OR COALESCE(guardrail_audit_blocked, FALSE), 'GE_GUARDRAIL_BLOCK', '')
+        IF(
+          COALESCE(is_guardrail_block, FALSE)
+            OR COALESCE(guardrail_audit_blocked, FALSE)
+            OR REGEXP_CONTAINS(COALESCE(skipped_reasons, ''), r'CUSTOMER_POLICY_VIOLATION'),
+          'GE_GUARDRAIL_BLOCK', ''
+        )
       ), ',')) AS c
       WHERE c != ''
       ORDER BY c
@@ -335,6 +369,7 @@ inference_turns AS (
     CAST(NULL AS STRING) AS error_reason,
     FALSE AS audit_matched,
     CAST(NULL AS STRING) AS audit_match_method,
+    NULLIF(TIMESTAMP_DIFF(i.last_call_at, i.first_call_at, MILLISECOND), 0) AS latency_ms,
     i.llm_calls,
     i.llm_calls_with_tokens,
     i.input_tokens,
@@ -350,26 +385,17 @@ inference_turns AS (
     CAST(NULL AS INT64) AS reference_count,
     CAST(NULL AS INT64) AS query_chars,
     CAST(NULL AS BOOL) AS has_uploaded_file,
-    -- Commented out until Model Armor is enabled:
-    -- tr.armor_checks,
-    -- tr.armor_blocks,
-    -- IF(tr.armor_checks IS NULL, NULL, tr.armor_blocks > 0) AS is_guardrail_blocked,
-    -- tr.guardrail_categories,
-    -- tr.is_prompt_injection,
-    -- tr.is_sensitive_data,
-    -- tr.is_safety_violation,
-    -- tr.is_malicious_uri
-    CAST(NULL AS INT64) AS armor_checks,
-    CAST(NULL AS INT64) AS armor_blocks,
-    CAST(NULL AS BOOL) AS is_guardrail_blocked,
-    CAST(NULL AS STRING) AS guardrail_categories,
-    CAST(NULL AS BOOL) AS is_prompt_injection,
-    CAST(NULL AS BOOL) AS is_sensitive_data,
-    CAST(NULL AS BOOL) AS is_safety_violation,
-    CAST(NULL AS BOOL) AS is_malicious_uri
+    tr.armor_checks,
+    tr.armor_blocks,
+    IF(tr.armor_checks IS NULL, NULL, tr.armor_blocks > 0) AS is_guardrail_blocked,
+    tr.guardrail_categories,
+    tr.is_prompt_injection,
+    tr.is_sensitive_data,
+    tr.is_safety_violation,
+    tr.is_malicious_uri
   FROM inference AS i
   LEFT JOIN turn_events AS t ON t.trace_rank = 1 AND t.trace_id = i.trace_id
-  -- LEFT JOIN armor_by_trace AS tr ON tr.trace_id = i.trace_id
+  LEFT JOIN armor_by_trace AS tr ON tr.trace_id = i.trace_id
   WHERE t.event_id IS NULL
 ),
 audit_only_turns AS (
@@ -398,6 +424,7 @@ audit_only_turns AS (
     a.error_reason,
     TRUE AS audit_matched,
     'AUDIT_ONLY' AS audit_match_method,
+    CAST(NULL AS INT64) AS latency_ms,
     CAST(NULL AS INT64) AS llm_calls,
     CAST(NULL AS INT64) AS llm_calls_with_tokens,
     CAST(NULL AS INT64) AS input_tokens,
@@ -415,22 +442,56 @@ audit_only_turns AS (
     CAST(NULL AS BOOL) AS has_uploaded_file,
     CAST(NULL AS INT64) AS armor_checks,
     CAST(NULL AS INT64) AS armor_blocks,
-    CAST(NULL AS BOOL) AS is_guardrail_blocked,
-    CAST(NULL AS STRING) AS guardrail_categories,
+    IF(
+      REGEXP_CONTAINS(COALESCE(a.status_message, ''), r'(?i)(Sensitive Data Protection|Model Armor|guardrail)'),
+      TRUE,
+      CAST(NULL AS BOOL)
+    ) AS is_guardrail_blocked,
+    IF(
+      REGEXP_CONTAINS(COALESCE(a.status_message, ''), r'(?i)(Sensitive Data Protection|Model Armor|guardrail)'),
+      'GE_GUARDRAIL_BLOCK',
+      CAST(NULL AS STRING)
+    ) AS guardrail_categories,
     CAST(NULL AS BOOL) AS is_prompt_injection,
-    CAST(NULL AS BOOL) AS is_sensitive_data,
+    IF(
+      REGEXP_CONTAINS(COALESCE(a.status_message, ''), r'(?i)Sensitive Data Protection'),
+      TRUE,
+      CAST(NULL AS BOOL)
+    ) AS is_sensitive_data,
     CAST(NULL AS BOOL) AS is_safety_violation,
     CAST(NULL AS BOOL) AS is_malicious_uri
   FROM audit_resolved AS a
   WHERE a.matched_turn_event_id IS NULL
     AND ({{include_audit_only_successes}} OR a.is_error)
 ),
-all_turns AS (
+all_turns_raw AS (
   SELECT * FROM activity_turns
   UNION ALL
   SELECT * FROM inference_turns
   UNION ALL
   SELECT * FROM audit_only_turns
+),
+-- Normalize engine_id, location, and user_email across turns that share a non-null session_id so
+-- a session with a FILE_UPLOAD / AUDIT_ONLY / AGENT_INFERENCE turn missing engine_id never splits.
+all_turns AS (
+  SELECT
+    * EXCEPT (location, engine_id, user_email),
+    IF(
+      session_id IS NULL,
+      location,
+      COALESCE(location, MAX(location) OVER (PARTITION BY session_id))
+    ) AS location,
+    IF(
+      session_id IS NULL,
+      engine_id,
+      COALESCE(engine_id, MAX(engine_id) OVER (PARTITION BY session_id))
+    ) AS engine_id,
+    IF(
+      session_id IS NULL,
+      user_email,
+      COALESCE(user_email, MAX(user_email) OVER (PARTITION BY session_id))
+    ) AS user_email
+  FROM all_turns_raw
 )
 SELECT
   turn_id,
@@ -461,6 +522,7 @@ SELECT
   error_reason,
   audit_matched,
   audit_match_method,
+  latency_ms,
   llm_calls,
   llm_calls_with_tokens,
   input_tokens,

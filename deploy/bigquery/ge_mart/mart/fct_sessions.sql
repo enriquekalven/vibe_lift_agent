@@ -4,7 +4,7 @@
 -- turned into one-turn sessions, and no session is inferred from time gaps (stage did both,
 -- inflating session counts).
 SELECT
-  engine_key,
+  ARRAY_AGG(engine_key IGNORE NULLS ORDER BY event_timestamp LIMIT 1)[SAFE_OFFSET(0)] AS engine_key,
   session_id,
   MIN(event_timestamp) AS session_start,
   MAX(event_timestamp) AS session_end,
@@ -29,4 +29,4 @@ SELECT
   SUM(tool_failure_count) AS tool_failures
 FROM `{{mart}}.fct_turns`
 WHERE session_id IS NOT NULL
-GROUP BY engine_key, session_id
+GROUP BY session_id

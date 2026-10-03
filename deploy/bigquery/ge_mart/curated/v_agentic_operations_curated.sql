@@ -85,18 +85,41 @@ SELECT
   IF(jp.gen_ai_input_messages IS NULL, NULL, (
     SELECT COUNT(1)
     FROM UNNEST(JSON_QUERY_ARRAY(input_messages[SAFE_OFFSET(ARRAY_LENGTH(input_messages) - 1)].parts)) AS part
-    WHERE LAX_BOOL(part.response.iserror) = TRUE OR NULLIF(LAX_STRING(part.response.error), '') IS NOT NULL
+    LEFT JOIN UNNEST([SAFE.PARSE_JSON(COALESCE(
+      NULLIF(ARRAY_TO_STRING(ARRAY(
+        SELECT LAX_STRING(x.text)
+        FROM UNNEST(JSON_QUERY_ARRAY(COALESCE(part.response.content, part.response.structuredcontent.content))) AS x
+        WHERE LAX_STRING(x.text) IS NOT NULL
+      ), '\n'), ''),
+      LAX_STRING(part.response.result)
+    ))]) AS cj
+    WHERE JSON_TYPE(part.response) IS NOT NULL
+      AND JSON_TYPE(part.response) != 'null'
+      AND (
+        LAX_BOOL(part.response.iserror) = TRUE
+        OR NULLIF(LAX_STRING(part.response.error), '') IS NOT NULL
+        OR (JSON_TYPE(part.response.error) NOT IN ('null') AND COALESCE(LAX_STRING(part.response.error), TO_JSON_STRING(part.response.error)) NOT IN ('', '""'))
+        OR (JSON_TYPE(part.response.error_message) NOT IN ('null') AND COALESCE(LAX_STRING(part.response.error_message), '') != '')
+        OR (JSON_TYPE(part.response.error_code) NOT IN ('null') AND COALESCE(LAX_STRING(part.response.error_code), TO_JSON_STRING(part.response.error_code)) NOT IN ('', '""'))
+        OR JSON_TYPE(part.response._dolphin_error_handling) NOT IN ('null')
+        OR COALESCE(
+          NULLIF(LAX_STRING(cj.result.Error), ''),
+          NULLIF(LAX_STRING(cj.error.message), ''),
+          NULLIF(LAX_STRING(cj.error), ''),
+          NULLIF(LAX_STRING(cj.Error), '')
+        ) IS NOT NULL
+      )
   )) AS tool_failure_count,
-  (
-    SELECT LAX_STRING(part.response.structuredcontent.mcpservername)
+  NULLIF(ARRAY_TO_STRING(ARRAY(
+    SELECT DISTINCT LAX_STRING(part.response.structuredcontent.mcpservername)
     FROM UNNEST(JSON_QUERY_ARRAY(input_messages[SAFE_OFFSET(ARRAY_LENGTH(input_messages) - 1)].parts)) AS part
-    WHERE LAX_STRING(part.response.structuredcontent.mcpservername) IS NOT NULL
-    LIMIT 1
-  ) AS mcp_server_name,
-  (
-    SELECT LAX_STRING(part.response.structuredcontent.authkind)
+    WHERE NULLIF(LAX_STRING(part.response.structuredcontent.mcpservername), '') IS NOT NULL
+    ORDER BY 1
+  ), ','), '') AS mcp_server_name,
+  NULLIF(ARRAY_TO_STRING(ARRAY(
+    SELECT DISTINCT LAX_STRING(part.response.structuredcontent.authkind)
     FROM UNNEST(JSON_QUERY_ARRAY(input_messages[SAFE_OFFSET(ARRAY_LENGTH(input_messages) - 1)].parts)) AS part
-    WHERE LAX_STRING(part.response.structuredcontent.authkind) IS NOT NULL
-    LIMIT 1
-  ) AS mcp_auth_kind
+    WHERE NULLIF(LAX_STRING(part.response.structuredcontent.authkind), '') IS NOT NULL
+    ORDER BY 1
+  ), ','), '') AS mcp_auth_kind
 FROM fields

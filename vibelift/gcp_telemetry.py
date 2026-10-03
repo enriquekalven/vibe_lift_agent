@@ -943,9 +943,11 @@ class GoogleCloudTelemetryService:
         'ge_recent_turns': ge_mart.build_recent_turns_sql(p, hours=eff_hours, limit=20),
         'ge_daily_totals': ge_mart.build_daily_totals_sql(p, days=eff_days),
         'ge_daily_by_app': ge_mart.build_daily_usage_sql(p, days=eff_days),
-        'ge_sessions': ge_mart.build_recent_sessions_sql(p, days=eff_days, limit=50),
-        # Turn-by-turn token counts for exactly the 50 sessions above (no prompt text).
-        'ge_session_turns': ge_mart.build_session_turns_sql(p, days=eff_days, session_limit=50),
+        'ge_sessions': ge_mart.build_recent_sessions_sql(p, days=eff_days, limit=500),
+        # Turn-by-turn token counts for the sessions above (no prompt text).
+        'ge_session_turns': ge_mart.build_session_turns_sql(p, days=eff_days, session_limit=500),
+        # Token-bearing turns without a session_id (e.g. INFERENCE_ONLY traces).
+        'ge_sessionless_token_turns': ge_mart.build_sessionless_token_turns_sql(p, days=eff_days),
         'sre_triage_turns': f"""
           SELECT
             insertId AS event_id,
@@ -1010,7 +1012,7 @@ class GoogleCloudTelemetryService:
     }
 
     raw_results: dict[str, list[dict[str, Any]]] = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=11) as pool:
       futs = {k: pool.submit(self._query_bigquery_rest, sql, 7.0) for k, sql in queries.items()}
       for k, fut in futs.items():
         try:
@@ -1025,6 +1027,9 @@ class GoogleCloudTelemetryService:
     ge_daily_by_app = [ge_mart.daily_usage_from_row(r) for r in raw_results.get('ge_daily_by_app', [])]
     ge_sessions = [ge_mart.session_from_row(r, p) for r in raw_results.get('ge_sessions', [])]
     ge_session_turns = ge_mart.group_session_turns(raw_results.get('ge_session_turns', []))
+    ge_sessionless_token_turns = [
+        ge_mart.session_turn_from_row(r) for r in raw_results.get('ge_sessionless_token_turns', [])
+    ]
     sre_turns = raw_results.get('sre_triage_turns', [])
     cr_reqs = raw_results.get('cloud_run_requests', [])
     vx_audit = raw_results.get('vertex_and_run_audit', [])
@@ -1032,7 +1037,7 @@ class GoogleCloudTelemetryService:
     curated = ge_mart.curated_ref(p)
 
     if not any((ge_audit, ge_rollup, ge_recent, ge_daily, ge_daily_by_app, ge_sessions, ge_session_turns,
-                sre_turns, cr_reqs, vx_audit)):
+                ge_sessionless_token_turns, sre_turns, cr_reqs, vx_audit)):
       # _query_bigquery_rest logs failures at DEBUG only, so record that this fetch got nothing back.
       logger.warning('BigQuery insights for %s: every query returned no rows; keeping the previous cache', p)
       return self._cached_bq_insights
@@ -1317,6 +1322,7 @@ class GoogleCloudTelemetryService:
             'out_tok': 0,
             'agent_name': str(r.get('agent_name') or r.get('engine_key') or 'Gemini Enterprise Agent'),
             'model_name': r.get('model_name'),
+            'latency_ms': ge_mart.int_or_none(r.get('latency_ms')),
             'ts': str(r.get('ts') or 'Live BQ'),
         })
         st_tool['calls'] += max(1, int(ge_mart.int_or_none(r.get('tool_call_count')) or 1))
@@ -1341,7 +1347,7 @@ class GoogleCloudTelemetryService:
           'handler_name': tname,
           'protocol': 'Gemini Enterprise Tool Span (vibelift_mart.fct_turns)',
           'model': tstat['model_name'],
-          'latency_ms': None,
+          'latency_ms': tstat.get('latency_ms'),
           'prompt_tokens': tstat['in_tok'] or None,
           'cached_tokens': None,
           'output_tokens': tstat['out_tok'] or None,
@@ -1426,6 +1432,8 @@ class GoogleCloudTelemetryService:
         'ge_sessions': ge_sessions,
         # {session_key: [turns oldest-first]} for the sessions above; token counts only.
         'ge_session_turns': ge_session_turns,
+        # Token-bearing turns without a session_id (e.g. INFERENCE_ONLY traces).
+        'ge_sessionless_token_turns': ge_sessionless_token_turns,
         # When fct_turns was last rebuilt (None = unknown); the table is a scheduled snapshot.
         'ge_mart_refreshed_at': ge_mart.mart_refreshed_at(ge_daily),
         'ge_assistant_activity_count': sum(int(d.get('chat_turns') or 0) for d in ge_daily[-7:]),

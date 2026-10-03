@@ -249,6 +249,7 @@ class VibeLiftRuntimeController:
       if isinstance(live_bq, dict):
         user_centric['ge_sessions'] = list(live_bq.get('ge_sessions') or [])
         user_centric['ge_session_turns'] = dict(live_bq.get('ge_session_turns') or {})
+        user_centric['ge_sessionless_token_turns'] = list(live_bq.get('ge_sessionless_token_turns') or [])
         user_centric['ge_mart_refreshed_at'] = live_bq.get('ge_mart_refreshed_at')
         user_centric['ge_mart_dataset'] = live_bq.get('ge_mart_dataset')
       if not (isinstance(live_bq, dict) and live_bq.get('power_users_ldap')):
@@ -412,6 +413,7 @@ class VibeLiftRuntimeController:
         'session_drilldown': live_finops.build_session_token_drilldown(
             as_list(uc.get('ge_sessions')),
             as_mapping(uc.get('ge_session_turns')),
+            as_list(uc.get('ge_sessionless_token_turns')),
         ),
     }
 

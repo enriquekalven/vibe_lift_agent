@@ -1,7 +1,7 @@
 # VibeLift Agent — Google ADK & Agent Starter Pack Standard Recipes
 .PHONY: install lint test coverage smoke ci playground demo deploy
 
-PYTHON ?= python3
+PYTHON ?= $(shell if [ -x .venv/bin/python ]; then echo .venv/bin/python; else echo python3; fi)
 OFFLINE_ENV = GOOGLE_APPLICATION_CREDENTIALS=/nonexistent/offline-test-credentials.json GOOGLE_CLOUD_PROJECT=test-project
 
 install:
@@ -10,9 +10,9 @@ install:
 
 lint:
 	$(PYTHON) -m compileall -q app vibelift tests deploy/bigquery
-	ruff check .
-	codespell
-	mypy app vibelift deploy/bigquery
+	$(PYTHON) -m ruff check .
+	$(PYTHON) -m codespell_lib
+	$(PYTHON) -m mypy app vibelift deploy/bigquery
 
 test:
 	$(OFFLINE_ENV) $(PYTHON) -m unittest discover -s tests -t . -v

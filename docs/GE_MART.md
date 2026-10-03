@@ -44,7 +44,7 @@ flowchart LR
 
 | Layer | Objects | Purpose |
 |---|---|---|
-| Curated | `v_user_activity_curated`, `v_agentic_operations_curated`, `v_consolidated_audit_log` (`v_model_armor_curated` commented out until Model Armor is enabled) | Cleaned, typed views over each raw sink. Ported from `gemini-enterprise-stage.ds_ge_curated_staging`, with its defects fixed. |
+| Curated | `v_user_activity_curated`, `v_agentic_operations_curated`, `v_consolidated_audit_log`, `v_model_armor_curated` | Cleaned, typed views over each raw sink. Ported from `gemini-enterprise-stage.ds_ge_curated_staging`, with its defects fixed. |
 | Mart | `v_fct_turns` (view), `fct_turns` (table), `fct_sessions`, `agg_daily_usage` (views over the table) | VibeLift's own model: one row per turn, per session, and per day × app × agent × model. |
 | Cost | `vibelift/billing_export.py` | Per-day AI spend from the Cloud Billing export, joined to daily usage in the app. It is not stored in BigQuery. |
 
@@ -59,10 +59,14 @@ python3 deploy/bigquery/provision_ge_mart.py --project PROJECT --gcloud-auth --p
 python3 deploy/bigquery/provision_ge_mart.py --project PROJECT --gcloud-auth --dry-run
 
 # Create or replace the views and build fct_turns (creates the two datasets in --location if absent)
+# Automatically runs verify_ge_mart_invariants.py after provisioning unless --skip-verify is passed.
 python3 deploy/bigquery/provision_ge_mart.py --project PROJECT --gcloud-auth --apply
 
-# Rebuild only fct_turns (run this on a schedule)
+# Rebuild only fct_turns (run this on a schedule) and verify invariants
 python3 deploy/bigquery/provision_ge_mart.py --project PROJECT --gcloud-auth --refresh
+
+# Run the 11 mathematical conservation & reconciliation invariants standalone
+python3 deploy/bigquery/verify_ge_mart_invariants.py --project PROJECT
 
 # Print only the standalone CREATE OR REPLACE TABLE ... fct_turns DDL for BigQuery Scheduled Queries
 python3 deploy/bigquery/provision_ge_mart.py --project PROJECT --print-refresh
@@ -70,7 +74,7 @@ python3 deploy/bigquery/provision_ge_mart.py --project PROJECT --print-refresh
 
 ### Why `fct_turns` is a table
 
-`v_fct_turns` joins three curated views that parse raw JSON log entries. Reading it takes minutes of slot
+`v_fct_turns` joins four curated views that parse raw JSON log entries. Reading it takes minutes of slot
 time even for a few rows. The dashboard reads turns several times per refresh, with a 6-second
 REST timeout. Reading a table is fast, and the heavy work runs once per refresh.
 
@@ -89,9 +93,10 @@ on-demand rebuild from the dashboard (**Cost & Billing → Refresh Mart** button
 | `--location` | `US` | Must match the raw datasets. BigQuery cannot join across locations. |
 | `--curated-dataset` / `--mart-dataset` | `ds_ge_curated_staging` / `vibelift_mart` | Set `VIBELIFT_GE_CURATED_DATASET` / `VIBELIFT_GE_MART_DATASET` to match. |
 | `--lookback-days` | 90 | One window for every source (the stage views used different windows). Keep it equal to the raw log retention (`deploy/set_log_retention.sh`, default 90 days). The lookback is fixed in the curated views by `--apply`; `--refresh` and the scheduled query only re-read them. |
-| `--audit-lag-seconds` / `--audit-lead-seconds` | 300 / 30 | Audit-to-activity matching window (see below). |
+| `--audit-lag-seconds` / `--audit-lead-seconds` | 1800 / 30 | Audit-to-activity matching window (see below). |
 | `--audit-only` | `errors` | `all` also creates turns from unmatched successful audit calls. |
-| `--source key=project.dataset.table` | | Overrides a source table. Keys: `assistant`, `search`, `inference`, `audit_activity`, `audit_data_access` (`armor` commented out until enabled). |
+| `--source key=project.dataset.table` | | Overrides a source table. Keys: `assistant`, `search`, `inference`, `audit_activity`, `audit_data_access`, `armor`. |
+| `--skip-verify` | `false` | Skip running `verify_ge_mart_invariants.py` after `--apply` or `--refresh`. |
 
 A missing source table, or one in another location, is replaced with an empty stub. Its views then
 return no rows instead of failing. The provisioner reports each source as `FOUND`, `MISSING` or
@@ -174,11 +179,26 @@ Validation results (example runs in two reference projects; your numbers will di
   `ds_vertex_agents_raw` by the `sink-ge-inference-tokens` sink in `deploy/setup_bigquery_sink.sh`.
   Projects set up before that sink existed (project-maui at the time of the table above) have
   sessions but `NULL` tokens until the sink is created; sinks only capture new entries.
-- Model Armor rows need the `sink-model-armor-sdp` sink and Model Armor logging enabled. The
-  `armor` source is commented out in `provision_ge_mart.py` until that table exists.
+- Model Armor rows need the `sink-model-armor-sdp` sink and Model Armor logging enabled (`ds_security_guardrails_raw.cloud_logging_guardrails`). When absent, the provisioner substitutes an empty typed stub automatically.
 - `sre_triage_agent_telemetry` is in `us-east1` and cannot be joined from the US views. VibeLift
   still reads it separately.
 - Cost is project-level AI spend (every AI service in the project). The billing export has no
   per-agent or per-user split, so cost is never allocated below project × day.
 - `fct_turns` is rebuilt in full over the lookback window. At much larger volumes, switch to an
   incremental `MERGE` over recent partitions.
+
+## Automated Conservation & Reconciliation Invariants
+
+Every `provision_ge_mart.py --apply` and `--refresh` automatically runs `deploy/bigquery/verify_ge_mart_invariants.py`, which asserts 11 mathematical zero-loss invariants across the curated views and mart objects:
+
+1. `fct_sessions_unique_session_id`: `COUNT(1) == COUNT(DISTINCT session_id)` in `fct_sessions` (no duplicate session rows across engine keys).
+2. `session_turn_conservation`: `SUM(fct_sessions.turns) + COUNTIF(fct_turns.session_id IS NULL) == COUNT(fct_turns)`.
+3. `session_token_conservation`: `SUM(fct_sessions.total_tokens) + SUM(IF(session_id IS NULL, total_tokens, 0)) == SUM(fct_turns.total_tokens)`.
+4. `daily_agg_turn_conservation`: `SUM(agg_daily_usage.interactions) == COUNT(fct_turns)`.
+5. `daily_agg_token_conservation`: `SUM(agg_daily_usage.total_tokens) == SUM(fct_turns.total_tokens)`.
+6. `inference_token_conservation`: `SUM(v_agentic_operations_curated.total_tokens)` (within lookback) `== SUM(fct_turns.total_tokens)` (0 dropped or fanned-out tokens).
+7. `tool_failure_bounds`: `0 <= tool_failure_count <= tool_call_count` per trace and per turn.
+8. `file_upload_session_coverage`: `UploadSessionFile` rows in `v_user_activity_curated` have non-null `session_id` and `has_uploaded_file = TRUE`.
+9. `armor_inspect_only_exclusion`: `v_model_armor_curated` never marks inspect-only (`enforcement type is inspect only` / `not blocked`) or `SANITIZATION_EXECUTION_SKIPPED` rows as `is_blocked = TRUE`.
+10. `audit_session_extraction_coverage`: `v_consolidated_audit_log` extracts `session_id` whenever `sessions/<id>` is present in `resource_name` or request/response JSON.
+11. `materialized_fct_turns_sync`: `fct_turns` row count and total tokens match live `v_fct_turns`.

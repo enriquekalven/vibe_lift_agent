@@ -13,7 +13,7 @@ list-price rate cards used elsewhere in VibeLift. Nothing is assumed or seeded:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 _TOKEN_KEYS = ('input_tokens', 'output_tokens', 'reasoning_tokens', 'cache_read_tokens', 'cache_write_tokens')
@@ -336,15 +336,19 @@ def _sum_known(values: list[Any]) -> int | None:
 def build_session_token_drilldown(
     sessions: list[Mapping[str, Any]] | None,
     session_turns: Mapping[str, list[Mapping[str, Any]]] | None,
+    sessionless_turns: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
   """Per-user session token rollup plus a per-session turn-by-turn token dictionary.
 
-  `sessions` are fct_sessions rows (ge_mart.session_from_row) and `session_turns` is
-  {session_key: [turn dicts]} (ge_mart.group_session_turns). Only token counts are returned;
-  prompt and response text are never read.
+  `sessions` are fct_sessions rows (ge_mart.session_from_row), `session_turns` is
+  {session_key: [turn dicts]} (ge_mart.group_session_turns), and optional `sessionless_turns`
+  are token-bearing turns without a session_id (e.g. standalone Vertex Agent Engine traces) so
+  total tokens across all turns are conserved. Only token counts are returned; prompt and
+  response text are never read.
   """
   sessions = [s for s in (sessions or []) if isinstance(s, Mapping)]
   session_turns = session_turns if isinstance(session_turns, Mapping) else {}
+  kept_sessionless = [dict(t) for t in (sessionless_turns or []) if isinstance(t, Mapping)]
 
   by_session: dict[str, dict[str, Any]] = {}
   users: dict[str, dict[str, Any]] = {}
@@ -382,6 +386,25 @@ def build_session_token_drilldown(
     if end and (u['last_activity'] is None or str(end) > str(u['last_activity'])):
       u['last_activity'] = end
 
+  seen_sessionless_ids: set[str] = set()
+  unique_sessionless: list[dict[str, Any]] = []
+  for t in kept_sessionless:
+    tid = str(t.get('turn_id') or '')
+    if tid and tid in seen_sessionless_ids:
+      continue
+    if tid:
+      seen_sessionless_ids.add(tid)
+    unique_sessionless.append(t)
+    email = str(t.get('user_email') or 'unknown')
+    u = users.setdefault(email, {'user_email': email, 'session_keys': [], '_tok': {k: [] for k in SESSION_TOKEN_KEYS},
+                                 'turns': 0, 'last_activity': None})
+    u['turns'] += 1
+    for k in SESSION_TOKEN_KEYS:
+      u['_tok'][k].append(t.get(k))
+    ts = t.get('ts')
+    if ts and (u['last_activity'] is None or str(ts) > str(u['last_activity'])):
+      u['last_activity'] = ts
+
   user_rows: list[dict[str, Any]] = []
   for u in users.values():
     tok = u.pop('_tok')
@@ -392,12 +415,15 @@ def build_session_token_drilldown(
     user_rows.append(row)
   user_rows.sort(key=lambda r: (r['total_tokens'] is None, -(r['total_tokens'] or 0), r['user_email']))
 
+  all_token_sources = [*kept, *unique_sessionless]
   return {
       'source': 'vibelift_mart.fct_sessions + vibelift_mart.fct_turns (token counts only; no prompt text)',
       'session_count': len(by_session),
+      'sessionless_turn_count': len(unique_sessionless),
       'user_count': len(user_rows),
-      'totals': {k: _sum_known([s.get(k) for s in kept]) for k in SESSION_TOKEN_KEYS},
+      'totals': {k: _sum_known([s.get(k) for s in all_token_sources]) for k in SESSION_TOKEN_KEYS},
       'users': user_rows,
       'sessions': by_session,
+      'sessionless_turns': unique_sessionless,
   }
 

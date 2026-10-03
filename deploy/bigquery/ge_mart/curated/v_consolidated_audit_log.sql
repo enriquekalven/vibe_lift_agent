@@ -23,6 +23,8 @@ fields AS (
     LAX_STRING(pp.methodName) AS method_name,
     REGEXP_EXTRACT(LAX_STRING(pp.methodName), r'([^.]+)$') AS method_short_name,
     LAX_STRING(pp.resourceName) AS resource_name,
+    COALESCE(LAX_STRING(pp.requestJson), TO_JSON_STRING(pp.request), '') AS request_json_str,
+    COALESCE(LAX_STRING(pp.responseJson), TO_JSON_STRING(pp.response), '') AS response_json_str,
     LAX_INT64(pp.status.code) AS status_code,
     LAX_STRING(op.id) AS operation_id,
     COALESCE(LAX_INT64(pp.status.code), 0) = 7 OR EXISTS(
@@ -60,11 +62,27 @@ SELECT
     WHEN method_short_name IN ('UploadSessionFile', 'AddContextFile') THEN 'FILE_UPLOAD'
   END AS interaction_kind,
   resource_name,
-  REGEXP_EXTRACT(resource_name, r'^projects/([^/]+)') AS project_ref,
-  REGEXP_EXTRACT(resource_name, r'/locations/([^/]+)') AS location,
-  REGEXP_EXTRACT(resource_name, r'/engines/([^/]+)') AS engine_id,
-  REGEXP_EXTRACT(resource_name, r'sessions/([^/]+)') AS session_id,
-  REGEXP_EXTRACT(resource_name, r'agents/([^/]+)') AS agent_id,
+  COALESCE(
+    REGEXP_EXTRACT(resource_name, r'^projects/([^/]+)'),
+    REGEXP_EXTRACT(request_json_str, r'projects/([^/"]+)')
+  ) AS project_ref,
+  COALESCE(
+    REGEXP_EXTRACT(resource_name, r'/locations/([^/]+)'),
+    REGEXP_EXTRACT(request_json_str, r'/locations/([^/"]+)')
+  ) AS location,
+  COALESCE(
+    REGEXP_EXTRACT(resource_name, r'/engines/([^/]+)'),
+    REGEXP_EXTRACT(request_json_str, r'/engines/([^/"]+)')
+  ) AS engine_id,
+  NULLIF(COALESCE(
+    REGEXP_EXTRACT(resource_name, r'sessions/([^/]+)'),
+    REGEXP_EXTRACT(request_json_str, r'sessions/([^/"]+)'),
+    REGEXP_EXTRACT(response_json_str, r'sessions/([^/"]+)')
+  ), '-') AS session_id,
+  COALESCE(
+    REGEXP_EXTRACT(resource_name, r'agents/([^/]+)'),
+    REGEXP_EXTRACT(request_json_str, r'agents/([^/"]+)')
+  ) AS agent_id,
   status_code,
   COALESCE(status_code, 0) != 0 OR has_permission_denial AS is_error,
   CASE

@@ -160,6 +160,28 @@ class SessionTokenDrilldownTest(unittest.TestCase):
     self.assertEqual(dd['sessions']['|x']['turn_detail'], [])
     self.assertEqual(dd['users'][0]['user_email'], 'unknown')
 
+  def test_sessionless_token_turns_conserve_all_tokens(self):
+    sessions = [ge_mart.session_from_row(r, 'example-project') for r in _SESSION_ROWS]
+    turns = ge_mart.group_session_turns(_TURN_ROWS)
+    sessionless = [
+        ge_mart.session_turn_from_row({
+            'turn_id': 'INFERENCE:trace-99',
+            'turn_kind': 'AGENT_CALL',
+            'turn_status': 'SUCCESS',
+            'ts': '2026-09-29T14:00:00Z',
+            'user_email': 'user-a@example.com',
+            'input_tokens': '5000',
+            'output_tokens': '400',
+            'total_tokens': '5400',
+        })
+    ]
+    dd = finops.build_session_token_drilldown(sessions, turns, sessionless)
+    self.assertEqual(dd['session_count'], 3)
+    self.assertEqual(dd['sessionless_turn_count'], 1)
+    # 14,600 session tokens + 5,400 sessionless tokens = 20,000 total tokens conserved
+    self.assertEqual(dd['totals']['total_tokens'], 20000)
+    self.assertEqual(sum(u['total_tokens'] or 0 for u in dd['users']), 20000)
+
 
 class TelemetryWiringTest(unittest.TestCase):
 

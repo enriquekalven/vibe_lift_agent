@@ -81,17 +81,35 @@ class ProvisionerTest(unittest.TestCase):
     self.assertEqual(out['search'].status, 'WRONG_LOCATION')
     self.assertIn('WHERE FALSE', out['search'].sql)
     self.assertEqual(out['assistant'].status, 'FOUND')
-    self.assertNotIn('armor', out)
+    self.assertEqual(out['armor'].status, 'FOUND')
     with self.assertRaises(ValueError):
       provision.resolve_sources('example-project', 'US', 30, describe, overrides={'nope': 'a-proj.b.c'})
 
-  def test_model_armor_commented_out_until_enabled(self):
-    self.assertNotIn('armor', provision.SOURCES)
-    self.assertNotIn('v_model_armor_curated', [name for _, name, _ in provision.OBJECTS])
-    self.assertIn(('curated', 'v_model_armor_curated'), provision.DISABLED_OBJECTS)
+  def test_model_armor_enabled_and_alllogs_fallback_supported(self):
+    self.assertIn('armor', provision.SOURCES)
+    self.assertIn('v_model_armor_curated', [name for _, name, _ in provision.OBJECTS])
+    self.assertEqual(provision.DISABLED_OBJECTS, ())
     turns_code = _sql_code(provision.load_template('mart', 'v_fct_turns'))
-    self.assertNotIn('v_model_armor_curated', turns_code)
-    self.assertIn('CAST(NULL AS BOOL) AS is_guardrail_blocked', turns_code)
+    self.assertIn('v_model_armor_curated', turns_code)
+    self.assertIn('armor_by_token', turns_code)
+    self.assertIn('armor_by_trace', turns_code)
+    self.assertNotIn('CAST(NULL AS BOOL) AS is_guardrail_blocked', turns_code)
+
+    # Verify _AllLogs schema adaptation when dedicated sanitize_operations table is absent.
+    def describe_only_alllogs(ref):
+      if ref.endswith('._AllLogs'):
+        return {
+            '__location__': 'US', 'timestamp': 'TIMESTAMP', 'insert_id': 'STRING',
+            'log_id': 'STRING', 'severity': 'STRING', 'json_payload': 'JSON',
+            'proto_payload': 'JSON', 'resource': 'RECORD', 'labels': 'JSON', 'trace': 'STRING',
+        }
+      return None
+
+    out = provision.resolve_sources('example-project', 'US', 30, describe_only_alllogs)
+    self.assertEqual(out['armor'].status, 'FOUND')
+    self.assertTrue(out['armor'].table_ref.endswith('._AllLogs'))
+    self.assertIn('`json_payload` AS jsonpayload_v1_sanitizeoperationlogentry', out['armor'].sql)
+    self.assertIn("`log_id` = 'modelarmor.googleapis.com/sanitize_operations'", out['armor'].sql)
 
   def test_build_view_bodies_renders_all_views(self):
     sources = provision.resolve_sources('example-project', 'US', 30, _describe_all_found)
@@ -103,11 +121,12 @@ class ProvisionerTest(unittest.TestCase):
       self.assertNotIn('gemini-enterprise-stage', _sql_code(body), name)  # no hard-coded project ids
     turns = bodies['vibelift_mart.v_fct_turns']
     self.assertIn('`example-project.ds_ge_curated_staging.v_user_activity_curated`', turns)
+    self.assertIn('`example-project.ds_ge_curated_staging.v_model_armor_curated`', turns)
     self.assertIn('FROM `example-project.vibelift_mart.v_fct_turns`', bodies['vibelift_mart.fct_turns'])
     self.assertIn('refreshed_at', bodies['vibelift_mart.fct_turns'])
     self.assertIn('`example-project.vibelift_mart.fct_turns`', bodies['vibelift_mart.agg_daily_usage'])
-    # Audit window: 300 s lag / 30 s lead in ms, AUDIT_ONLY successes excluded by default.
-    self.assertIn('300000', turns)
+    # Audit window: 1800 s lag (covers 20-minute StreamAssist timeouts) / 30 s lead in ms.
+    self.assertIn('1800000', turns)
     self.assertIn('30000', turns)
 
   def test_fct_turns_is_a_partitioned_table_and_the_rest_are_views(self):
@@ -133,7 +152,7 @@ class ProvisionerTest(unittest.TestCase):
 
 
 class TemplateDefectFixTest(unittest.TestCase):
-  """Guards the stage defects fixed during the port (see docs/GE_MART.md)."""
+  """Guards the stage defects and 8 blind spots fixed in the mart SQL templates."""
 
   def _tpl(self, layer, name):
     return _sql_code(provision.load_template(layer, name))
@@ -152,19 +171,30 @@ class TemplateDefectFixTest(unittest.TestCase):
     self.assertEqual(turns.count('FROM AUDIT_PAIRS'), 1)
     self.assertEqual(turns.count('JOIN AUDIT_MATCHES'), 1)
 
-  def test_armor_verdict_prefix_stripped(self):
-    self.assertIn("r'^MODEL_ARMOR_SANITIZATION_VERDICT_'", self._tpl('curated', 'v_model_armor_curated'))
+  def test_armor_verdict_prefix_stripped_and_inspect_only_excluded(self):
+    armor = self._tpl('curated', 'v_model_armor_curated')
+    self.assertIn("r'^MODEL_ARMOR_SANITIZATION_VERDICT_'", armor)
+    self.assertIn('assist_token', armor)
+    self.assertIn('NMwK|M8gK', armor)
+    self.assertIn('not blocked as the enforcement type is inspect only', armor)
+    self.assertIn('SANITIZATION_EXECUTION_SKIPPED', armor)
 
-  def test_activity_uses_lowercase_sink_paths(self):
+  def test_activity_uses_lowercase_sink_paths_and_extracts_upload_session_id(self):
     activity = self._tpl('curated', 'v_user_activity_curated')
     self.assertIn('logmetadata.methodname', activity)
     self.assertNotIn('logMetadata.methodName', activity)
+    self.assertIn("REGEXP_EXTRACT(resource_path, r'sessions/([^/]+)')", activity)
+    self.assertIn("r'(?i)(upload|file)'", activity)
 
-  def test_audit_uses_rpc_codes_and_dedupes_streaming_ops(self):
+  def test_audit_uses_rpc_codes_dedupes_streaming_ops_and_falls_back_to_request_json(self):
     audit = self._tpl('curated', 'v_consolidated_audit_log')
     self.assertIn("WHEN status_code = 8 THEN 'RATE_LIMITED'", audit)
     self.assertIn('LAX_STRING(op.id)', audit)
     self.assertIn('QUALIFY ROW_NUMBER() OVER', audit)
+    self.assertIn('request_json_str', audit)
+    self.assertIn('response_json_str', audit)
+    self.assertIn('pp.requestJson', audit)
+    self.assertIn('pp.responseJson', audit)
 
   def test_elided_activity_principal_becomes_null_and_matches_by_engine_time(self):
     activity = self._tpl('curated', 'v_user_activity_curated')
@@ -179,10 +209,25 @@ class TemplateDefectFixTest(unittest.TestCase):
       self.assertNotIn('callerip', body, name)
       self.assertNotIn('caller_ip', body, name)
 
-  def test_tool_failure_ignores_json_null_and_empty_error(self):
+  def test_tool_failure_catches_objects_error_message_and_wrapped_payload_errors(self):
     ops = self._tpl('curated', 'v_agentic_operations_curated')
-    self.assertIn("NULLIF(LAX_STRING(part.response.error), '') IS NOT NULL", ops)
+    self.assertIn("JSON_TYPE(part.response.error) NOT IN ('null')", ops)
+    self.assertIn('part.response.error_message', ops)
+    self.assertIn('part.response._dolphin_error_handling', ops)
+    self.assertIn('cj.result.Error', ops)
+    self.assertIn('cj.error.message', ops)
     self.assertNotIn('OR part.response.error IS NOT NULL', ops)
+    # Multi-MCP aggregation across all tool parts
+    self.assertIn('SELECT DISTINCT LAX_STRING(part.response.structuredcontent.mcpservername)', ops)
+    self.assertIn('SELECT DISTINCT LAX_STRING(part.response.structuredcontent.authkind)', ops)
+
+  def test_sessions_never_split_by_engine_key_and_turns_compute_latency(self):
+    sessions = self._tpl('mart', 'fct_sessions')
+    self.assertIn('GROUP BY session_id', sessions)
+    self.assertNotIn('GROUP BY engine_key, session_id', sessions)
+    turns = self._tpl('mart', 'v_fct_turns')
+    self.assertIn('OVER (PARTITION BY session_id)', turns)
+    self.assertIn('MILLISECOND\n    ), 0) AS latency_ms', turns)
 
   def test_status_message_not_truncated_at_300_chars(self):
     for name in ('v_user_activity_curated', 'v_consolidated_audit_log'):
@@ -217,6 +262,26 @@ class GeMartReaderTest(unittest.TestCase):
       self.assertIn(f'INTERVAL {hrs} HOUR', ge_mart.build_support_turns_sql('example-project', hours=hrs))
       self.assertIn(f'INTERVAL {hrs} HOUR', ge_mart.build_user_engine_rollup_sql('example-project', hours=hrs))
       self.assertIn(f'INTERVAL {hrs} HOUR', ge_mart.build_audit_principals_sql('example-project', hours=hrs))
+
+  def test_sql_to_python_reader_column_contract(self):
+    # Every turn query and row mapper must select and preserve latency_ms, tool_failure_count,
+    # and mcp_server_name rather than hardcoding None or dropping them.
+    recent_sql = ge_mart.build_recent_turns_sql('example-project')
+    session_turns_sql = ge_mart.build_session_turns_sql('example-project')
+    sessionless_sql = ge_mart.build_sessionless_token_turns_sql('example-project')
+    for sql in (recent_sql, session_turns_sql, sessionless_sql):
+      for col in ('latency_ms', 'tool_call_count', 'tool_failure_count', 'tool_names', 'mcp_server_name'):
+        self.assertIn(col, sql)
+    log = ge_mart.usage_log_from_row({'turn_id': 't1', 'latency_ms': '1420', 'total_tokens': '500'}, 'example-project')
+    self.assertEqual(log['latency_ms'], 1420)
+    st = ge_mart.session_turn_from_row({
+        'turn_id': 't1', 'latency_ms': '1420', 'tool_call_count': '3',
+        'tool_failure_count': '1', 'mcp_server_name': 'github,jira',
+    })
+    self.assertEqual(st['latency_ms'], 1420)
+    self.assertEqual(st['tool_calls'], 3)
+    self.assertEqual(st['tool_failures'], 1)
+    self.assertEqual(st['mcp_server_name'], 'github,jira')
 
   def test_usage_log_keeps_unknowns_as_none(self):
     row = {'turn_id': 'ACTIVITY:abc', 'ts': '2026-09-29 10:00:00', 'turn_status': 'SUCCESS',
@@ -396,5 +461,55 @@ class DailyCostJoinTest(unittest.TestCase):
     self.assertIsNone(out['last_billed_day'])
 
 
+_VERIFY_SPEC = importlib.util.spec_from_file_location(
+    'verify_ge_mart_invariants', _ROOT / 'deploy' / 'bigquery' / 'verify_ge_mart_invariants.py')
+verify_invariants = importlib.util.module_from_spec(_VERIFY_SPEC)
+sys.modules['verify_ge_mart_invariants'] = verify_invariants
+_VERIFY_SPEC.loader.exec_module(verify_invariants)  # type: ignore[union-attr]
+
+
+class InvariantVerifierTest(unittest.TestCase):
+
+  def test_build_invariant_sql_covers_all_conservation_laws(self):
+    sql = verify_invariants.build_invariant_sql('example-project', 'ds_ge_curated_staging', 'vibelift_mart')
+    for inv in (
+        'fct_sessions_unique_session_id',
+        'session_turn_conservation',
+        'session_token_conservation',
+        'daily_agg_turn_conservation',
+        'daily_agg_token_conservation',
+        'inference_token_conservation',
+        'tool_failure_bounds',
+        'file_upload_session_coverage',
+        'armor_inspect_only_exclusion',
+        'audit_session_extraction_coverage',
+        'materialized_fct_turns_sync',
+    ):
+      self.assertIn(inv, sql)
+    with self.assertRaises(ValueError):
+      verify_invariants.build_invariant_sql('bad; DROP', 'ds_ge_curated_staging', 'vibelift_mart')
+
+  def test_verify_mart_invariants_parses_results_and_exit_code(self):
+    fake_rows = [
+        {'name': 'fct_sessions_unique_session_id', 'violations': '0', 'detail': 'rows=248 distinct_sessions=248'},
+        {'name': 'session_token_conservation', 'violations': '0', 'detail': 'ok'},
+    ]
+    results = verify_invariants.verify_mart_invariants(
+        'example-project', query_runner=lambda _p, _l, _s: fake_rows)
+    self.assertEqual(len(results), 2)
+    self.assertTrue(all(r.passed for r in results))
+
+  def test_no_unnest_array_agg_in_sql_templates(self):
+    for sql_path in (_ROOT / 'deploy' / 'bigquery' / 'ge_mart').rglob('*.sql'):
+      text = sql_path.read_text(encoding='utf-8').upper()
+      for forbidden in ('UNNEST(ARRAY_AGG', 'UNNEST(SPLIT(STRING_AGG'):
+        self.assertNotIn(
+            forbidden,
+            text,
+            f'{sql_path.name} uses {forbidden}(...), which BigQuery rejects inside GROUP BY scalar subqueries; aggregate in a prior CTE first.',
+        )
+
+
 if __name__ == '__main__':
   unittest.main()
+
