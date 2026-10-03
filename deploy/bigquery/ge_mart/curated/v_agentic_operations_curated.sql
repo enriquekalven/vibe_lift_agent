@@ -85,7 +85,7 @@ SELECT
   IF(jp.gen_ai_input_messages IS NULL, NULL, (
     SELECT COUNT(1)
     FROM UNNEST(JSON_QUERY_ARRAY(input_messages[SAFE_OFFSET(ARRAY_LENGTH(input_messages) - 1)].parts)) AS part
-    WHERE LAX_BOOL(part.response.iserror) = TRUE OR part.response.error IS NOT NULL
+    WHERE LAX_BOOL(part.response.iserror) = TRUE OR NULLIF(LAX_STRING(part.response.error), '') IS NOT NULL
   )) AS tool_failure_count,
   (
     SELECT LAX_STRING(part.response.structuredcontent.mcpservername)

@@ -179,6 +179,22 @@ class TemplateDefectFixTest(unittest.TestCase):
       self.assertNotIn('callerip', body, name)
       self.assertNotIn('caller_ip', body, name)
 
+  def test_tool_failure_ignores_json_null_and_empty_error(self):
+    ops = self._tpl('curated', 'v_agentic_operations_curated')
+    self.assertIn("NULLIF(LAX_STRING(part.response.error), '') IS NOT NULL", ops)
+    self.assertNotIn('OR part.response.error IS NOT NULL', ops)
+
+  def test_status_message_not_truncated_at_300_chars(self):
+    for name in ('v_user_activity_curated', 'v_consolidated_audit_log'):
+      body = self._tpl('curated', name)
+      self.assertNotIn('1, 300', body, name)
+      self.assertIn("status.message), '') AS status_message", body, name)
+
+  def test_audit_permission_denial_catches_null_granted_and_rpc_code_7(self):
+    audit = self._tpl('curated', 'v_consolidated_audit_log')
+    self.assertIn('NOT COALESCE(LAX_BOOL(auth.granted), FALSE)', audit)
+    self.assertIn('COALESCE(status_code, 0) != 0 OR has_permission_denial AS is_error', audit)
+
 
 class GeMartReaderTest(unittest.TestCase):
 

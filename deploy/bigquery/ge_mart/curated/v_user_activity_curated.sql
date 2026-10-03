@@ -107,7 +107,7 @@ unioned AS (
     LAX_STRING(jp.response.sanitizationresult.sanitizationverdictreason) AS sanitization_verdict_reason,
     LAX_STRING(jp.response.sanitizationresult.filtermatchstate) AS sanitization_filter_match_state,
     status_code,
-    SUBSTR(LAX_STRING(jp.status.message), 1, 300) AS status_message
+    NULLIF(LAX_STRING(jp.status.message), '') AS status_message
   FROM assistant_fields
 
   UNION ALL
@@ -151,7 +151,7 @@ unioned AS (
     CAST(NULL AS STRING) AS sanitization_verdict_reason,
     CAST(NULL AS STRING) AS sanitization_filter_match_state,
     status_code,
-    SUBSTR(LAX_STRING(jp.status.message), 1, 300) AS status_message
+    NULLIF(LAX_STRING(jp.status.message), '') AS status_message
   FROM search_fields
 )
 SELECT

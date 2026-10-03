@@ -24,7 +24,11 @@ fields AS (
     REGEXP_EXTRACT(LAX_STRING(pp.methodName), r'([^.]+)$') AS method_short_name,
     LAX_STRING(pp.resourceName) AS resource_name,
     LAX_INT64(pp.status.code) AS status_code,
-    LAX_STRING(op.id) AS operation_id
+    LAX_STRING(op.id) AS operation_id,
+    COALESCE(LAX_INT64(pp.status.code), 0) = 7 OR EXISTS(
+      SELECT 1 FROM UNNEST(JSON_QUERY_ARRAY(pp.authorizationInfo)) AS auth
+      WHERE NOT COALESCE(LAX_BOOL(auth.granted), FALSE)
+    ) AS has_permission_denial
   FROM audit
   QUALIFY ROW_NUMBER() OVER (
     PARTITION BY COALESCE(
@@ -62,27 +66,32 @@ SELECT
   REGEXP_EXTRACT(resource_name, r'sessions/([^/]+)') AS session_id,
   REGEXP_EXTRACT(resource_name, r'agents/([^/]+)') AS agent_id,
   status_code,
-  COALESCE(status_code, 0) != 0 AS is_error,
+  COALESCE(status_code, 0) != 0 OR has_permission_denial AS is_error,
   CASE
+    WHEN status_code = 7 OR (COALESCE(status_code, 0) = 0 AND has_permission_denial) THEN 'PERMISSION_DENIED'
     WHEN status_code IS NULL OR status_code = 0 THEN 'OK'
     WHEN status_code = 8 THEN 'RATE_LIMITED'
-    WHEN status_code = 7 THEN 'PERMISSION_DENIED'
     WHEN status_code = 16 THEN 'UNAUTHENTICATED'
     WHEN status_code = 1 THEN 'CANCELLED'
     WHEN status_code IN (2, 4, 13, 14, 15) THEN 'SERVER_ERROR'
     WHEN status_code IN (3, 5, 6, 9, 10, 11, 12) THEN 'CLIENT_ERROR'
     ELSE 'OTHER_ERROR'
   END AS status_class,
-  SUBSTR(LAX_STRING(pp.status.message), 1, 300) AS status_message,
+  NULLIF(LAX_STRING(pp.status.message), '') AS status_message,
   COALESCE(
     LAX_STRING(pp.status.details_google_rpc_errorinfo[0].reason),
     LAX_STRING(pp.status.details_google_rpc_errorinfo.reason)
   ) AS error_reason,
   REGEXP_REPLACE(LAX_STRING(pp.authenticationInfo.principalEmail), r'^(user|serviceAccount):', '') AS principal_email,
-  LAX_STRING(pp.authorizationInfo[0].permission) AS permission_name,
-  EXISTS(
-    SELECT 1 FROM UNNEST(JSON_QUERY_ARRAY(pp.authorizationInfo)) AS auth
-    WHERE LAX_BOOL(auth.granted) = FALSE
-  ) AS has_permission_denial,
+  COALESCE(
+    (
+      SELECT LAX_STRING(auth.permission)
+      FROM UNNEST(JSON_QUERY_ARRAY(pp.authorizationInfo)) AS auth
+      WHERE NOT COALESCE(LAX_BOOL(auth.granted), FALSE)
+      LIMIT 1
+    ),
+    LAX_STRING(pp.authorizationInfo[0].permission)
+  ) AS permission_name,
+  has_permission_denial,
   LAX_STRING(pp.requestMetadata.callerSuppliedUserAgent) AS caller_user_agent
 FROM fields
