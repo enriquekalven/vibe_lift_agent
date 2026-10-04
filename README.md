@@ -6,7 +6,9 @@
 
 Designed for production deployment on **Google Cloud Run** and native embedding inside **Gemini Enterprise**, VibeLift enumerates registered agents across global and regional Gemini Enterprise instances, joins inventory with real-time Google Cloud Monitoring and OpenTelemetry `gen_ai` logs, measures prompt cache and skill/MCP token economics, and runs closed-loop prompt optimization across **AlphaEvolve**, **Opus Frontier Critic**, and **Hybrid Ensemble**.
 
-> **Deploying to your own project?** Follow [Deploy in Your Own GCP Project](#deploy-in-your-own-gcp-project): prerequisites, logging, BigQuery, Cloud Run, Gemini Enterprise registration, verification and [troubleshooting](#troubleshooting).
+> **Deploying to your own project?**
+> - **No AI tools or no local CLI installed?** Follow the **[Manual Deployment Contingency Guide (Browser-Only, Zero Local Setup)](#manual-deployment-contingency-guide-browser-only-zero-local-setup)**.
+> - **Standard CLI deployment:** Follow **[Deploy in Your Own GCP Project](#deploy-in-your-own-gcp-project)** for prerequisites, logging, BigQuery, Cloud Run, Gemini Enterprise registration, verification, and [troubleshooting](#troubleshooting).
 
 ---
 
@@ -265,7 +267,128 @@ External services can also push telemetry spans over HTTP via `POST /api/decorat
 
 ## Deploy in Your Own GCP Project
 
-This section takes a fresh Google Cloud project to a working, private VibeLift deployment deployed to a **Gemini Enterprise Data Store** and registered to your **Gemini Enterprise App instance**. Run every command from the repo root. Replace `PROJECT_ID`, `REGION` and `GE_APP_ID` with your values.
+This section takes a fresh Google Cloud project to a working, private VibeLift deployment deployed to a **Gemini Enterprise Data Store** and registered to your **Gemini Enterprise App instance**.
+
+> [!TIP]
+> **Non-technical operator or no AI coding tools (no Claude, Antigravity, local Python, or local `gcloud`)?**
+> Start directly with the **[Manual Deployment Contingency Guide (Browser-Only, Zero Local Setup)](#manual-deployment-contingency-guide-browser-only-zero-local-setup)** below. You only need a web browser and access to the Google Cloud Console.
+
+---
+
+### Manual Deployment Contingency Guide (Browser-Only, Zero Local Setup)
+
+Use this contingency guide if you **do not** have Claude, Antigravity, `git`, Python, or the Google Cloud CLI installed on your computer. Everything runs inside your web browser using **Google Cloud Shell** (a pre-configured terminal built into the Google Cloud Console) and the **Google Cloud Console UI**.
+
+#### Before You Start: Find Your 3 Settings in the Google Cloud Console
+
+Open [https://console.cloud.google.com](https://console.cloud.google.com) in Chrome and write down these three values:
+
+1. **`PROJECT_ID` (Your Google Cloud Project ID)**
+   - Click the **Project Picker** dropdown at the top-left of the Google Cloud Console (next to the Google Cloud logo).
+   - Copy the **ID** column (for example, `my-company-ge-prod`) — *use the ID, not the display name*.
+2. **`GE_APP_ID` (Your Gemini Enterprise App ID)** and **`GE_LOCATION` (`global`, `us`, or `eu`)**
+   - In the top search bar of the Google Cloud Console, search for **Gemini Enterprise** (or **AI Applications**) and open **Apps**.
+   - Find the Gemini Enterprise app you want to monitor and copy its **ID** column (for example, `agent-platform-demo`) and its **Location** column (`global`, `us`, or `eu`).
+
+---
+
+#### Plan A: 5-Minute Browser-Only Deployment via Google Cloud Shell (Recommended)
+
+You do **not** need to install anything on your laptop. Google Cloud Shell already has `gcloud`, `bq`, `python3`, and `unzip` pre-installed.
+
+**Step 1 — Open Google Cloud Shell in your browser**
+1. In [https://console.cloud.google.com](https://console.cloud.google.com), make sure your target project is selected in the top-left dropdown.
+2. Click the **Activate Cloud Shell** icon (**`>_`**) in the top-right blue navigation bar (next to the search bar and notification bell).
+3. A terminal panel will open at the bottom of your browser. If prompted, click **Continue** / **Authorize**.
+
+**Step 2 — Get the code into Cloud Shell (pick ONE of the two options below)**
+- **If you have the `.zip` file (`finops-mcp-zscaler.zip` or `vibe_lift_agent.zip`) on your computer:**
+  1. In the top-right corner of the Cloud Shell panel, click the **three vertical dots (`⋮`)** → **Upload** → **Choose File**.
+  2. Select the `.zip` file from your computer and click **Upload**.
+  3. Paste this command into the Cloud Shell window and press **Enter**:
+     ```bash
+     rm -rf ~/vibelift_deploy && mkdir -p ~/vibelift_deploy
+     unzip -q ~/*.zip -d ~/vibelift_deploy
+     cd "$(dirname "$(find ~/vibelift_deploy -name deploy_cloud_run.sh | head -n 1)")/.."
+     pwd
+     ```
+- **Or if you are pulling directly from GitHub:**
+  ```bash
+  rm -rf ~/vibelift_deploy
+  git clone https://github.com/enriquekalven/vibe_lift_agent.git ~/vibelift_deploy
+  cd ~/vibelift_deploy
+  ```
+
+**Step 3 — Fill in your 3 values and run the one-step installer**
+1. Copy the block below into Notepad/TextEdit first, replace `YOUR_PROJECT_ID`, `YOUR_GE_APP_ID`, and `global` with the 3 values you wrote down, then paste the entire block into Cloud Shell and press **Enter** (if Cloud Shell pops up an **Authorize** prompt, click **Authorize**):
+
+```bash
+# === 1. EDIT THESE 3 VALUES ===
+export GOOGLE_CLOUD_PROJECT="YOUR_PROJECT_ID"
+export GE_ENGINE_ID="YOUR_GE_APP_ID"
+export GE_LOCATION="global"              # global, us, or eu (must match your GE App location)
+export GOOGLE_CLOUD_REGION="us-central1" # Cloud Run region
+export BQ_LOCATION="US"                  # BigQuery location (US or EU)
+
+# === 2. DO NOT EDIT BELOW THIS LINE (COPY & PASTE AS-IS) ===
+gcloud config set project "${GOOGLE_CLOUD_PROJECT}"
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt -c constraints.txt
+
+# Create BigQuery datasets, Cloud Logging sinks, and reporting mart views/tables
+./deploy/setup_bigquery_sink.sh
+
+# Build & deploy the private Cloud Run service, IAM roles, and register onto Gemini Enterprise
+./deploy/deploy_cloud_run.sh
+
+# Set up the hourly BigQuery scheduled query to keep the mart fresh
+./deploy/setup_mart_refresh.sh
+```
+
+**Step 4 — Open and verify the dashboard in your browser (Zero local setup)**
+You can open the dashboard in two ways without installing anything on your computer:
+- **Inside Gemini Enterprise Chat:** Open your Gemini Enterprise web app and type:
+  > `Open the dashboard`
+  The dashboard will open in the right-hand side panel.
+- **Directly in your browser via Cloud Shell Web Preview:**
+  1. In Cloud Shell, run:
+     ```bash
+     gcloud run services proxy --project="${GOOGLE_CLOUD_PROJECT}" --region="${GOOGLE_CLOUD_REGION}" --port=8080 "$(gcloud run services list --project="${GOOGLE_CLOUD_PROJECT}" --region="${GOOGLE_CLOUD_REGION}" --format='value(metadata.name)' | head -n 1)"
+     ```
+  2. Click the **Web Preview** icon (the square with an eye / arrow at the top-right of the Cloud Shell bar) → **Preview on port 8080**.
+  3. A new browser tab will open directly to the live dashboard.
+
+---
+
+#### Plan B: Step-by-Step Google Cloud Console UI Walkthrough (If Any Automated Step Is Blocked)
+
+If an organization policy or permission blocks one of the automated scripts in Plan A, a non-technical administrator can complete or fix each stage directly in the **Google Cloud Console UI**:
+
+1. **Enable Gemini Enterprise & Audit Logs in the Console UI**
+   - Go to **Gemini Enterprise → Apps**, click your app, and turn on **User activity / observability logging**.
+   - Go to **IAM & Admin → Audit Logs**, filter for **Discovery Engine API**, check **Admin Read**, **Data Read**, and **Data Write**, and click **Save**.
+2. **Allow Custom MCP Connectors (If Blocked by Organization Policy)**
+   - Go to **IAM & Admin → Organization Policies**.
+   - Filter by **Disable custom MCP server connector for Gemini Enterprise**.
+   - Click it → **Manage policy** → select **Override parent's policy** → **Add a rule** → set Enforcement to **Off** → click **Set policy**.
+3. **Connect the MCP Server to Gemini Enterprise Using Only the Console UI**
+   - First, get your Cloud Run URL in **Cloud Run** → click the service (`vibe-lift-agent` or `finops-mcp-agent`) → copy the **URL** at the top (ending in `.run.app`), and add `/mcp` to the end (for example, `https://vibe-lift-agent-123456789.us-central1.run.app/mcp`).
+   - Go to **Gemini Enterprise → Data stores → Create data store**.
+   - Search for **Custom MCP Server** and click **Add MCP server** → select **Bring your own MCP server URL** (do **not** select Agent Registry).
+   - Paste your `https://...run.app/mcp` URL, select **No authentication**, click **Continue**, choose the same location as your app (`global`, `us`, or `eu`), name it `vibelift-analytics-mcp`, and click **Create**.
+   - Wait 1–2 minutes until the data store status shows **Active**. Click into the data store → **Actions** tab → click **Reload custom actions** → check the box to select all **9 actions** → click **Enable actions**.
+   - Go to **Gemini Enterprise → Apps → [Click Your App] → Data stores** → click **Connect existing data store**, check `vibelift-analytics-mcp`, and click **Save**.
+4. **Grant Teammates Access to View the Standalone Dashboard in the Console UI**
+   - Go to **Cloud Run** → click the checkbox next to `vibe-lift-agent` (or `finops-mcp-agent`) → click **Permissions** (top-right) → **Add principal**.
+   - Enter your teammate's email (or Google Group), select role **Cloud Run → Cloud Run Invoker**, and click **Save**.
+
+---
+
+### Standard CLI Deployment Walkthrough
+
+Run every command from the repo root. Replace `PROJECT_ID`, `REGION` and `GE_APP_ID` with your values.
 
 ```mermaid
 flowchart LR
@@ -393,7 +516,7 @@ gcloud builds submit --config=deploy/cloudbuild.yaml --substitutions=_DEPLOY=fal
 > VibeLift's MCP server (`/mcp`) and embedded side-panel UI (`ui://vibelift-analytics/dashboard`) must be deployed as a **Gemini Enterprise Custom MCP Server Data Store** (`dataSource: "custom_mcp"`, `mcp_server_source: "BYO_MCP"`, `use_agent_gateway_egress: false` in **Console > Gemini Enterprise > Data stores**), **not** in Vertex AI / Cloud API Registry (*Agent Registry > MCP Registry*).
 >
 > **Two mandatory stages are required:**
-> 1. **Stage 4a — Deploy to Gemini Enterprise Data Store (`BYO_MCP`):** Create the `Custom MCP Server` data store (`vibelift-analytics-mcp` / `vibelift-analytics-mcp_mcp_data`) pointing to `https://vibe-lift-agent-PROJECT_NUMBER.REGION.run.app/mcp` with `No authentication`, wait for it to become `ACTIVE`, import the 6 tools from `/mcp`, and enable them as actions on the data store.
+> 1. **Stage 4a — Deploy to Gemini Enterprise Data Store (`BYO_MCP`):** Create the `Custom MCP Server` data store (`vibelift-analytics-mcp` / `vibelift-analytics-mcp_mcp_data`) pointing to `https://vibe-lift-agent-PROJECT_NUMBER.REGION.run.app/mcp` with `No authentication`, wait for it to become `ACTIVE`, import the 9 tools from `/mcp`, and enable them as actions on the data store.
 > 2. **Stage 4b — Register the GE Data Store to the Gemini Enterprise App Instance (`GE_APP_ID`):** Once deployed to the GE Data Store, link/register `vibelift-analytics-mcp_mcp_data` onto your target **Gemini Enterprise App instance** (`engines/GE_APP_ID` -> `dataStoreIds`) so the assistant in that app instance can invoke VibeLift's MCP tools and open the right side-panel dashboard.
 
 **Automated script (recommended — runs both Stage 4a and Stage 4b):**
@@ -405,7 +528,7 @@ GE_LOCATION=global python3 deploy/setup_mcp_connector.py GE_APP_ID            # 
 
 What `./deploy/register_ge_agent.sh GE_APP_ID` does:
 1. Checks the private Cloud Run service health with your identity token and ensures the Discovery Engine service agent (`service-PROJECT_NUMBER@gcp-sa-discoveryengine.iam.gserviceaccount.com`) holds `roles/run.invoker`.
-2. **Stage 4a — Deploys to the Gemini Enterprise Data Store (`deploy/setup_mcp_connector.py`):** Creates the `Custom MCP Server` connector (`collectionId=vibelift-analytics-mcp`, `mcp_server_source="BYO_MCP"`, `use_agent_gateway_egress=false`, `auth_type="NO_AUTH"`) in Gemini Enterprise Data Stores ([docs](https://cloud.google.com/gemini/enterprise/docs/connectors/custom-mcp-server/set-up-custom-mcp-server)), waits for `ACTIVE`, imports all 6 tools from `/mcp`, and enables all 6 as actions (`--tools` to choose). If a connector with that collection ID already exists but its `mcp_server_source` is not `BYO_MCP`, the script stops instead of reusing it.
+2. **Stage 4a — Deploys to the Gemini Enterprise Data Store (`deploy/setup_mcp_connector.py`):** Creates the `Custom MCP Server` connector (`collectionId=vibelift-analytics-mcp`, `mcp_server_source="BYO_MCP"`, `use_agent_gateway_egress=false`, `auth_type="NO_AUTH"`) in Gemini Enterprise Data Stores ([docs](https://cloud.google.com/gemini/enterprise/docs/connectors/custom-mcp-server/set-up-custom-mcp-server)), waits for `ACTIVE`, imports all 9 tools from `/mcp`, and enables all 9 as actions (`--tools` to choose). If a connector with that collection ID already exists but its `mcp_server_source` is not `BYO_MCP`, the script stops instead of reusing it.
 3. **Stage 4b — Registers the GE Data Store to the Gemini Enterprise App Instance:** Renames the data store (`vibelift-analytics-mcp_mcp_data`) to `VibeLift Analytics`, links it into `engines/GE_APP_ID.dataStoreIds` while keeping the app instance's existing connected data stores, and verifies the registration with a follow-up `GET`.
 4. **Optional A2A Agent Registration:** If `agents-cli` is installed, also registers the A2A agent card on the Gemini Enterprise App instance (`--registration-type a2a`, no OAuth).
 
@@ -420,7 +543,7 @@ Safe to re-run. Remove a connector with `python3 deploy/setup_mcp_connector.py -
 1. Go to **Console > Gemini Enterprise > Data stores > Create data store**, search **Custom MCP Server**, and click **Add MCP server** (choose **Bring your own MCP server URL** — do **not** go to *Agent Registry / MCP Registry* or select *From Agent Registry*).
 2. Authentication: **No authentication**. The service stays private: for `*.run.app` URLs Gemini Enterprise sends a Google-signed ID token for its Discovery Engine service agent (`X-Serverless-Authorization`), which step 3 granted `roles/run.invoker`.
 3. Fill in the values below, click **Continue**, pick the same multi-region as your app (`global`, `us` or `eu`), name it `vibelift-analytics-mcp` and click **Create**.
-4. When the data store is **Active**: open it in **Gemini Enterprise > Data stores**, click **Actions > Reload custom actions**, select all 6 actions and click **Enable actions** (all actions start disabled).
+4. When the data store is **Active**: open it in **Gemini Enterprise > Data stores**, click **Actions > Reload custom actions**, select all 9 actions and click **Enable actions** (all actions start disabled).
 
 **Stage 4b (Console) — Register the GE Data Store to the Gemini Enterprise App Instance:**
 5. Go to **Console > Gemini Enterprise > Apps > `GE_APP_ID` > Data stores** (or *Connected data stores*).
@@ -437,15 +560,18 @@ Safe to re-run. Remove a connector with `python3 deploy/setup_mcp_connector.py -
 | Transport | Streamable HTTP (the only transport Gemini Enterprise supports), JSON-RPC 2.0, MCP `2025-06-18` (also accepts `2025-03-26`) |
 | UI resource | `ui://vibelift-analytics/dashboard` (`text/html;profile=mcp-app`) |
 
-Read-only tools declare `readOnlyHint`, so they run without a confirmation prompt. `run_alpha_evolve_generation` changes state, so Gemini Enterprise asks the user to confirm it.
+Read-only tools declare `readOnlyHint`, so they run without a confirmation prompt. `run_alpha_evolve_generation` and `set_agent_trace_logging` change state, so Gemini Enterprise asks the user to confirm them.
 
-Exposed MCP tools:
+Exposed MCP tools (9):
 - `open_dashboard`: renders the VibeLift dashboard in the Gemini Enterprise right side panel (with Fullscreen and PDF export).
 - `query_ge_agent_fleet`: live inventory and telemetry for all agents in Gemini Enterprise.
 - `query_project_telemetry`: Cloud Run service metrics and BigQuery triage log summaries.
 - `calculate_prompt_cache_economics`: prompt prefix cache hit rates and savings.
 - `run_alpha_evolve_generation`: one closed-loop optimization generation (`alpha_evolve`, `opus_critic`, `hybrid_ensemble`).
 - `get_vibelift_state`: active agent state, parameters and turn trajectory.
+- `xray_prompt_cache`: character-level Prompt Cache X-Ray diff and cache-friendly rewrite.
+- `list_prompt_snapshot_turns`: lists logged OpenTelemetry prompt snapshot turns for live X-Ray comparison.
+- `set_agent_trace_logging`: enables or disables Cloud Trace / BigQuery logging on Gemini Enterprise agents.
 
 
 #### Optional: end-user OAuth (not used by VibeLift)
