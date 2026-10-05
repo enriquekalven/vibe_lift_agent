@@ -177,3 +177,87 @@ Reconstructs the exact chronological flow (`Step 1 → Step 2 → Step 3...`) of
   - `reference_count`
   - `tool_call_count`
   - `tool_failure_count`
+
+---
+
+## 5. Page 3: Users, Agents & MCP Tool Performance
+
+Maps directly to the **Users** and **Agents** tabs of the MCP App (`zscaler-it-support`), enabling L1/L2 engineers to spot whether an issue is isolated to one user's ACLs/OAuth token or systemic to a specific Agent / MCP connector.
+
+### A. Agent & Engine Health Table (Top Half — Cross-Filtering Enabled)
+- **Dimensions**:
+  1. `agent_name`
+  2. `engine_key`
+  3. `model_name`
+  4. `model_selection_mode` *(`AUTO` vs `EXPLICIT`)*
+  5. `mcp_server_name`
+- **Metrics**:
+  - `COUNT_DISTINCT(turn_id)` *(Total Turns)*
+  - `COUNT_DISTINCT(user_email)` *(Active Users)*
+  - `SUM(tool_call_count)` *(Total Tool Calls)*
+  - `SUM(tool_failure_count)` *(Failed Tool Calls)*
+  - `PERCENTILE_CONT(latency_ms, 0.50)` / `AVG(latency_ms)` *(Median / Avg Turn Latency ms)*
+  - `PERCENTILE_CONT(latency_ms, 0.95)` / `MAX(latency_ms)` *(p95 / Max Turn Latency ms)*
+  - `SUM(total_tokens)` *(Total Tokens)*
+  - `SUM(cached_input_tokens)` *(Cached Input Tokens)*
+  - `SUM(reasoning_tokens)` *(Reasoning Tokens)*
+
+### B. User Adoption & Issue Impact Table (Bottom Half — Cross-Filtering Enabled)
+- **Dimensions**:
+  1. `user_email`
+  2. `user_domain`
+- **Metrics**:
+  - `COUNT_DISTINCT(session_id)` *(Sessions)*
+  - `COUNT_DISTINCT(turn_id)` *(Turns)*
+  - `SUM(IF(needs_support_attention, 1, 0))` *(Turns Needing Support)*
+  - `SUM(tool_failure_count)` *(Tool Failures Experienced)*
+  - `SUM(armor_blocks)` *(Guardrail Blocks)*
+  - `SUM(total_tokens)` *(Total Tokens)*
+  - `MAX(event_timestamp)` *(Last Active Timestamp)*
+
+---
+
+## 6. Page 4: Model Armor & Sensitive Data Protection (SDP) Security Audit
+
+Maps directly to the **Model Armor & SDP** tab of the MCP App (`zscaler-it-support`).
+
+### A. Security KPI Scorecards (Row 1)
+- **Total Model Armor Checks**: `SUM(armor_checks)`
+- **Guardrail / DLP Blocked Turns**: `COUNT_DISTINCT(turn_id)` (Filter: `is_guardrail_blocked = true`)
+- **Model Armor Findings**: `SUM(armor_findings)`
+- **Prompt Injection / Jailbreak Flags**: `COUNT_DISTINCT(turn_id)` (Filter: `is_prompt_injection = true`)
+- **Sensitive Data (SDP / DLP) Flags**: `COUNT_DISTINCT(turn_id)` (Filter: `is_sensitive_data = true`)
+- **Safety / Malicious URI Flags**: `COUNT_DISTINCT(turn_id)` (Filter: `is_safety_violation = true OR is_malicious_uri = true`)
+
+### B. Flagged & Inspected Turns Table (Row 2)
+- **Chart Filter**: `armor_checks > 0 OR is_guardrail_blocked = true`
+- **Dimensions**:
+  1. `event_timestamp`
+  2. `user_email`
+  3. `engine_key`
+  4. `turn_status`
+  5. `guardrail_categories` *(`PROMPT_INJECTION`, `SENSITIVE_DATA`, `SAFETY_VIOLATION`, `MALICIOUS_URI`)*
+  6. `armor_verdict_reasons` *(Specific Model Armor filter reason)*
+  7. `armor_sdp_info_types` *(Specific DLP InfoTypes matched, e.g., `PERSON_NAME`, `EMAIL_ADDRESS`, `CREDIT_CARD_NUMBER`)*
+  8. `prompt_preview`
+  9. `response_preview`
+  10. `l1_runbook_action`
+  11. `cloud_logging_url`
+- **Metrics**:
+  - `armor_checks` (`SUM`)
+  - `armor_findings` (`SUM`)
+  - `armor_blocks` (`SUM`)
+
+---
+
+## 7. Usability Features & Parity with the MCP App (`zscaler-it-support`)
+
+| MCP App Tab / Feature | Looker Studio Equivalent | How It Works in Looker Studio |
+|---|---|---|
+| **Tab 1: Overview** | **Page 1 — Top Scorecards & Trend Charts** | 8 KPI scorecards + Daily Turns by Support Tier stacked combo chart + Issue Category horizontal bar chart. |
+| **Tab 2: Issues (Blast Radius Grouping)** | **Page 1 — Recurring Error Patterns Table (`error_signature`)** | Normalizes dynamic UUIDs/IDs into `error_signature` and ranks issues by `COUNT_DISTINCT(user_email)` (*Affected Users*) and `COUNT_DISTINCT(session_id)` (*Affected Sessions*). Clicking any pattern cross-filters the Incident Queue below to show only turns matching that signature. |
+| **Tab 3: Interactions & Turn Detail Drawer** | **Page 1 — L1/L2 Incident Queue & Runbook Table** | Displays `prompt_preview`, `response_preview`, `l1_runbook_action`, `tool_error_codes`, `tool_error_messages`, `tool_args_summary`, `tool_output_preview`, `queried_data_stores`, `uploaded_file_names`, and `citation_sources` inline with text wrapping, plus 1-click hyperlinks for **Open in Cloud Logging** and **Open in Cloud Trace**. |
+| **Tab 4: Sessions & Step-by-Step Timeline** | **Page 2 — Master-Detail Session Explorer** | Clicking a row in the **Session Summary Table** (top) cross-filters the **Turn-by-Turn Replay Table** (bottom) ordered by `session_step_number = 1, 2, 3...`. |
+| **Tab 5 & 6: Users & Agents** | **Page 3 — Users, Agents & MCP Tool Performance** | Cross-filtering tables showing per-agent `p50`/`p95` latency, MCP tool failure rates, model routing (`AUTO` vs `EXPLICIT`), and per-user impact. |
+| **Tab 7: Model Armor & SDP** | **Page 4 — Model Armor & SDP Security Audit** | Breaks down `armor_checks`, `armor_findings`, `armor_blocks`, `armor_verdict_reasons`, and `armor_sdp_info_types` (`PERSON_NAME`, `US_SOCIAL_SECURITY_NUMBER`, etc.). |
+
