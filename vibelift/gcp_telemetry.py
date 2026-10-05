@@ -991,7 +991,7 @@ class GoogleCloudTelemetryService:
               CAST(MAX(timestamp) AS STRING) AS last_seen
             FROM `{p}.ds_vertex_agents_raw.cloudaudit_googleapis_com_data_access`
             WHERE protopayload_auditlog.authenticationInfo.principalEmail IS NOT NULL
-              AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
+              AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {eff_hours} HOUR)
             GROUP BY 1, 2, 3
             UNION ALL
             SELECT

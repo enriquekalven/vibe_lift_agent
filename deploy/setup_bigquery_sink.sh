@@ -146,16 +146,19 @@ configure_sink "sink-vertex-reasoning-engine" "ds_vertex_agents_raw" "${SINK_VER
 SINK_INFERENCE_FILTER="logName=\"projects/${PROJECT_ID}/logs/discoveryengine.googleapis.com%2Fgen_ai.client.inference.operation.details\""
 configure_sink "sink-ge-inference-tokens" "ds_vertex_agents_raw" "${SINK_INFERENCE_FILTER}"
 
-# Sink 4: Platform Audit Logs
+# Sink 4: Platform Audit Logs (plus Discovery Engine connector_activity, api_errors, and data_connectors)
 SINK_AUDIT_FILTER=$(cat <<EOF
-logName=~"projects/${PROJECT_ID}/logs/cloudaudit.googleapis.com%2F(activity|data_access)"
-AND protoPayload.serviceName="discoveryengine.googleapis.com"
-AND (
-  protoPayload.methodName=~"\.(CreateAgent|UpdateAgent|DeleteAgent|GetIamPolicy|SetIamPolicy)$"
-  OR protoPayload.methodName=~"\.(CreateDataConnector|UpdateDataConnector|DeleteDataConnector|SyncDataConnector|RunDataConnector|GetDataConnector|AcquireAccessToken|AcquireAndStoreRefreshToken|ExchangeAuthCredentials|BuildAuthorizationUrl)$"
-  OR protoPayload.methodName=~"\.(CreateEngine|UpdateEngine|DeleteEngine|ImportDocuments|PurgeDocuments)$"
-  OR protoPayload.methodName=~"\.(StreamAssist|Assist|AsyncAssist|ReadAsyncAssist|AddContextFile|UploadSessionFile|DownloadSessionFile|ListSessionFileMetadata|ExecuteUiWidgetAction|AnswerQuery|Search)$"
+(
+  logName=~"projects/${PROJECT_ID}/logs/cloudaudit.googleapis.com%2F(activity|data_access)"
+  AND protoPayload.serviceName="discoveryengine.googleapis.com"
+  AND (
+    protoPayload.methodName=~"\.(CreateAgent|UpdateAgent|DeleteAgent|GetIamPolicy|SetIamPolicy)$"
+    OR protoPayload.methodName=~"\.(CreateDataConnector|UpdateDataConnector|DeleteDataConnector|SyncDataConnector|RunDataConnector|GetDataConnector|AcquireAccessToken|AcquireAndStoreRefreshToken|ExchangeAuthCredentials|BuildAuthorizationUrl)$"
+    OR protoPayload.methodName=~"\.(CreateEngine|UpdateEngine|DeleteEngine|ImportDocuments|PurgeDocuments)$"
+    OR protoPayload.methodName=~"\.(StreamAssist|Assist|AsyncAssist|ReadAsyncAssist|AddContextFile|UploadSessionFile|DownloadSessionFile|ListSessionFileMetadata|ExecuteUiWidgetAction|AnswerQuery|Search)$"
+  )
 )
+OR logName=~"projects/${PROJECT_ID}/logs/discoveryengine.googleapis.com%2F(connector_activity|api_errors|data_connectors)"
 EOF
 )
 configure_sink "sink-platform-audit" "ds_ge_audit_raw" "${SINK_AUDIT_FILTER}"

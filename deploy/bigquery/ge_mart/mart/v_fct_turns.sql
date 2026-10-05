@@ -60,13 +60,17 @@ inference_raw AS (
     ARRAY_AGG(engine_id IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS engine_id,
     ARRAY_AGG(location IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS location,
     STRING_AGG(mcp_server_name, ',') AS raw_mcp_server_name,
+    STRING_AGG(tool_error_codes, ', ') AS raw_tool_error_codes,
+    SUBSTR(STRING_AGG(tool_error_messages, ' | ' ORDER BY event_timestamp), 1, 2000) AS tool_error_messages,
+    SUBSTR(STRING_AGG(tool_call_summary, ' | ' ORDER BY event_timestamp), 1, 2000) AS tool_call_summary,
+    SUBSTR(STRING_AGG(tool_output_preview, ' | ' ORDER BY event_timestamp), 1, 2000) AS tool_output_preview,
     ARRAY_AGG(finish_reason IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS finish_reason
   FROM `{{curated}}.v_agentic_operations_curated`
   GROUP BY inference_key
 ),
 inference AS (
   SELECT
-    * EXCEPT (raw_tool_names, raw_mcp_server_name),
+    * EXCEPT (raw_tool_names, raw_mcp_server_name, raw_tool_error_codes),
     NULLIF(ARRAY_TO_STRING(ARRAY(
       SELECT DISTINCT tn
       FROM UNNEST(SPLIT(raw_tool_names, ',')) AS tn
@@ -78,7 +82,13 @@ inference AS (
       FROM UNNEST(SPLIT(raw_mcp_server_name, ',')) AS srv
       WHERE srv != ''
       ORDER BY srv
-    ), ','), '') AS mcp_server_name
+    ), ','), '') AS mcp_server_name,
+    NULLIF(ARRAY_TO_STRING(ARRAY(
+      SELECT DISTINCT TRIM(ec)
+      FROM UNNEST(SPLIT(raw_tool_error_codes, ',')) AS ec
+      WHERE TRIM(ec) != ''
+      ORDER BY 1
+    ), ', '), '') AS tool_error_codes
   FROM inference_raw
 ),
 audit AS (
@@ -181,11 +191,22 @@ armor_by_token AS (
     assist_token,
     COUNT(1) AS armor_checks,
     COUNTIF(is_blocked) AS armor_blocks,
+    COUNTIF(is_finding) AS armor_findings,
     LOGICAL_OR(is_prompt_injection) AS is_prompt_injection,
     LOGICAL_OR(is_sensitive_data) AS is_sensitive_data,
     LOGICAL_OR(is_safety_violation) AS is_safety_violation,
     LOGICAL_OR(is_malicious_uri) AS is_malicious_uri,
-    STRING_AGG(DISTINCT violation_category, ',' ORDER BY violation_category) AS guardrail_categories
+    STRING_AGG(DISTINCT violation_category, ',' ORDER BY violation_category) AS guardrail_categories,
+    STRING_AGG(DISTINCT NULLIF(verdict_reason, ''), ' | ' ORDER BY NULLIF(verdict_reason, '')) AS armor_verdict_reasons,
+    STRING_AGG(DISTINCT sdp_info_types, ', ' ORDER BY sdp_info_types) AS armor_sdp_info_types,
+    SUBSTR(NULLIF(TRIM(REGEXP_REPLACE(
+      STRING_AGG(
+        IF(operation_type = 'SANITIZE_MODEL_RESPONSE', sanitized_text, NULL),
+        '' ORDER BY event_timestamp, insert_id
+      ),
+      r'\[\[section:[^\]]*\]\]\s*',
+      ''
+    )), ''), 1, 2000) AS armor_response_preview
   FROM armor
   WHERE assist_token IS NOT NULL
   GROUP BY assist_token
@@ -195,11 +216,22 @@ armor_by_trace AS (
     trace_id,
     COUNT(1) AS armor_checks,
     COUNTIF(is_blocked) AS armor_blocks,
+    COUNTIF(is_finding) AS armor_findings,
     LOGICAL_OR(is_prompt_injection) AS is_prompt_injection,
     LOGICAL_OR(is_sensitive_data) AS is_sensitive_data,
     LOGICAL_OR(is_safety_violation) AS is_safety_violation,
     LOGICAL_OR(is_malicious_uri) AS is_malicious_uri,
-    STRING_AGG(DISTINCT violation_category, ',' ORDER BY violation_category) AS guardrail_categories
+    STRING_AGG(DISTINCT violation_category, ',' ORDER BY violation_category) AS guardrail_categories,
+    STRING_AGG(DISTINCT NULLIF(verdict_reason, ''), ' | ' ORDER BY NULLIF(verdict_reason, '')) AS armor_verdict_reasons,
+    STRING_AGG(DISTINCT sdp_info_types, ', ' ORDER BY sdp_info_types) AS armor_sdp_info_types,
+    SUBSTR(NULLIF(TRIM(REGEXP_REPLACE(
+      STRING_AGG(
+        IF(operation_type = 'SANITIZE_MODEL_RESPONSE', sanitized_text, NULL),
+        '' ORDER BY event_timestamp, insert_id
+      ),
+      r'\[\[section:[^\]]*\]\]\s*',
+      ''
+    )), ''), 1, 2000) AS armor_response_preview
   FROM armor
   WHERE assist_token IS NULL AND trace_id IS NOT NULL
   GROUP BY trace_id
@@ -222,16 +254,21 @@ activity_joined AS (
     i.first_call_at, i.last_call_at,
     i.llm_calls, i.llm_calls_with_tokens, i.input_tokens, i.output_tokens, i.cached_input_tokens,
     i.reasoning_tokens, i.total_tokens, i.tool_call_count, i.tool_failure_count, i.tool_names,
+    i.tool_error_codes, i.tool_error_messages, i.tool_call_summary, i.tool_output_preview,
     i.model_name AS inference_model_name, i.agent_name AS inference_agent_name,
     i.conversation_id, i.location AS inference_location, i.engine_id AS inference_engine_id,
     i.mcp_server_name, i.finish_reason,
     COALESCE(tok.armor_checks, tr.armor_checks) AS armor_checks,
     COALESCE(tok.armor_blocks, tr.armor_blocks) AS armor_blocks,
+    COALESCE(tok.armor_findings, tr.armor_findings) AS armor_findings,
     COALESCE(tok.is_prompt_injection, tr.is_prompt_injection) AS armor_prompt_injection,
     COALESCE(tok.is_sensitive_data, tr.is_sensitive_data) AS armor_sensitive_data,
     COALESCE(tok.is_safety_violation, tr.is_safety_violation) AS armor_safety_violation,
     COALESCE(tok.is_malicious_uri, tr.is_malicious_uri) AS armor_malicious_uri,
     COALESCE(tok.guardrail_categories, tr.guardrail_categories) AS armor_categories,
+    COALESCE(tok.armor_verdict_reasons, tr.armor_verdict_reasons) AS armor_verdict_reasons,
+    COALESCE(tok.armor_sdp_info_types, tr.armor_sdp_info_types) AS armor_sdp_info_types,
+    COALESCE(tok.armor_response_preview, tr.armor_response_preview) AS armor_response_preview,
     g.guardrail_audit_events,
     g.guardrail_audit_blocked
   FROM turn_events AS t
@@ -307,6 +344,25 @@ activity_turns AS (
     reference_count,
     query_chars,
     has_uploaded_file,
+    prompt_preview,
+    COALESCE(response_preview, armor_response_preview) AS response_preview,
+    uploaded_file_names,
+    COALESCE(
+      queried_data_stores,
+      NULLIF(ARRAY_TO_STRING(ARRAY(
+        SELECT DISTINCT ds FROM UNNEST(ARRAY_CONCAT(
+          IFNULL(REGEXP_EXTRACT_ALL(COALESCE(status_message, audit_status_message, ''), r'collections/([A-Za-z0-9_-]+)/dataConnector'), CAST([] AS ARRAY<STRING>)),
+          IFNULL(REGEXP_EXTRACT_ALL(COALESCE(status_message, audit_status_message, ''), r'dataStores/([A-Za-z0-9_-]+)'), CAST([] AS ARRAY<STRING>))
+        )) AS ds
+        WHERE ds IS NOT NULL AND ds != ''
+        ORDER BY ds
+      ), ', '), '')
+    ) AS queried_data_stores,
+    citation_sources,
+    tool_error_codes,
+    tool_error_messages,
+    tool_call_summary,
+    tool_output_preview,
     armor_checks,
     armor_blocks,
     IF(
@@ -334,7 +390,10 @@ activity_turns AS (
     armor_prompt_injection AS is_prompt_injection,
     armor_sensitive_data AS is_sensitive_data,
     armor_safety_violation AS is_safety_violation,
-    armor_malicious_uri AS is_malicious_uri
+    armor_malicious_uri AS is_malicious_uri,
+    armor_findings,
+    armor_verdict_reasons,
+    armor_sdp_info_types
   FROM activity_joined
 ),
 inference_turns AS (
@@ -385,6 +444,15 @@ inference_turns AS (
     CAST(NULL AS INT64) AS reference_count,
     CAST(NULL AS INT64) AS query_chars,
     CAST(NULL AS BOOL) AS has_uploaded_file,
+    CAST(NULL AS STRING) AS prompt_preview,
+    CAST(NULL AS STRING) AS response_preview,
+    CAST(NULL AS STRING) AS uploaded_file_names,
+    CAST(NULL AS STRING) AS queried_data_stores,
+    CAST(NULL AS STRING) AS citation_sources,
+    i.tool_error_codes,
+    i.tool_error_messages,
+    i.tool_call_summary,
+    i.tool_output_preview,
     tr.armor_checks,
     tr.armor_blocks,
     IF(tr.armor_checks IS NULL, NULL, tr.armor_blocks > 0) AS is_guardrail_blocked,
@@ -392,7 +460,10 @@ inference_turns AS (
     tr.is_prompt_injection,
     tr.is_sensitive_data,
     tr.is_safety_violation,
-    tr.is_malicious_uri
+    tr.is_malicious_uri,
+    tr.armor_findings,
+    tr.armor_verdict_reasons,
+    tr.armor_sdp_info_types
   FROM inference AS i
   LEFT JOIN turn_events AS t ON t.trace_rank = 1 AND t.trace_id = i.trace_id
   LEFT JOIN armor_by_trace AS tr ON tr.trace_id = i.trace_id
@@ -440,6 +511,31 @@ audit_only_turns AS (
     CAST(NULL AS INT64) AS reference_count,
     CAST(NULL AS INT64) AS query_chars,
     CAST(NULL AS BOOL) AS has_uploaded_file,
+    CONCAT(
+      '[Audit-only ',
+      COALESCE(a.method_short_name, 'API call'),
+      IF(
+        NULLIF(a.resource_name, '') IS NOT NULL,
+        CONCAT(' on ', REGEXP_REPLACE(a.resource_name, r'^projects/[^/]+/locations/[^/]+/collections/', '')),
+        ''
+      ),
+      ']'
+    ) AS prompt_preview,
+    CAST(NULL AS STRING) AS response_preview,
+    CAST(NULL AS STRING) AS uploaded_file_names,
+    NULLIF(ARRAY_TO_STRING(ARRAY(
+      SELECT DISTINCT ds FROM UNNEST(ARRAY_CONCAT(
+        IFNULL(REGEXP_EXTRACT_ALL(COALESCE(a.status_message, ''), r'collections/([A-Za-z0-9_-]+)/dataConnector'), CAST([] AS ARRAY<STRING>)),
+        IFNULL(REGEXP_EXTRACT_ALL(COALESCE(a.status_message, ''), r'dataStores/([A-Za-z0-9_-]+)'), CAST([] AS ARRAY<STRING>))
+      )) AS ds
+      WHERE ds IS NOT NULL AND ds != ''
+      ORDER BY ds
+    ), ', '), '') AS queried_data_stores,
+    CAST(NULL AS STRING) AS citation_sources,
+    CAST(NULL AS STRING) AS tool_error_codes,
+    CAST(NULL AS STRING) AS tool_error_messages,
+    CAST(NULL AS STRING) AS tool_call_summary,
+    CAST(NULL AS STRING) AS tool_output_preview,
     CAST(NULL AS INT64) AS armor_checks,
     CAST(NULL AS INT64) AS armor_blocks,
     IF(
@@ -459,7 +555,10 @@ audit_only_turns AS (
       CAST(NULL AS BOOL)
     ) AS is_sensitive_data,
     CAST(NULL AS BOOL) AS is_safety_violation,
-    CAST(NULL AS BOOL) AS is_malicious_uri
+    CAST(NULL AS BOOL) AS is_malicious_uri,
+    CAST(NULL AS INT64) AS armor_findings,
+    CAST(NULL AS STRING) AS armor_verdict_reasons,
+    CAST(NULL AS STRING) AS armor_sdp_info_types
   FROM audit_resolved AS a
   WHERE a.matched_turn_event_id IS NULL
     AND ({{include_audit_only_successes}} OR a.is_error)
@@ -538,6 +637,15 @@ SELECT
   reference_count,
   query_chars,
   has_uploaded_file,
+  prompt_preview,
+  response_preview,
+  uploaded_file_names,
+  queried_data_stores,
+  citation_sources,
+  tool_error_codes,
+  tool_error_messages,
+  tool_call_summary,
+  tool_output_preview,
   armor_checks,
   armor_blocks,
   is_guardrail_blocked,
@@ -545,5 +653,8 @@ SELECT
   is_prompt_injection,
   is_sensitive_data,
   is_safety_violation,
-  is_malicious_uri
+  is_malicious_uri,
+  armor_findings,
+  armor_verdict_reasons,
+  armor_sdp_info_types
 FROM all_turns

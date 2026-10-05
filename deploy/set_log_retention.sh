@@ -38,12 +38,15 @@ for ds in "${RAW_DATASETS[@]}"; do
     echo "  ${ds}: not found, skipped."
     continue
   fi
-  bq update --default_partition_expiration="${SECONDS_TTL}" "${PROJECT_ID}:${ds}" >/dev/null
-  echo "  ${ds}: dataset default partition expiration = ${RETENTION_DAYS}d"
+  if bq update --set_label datacloud:antigravity --default_partition_expiration="${SECONDS_TTL}" "${PROJECT_ID}:${ds}" &>/dev/null; then
+    echo "  ${ds}: dataset default partition expiration = ${RETENTION_DAYS}d"
+  else
+    echo "  ${ds}: skipped dataset default (requires bigquery.datasets.update / dataset OWNER); updating existing tables..."
+  fi
   tables=$(bq ls --format=json --max_results=1000 "${PROJECT_ID}:${ds}" \
       | python3 -c 'import json,sys; print("\n".join(t["tableReference"]["tableId"] for t in json.load(sys.stdin) if t.get("type") == "TABLE" and t.get("timePartitioning")))')
   for t in ${tables}; do
-    bq update --time_partitioning_expiration="${SECONDS_TTL}" "${PROJECT_ID}:${ds}.${t}" >/dev/null
+    bq update --set_label datacloud:antigravity --time_partitioning_expiration="${SECONDS_TTL}" "${PROJECT_ID}:${ds}.${t}" >/dev/null
     echo "    ${t}: partition expiration = ${RETENTION_DAYS}d"
   done
 done

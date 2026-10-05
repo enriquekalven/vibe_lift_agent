@@ -25,6 +25,7 @@ flowchart LR
     FT[("fct_turns table")]
     FS[fct_sessions]
     AD[agg_daily_usage]
+    LS[v_looker_l1_l2_support]
   end
   A --> VA
   S --> VA
@@ -38,6 +39,7 @@ flowchart LR
   VT -- "--refresh" --> FT
   FT --> FS
   FT --> AD
+  FT --> LS
   AD --> APP[VibeLift dashboard]
   B[Cloud Billing export] --> APP
 ```
@@ -45,7 +47,7 @@ flowchart LR
 | Layer | Objects | Purpose |
 |---|---|---|
 | Curated | `v_user_activity_curated`, `v_agentic_operations_curated`, `v_consolidated_audit_log`, `v_model_armor_curated` | Cleaned, typed views over each raw sink. Ported from `gemini-enterprise-stage.ds_ge_curated_staging`, with its defects fixed. |
-| Mart | `v_fct_turns` (view), `fct_turns` (table), `fct_sessions`, `agg_daily_usage` (views over the table) | VibeLift's own model: one row per turn, per session, and per day × app × agent × model. |
+| Mart | `v_fct_turns` (view), `fct_turns` (table), `fct_sessions`, `agg_daily_usage`, `v_looker_l1_l2_support` (views over the table) | VibeLift's own model: one row per turn, per session, per day × app × agent × model, plus a denormalized L1/L2 support triage view for Looker Studio. |
 | Cost | `vibelift/billing_export.py` | Per-day AI spend from the Cloud Billing export, joined to daily usage in the app. It is not stored in BigQuery. |
 
 The stage support mart (`ds_ge_support_analytics`) is not ported. It was built for troubleshooting:
@@ -149,6 +151,25 @@ scope selector (`#geScopeSelect`):
     All four curated views (`v_user_activity_curated`, `v_agentic_operations_curated`,
     `v_model_armor_curated`, and `v_consolidated_audit_log`) deduplicate by `insertId` so every
     `turn_id` in `fct_turns` is strictly unique.
+18. Reasoning tokens in `discoveryengine_googleapis_com_gen_ai_client_inference_operation_details`
+    arrive under `jsonPayload.gen_ai_usage_reasoning_output_tokens` (55,779 tokens across 56 calls
+    in `gemini-enterprise-stage`). `v_agentic_operations_curated` checks
+    `gen_ai_usage_reasoning_output_tokens`, `gen_ai_usage_reasoning_tokens`, and
+    `gen_ai_usage_thoughts_tokens` across both sink `RECORD` columns and dotted JSON keys.
+19. When an MCP tool response exceeds ~25 KB, Gemini Enterprise elides `structuredContent` from a
+    JSON object (`RECORD`) to a string (`"...[STRUCTURED_CONTENT_ELIDED...]"`), causing BigQuery's
+    sink schema validation to reject that call and every subsequent call in the conversation into
+    `<dataset>.export_errors` (`logEntry`). `provision_ge_mart.py` automatically unions
+    `export_errors` when present, and `v_agentic_operations_curated` reads both normalized
+    underscore keys (`gen_ai_usage_input_tokens`) and original dotted keys
+    (`"gen_ai.usage.input_tokens"`).
+20. When an agent attempts to call an undeclared tool, Gemini Enterprise rewrites the tool call
+    `part.name` to `invalid_tool_call_notifier` and records the attempted tool name in
+    `part.arguments.tool_name`. `v_agentic_operations_curated` extracts `part.arguments.tool_name`
+    so `tool_names` reflects the actual tool attempted.
+21. Model Armor's top-level execution status in `modelarmor_googleapis_com_sanitize_operations` is
+    `sanitizationresult.invocationresult` (`"SUCCESS"`), whereas `executionstate` appears in
+    activity guardrail audits. `v_model_armor_curated` coalesces both.
 
 ## Audit matching
 
@@ -194,17 +215,20 @@ Validation results (example runs in two reference projects; your numbers will di
 
 ## Automated Conservation & Reconciliation Invariants
 
-Every `provision_ge_mart.py --apply` and `--refresh` automatically runs `deploy/bigquery/verify_ge_mart_invariants.py`, which asserts 12 mathematical zero-loss invariants across the curated views and mart objects:
+Every `provision_ge_mart.py --apply` and `--refresh` automatically runs `deploy/bigquery/verify_ge_mart_invariants.py`, which asserts 13 mathematical zero-loss invariants across the curated views and mart objects:
 
 1. `fct_turns_unique_turn_id`: `COUNT(1) == COUNT(DISTINCT turn_id)` in `fct_turns` (no duplicate turn rows from at-least-once sink deliveries).
-2. `fct_sessions_unique_session_id`: `COUNT(1) == COUNT(DISTINCT session_id)` in `fct_sessions` (no duplicate session rows across engine keys).
-3. `session_turn_conservation`: `SUM(fct_sessions.turns) + COUNTIF(fct_turns.session_id IS NULL) == COUNT(fct_turns)`.
-4. `session_token_conservation`: `SUM(fct_sessions.total_tokens) + SUM(IF(session_id IS NULL, total_tokens, 0)) == SUM(fct_turns.total_tokens)`.
-5. `daily_agg_turn_conservation`: `SUM(agg_daily_usage.interactions) == COUNT(fct_turns)`.
-6. `daily_agg_token_conservation`: `SUM(agg_daily_usage.total_tokens) == SUM(fct_turns.total_tokens)`.
-7. `inference_token_conservation`: `SUM(v_agentic_operations_curated.total_tokens)` (within lookback) `== SUM(fct_turns.total_tokens)` (0 dropped or fanned-out tokens).
-8. `tool_failure_bounds`: `0 <= tool_failure_count <= tool_call_count` per trace and per turn.
-9. `file_upload_session_coverage`: `UploadSessionFile` rows in `v_user_activity_curated` have non-null `session_id` and `has_uploaded_file = TRUE`.
-10. `armor_inspect_only_exclusion`: `v_model_armor_curated` never marks inspect-only (`enforcement type is inspect only` / `not blocked`) or `SANITIZATION_EXECUTION_SKIPPED` rows as `is_blocked = TRUE`.
-11. `audit_session_extraction_coverage`: `v_consolidated_audit_log` extracts `session_id` whenever `sessions/<id>` is present in `resource_name` or request/response JSON.
-12. `materialized_fct_turns_sync`: `fct_turns` row count and total tokens match live `v_fct_turns`.
+2. `looker_support_view_no_fanout`: `COUNT(1) == COUNT(DISTINCT turn_id) == COUNT(fct_turns)` and `SUM(total_tokens) == SUM(fct_turns.total_tokens)` in `v_looker_l1_l2_support` (pre-aggregated tool calls, errors, citations, and Model Armor checks never cause 1:N row fan-out in Looker Studio).
+3. `fct_sessions_unique_session_id`: `COUNT(1) == COUNT(DISTINCT session_id)` in `fct_sessions` (no duplicate session rows across engine keys).
+4. `session_turn_conservation`: `SUM(fct_sessions.turns) + COUNTIF(fct_turns.session_id IS NULL) == COUNT(fct_turns)`.
+5. `session_token_conservation`: `SUM(fct_sessions.total_tokens) + SUM(IF(session_id IS NULL, total_tokens, 0)) == SUM(fct_turns.total_tokens)`.
+6. `daily_agg_turn_conservation`: `SUM(agg_daily_usage.interactions) == COUNT(fct_turns)`.
+7. `daily_agg_token_conservation`: `SUM(agg_daily_usage.total_tokens) == SUM(fct_turns.total_tokens)`.
+8. `inference_token_conservation`: `SUM(v_agentic_operations_curated.total_tokens)` (within lookback) `== SUM(fct_turns.total_tokens)` (0 dropped or fanned-out tokens).
+9. `tool_failure_bounds`: `0 <= tool_failure_count <= tool_call_count` per trace and per turn.
+10. `file_upload_session_coverage`: `UploadSessionFile` rows in `v_user_activity_curated` have non-null `session_id` and `has_uploaded_file = TRUE`.
+11. `armor_inspect_only_exclusion`: `v_model_armor_curated` never marks inspect-only (`enforcement type is inspect only` / `not blocked`) or `SANITIZATION_EXECUTION_SKIPPED` rows as `is_blocked = TRUE`.
+12. `audit_session_extraction_coverage`: `v_consolidated_audit_log` extracts `session_id` whenever `sessions/<id>` is present in `resource_name` or request/response JSON.
+13. `materialized_fct_turns_sync`: `fct_turns` row count and total tokens match live `v_fct_turns`.
+
+See [`docs/LOOKER_STUDIO_GUIDE.md`](./LOOKER_STUDIO_GUIDE.md) for the complete 2-page Looker Studio L1/L2 IT Support Dashboard specification, 1-click creation links, and zero-fan-out latency architecture.

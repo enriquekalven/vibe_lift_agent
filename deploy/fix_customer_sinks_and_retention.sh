@@ -67,20 +67,23 @@ upsert_sink() {
         --member="${writer_sa}" \
         --role="roles/bigquery.dataEditor" \
         --condition=None \
-        --quiet >/dev/null || true
+        --quiet &>/dev/null || true
   fi
 }
 
-# 1. Patch sink-platform-audit with complete Discovery Engine method coverage
+# 1. Patch sink-platform-audit with complete Discovery Engine method & connector/API error coverage
 SINK_AUDIT_FILTER=$(cat <<EOF
-logName=~"projects/${PROJECT_ID}/logs/cloudaudit.googleapis.com%2F(activity|data_access)"
-AND protoPayload.serviceName="discoveryengine.googleapis.com"
-AND (
-  protoPayload.methodName=~"\.(CreateAgent|UpdateAgent|DeleteAgent|GetIamPolicy|SetIamPolicy)$"
-  OR protoPayload.methodName=~"\.(CreateDataConnector|UpdateDataConnector|DeleteDataConnector|SyncDataConnector|RunDataConnector|GetDataConnector|AcquireAccessToken|AcquireAndStoreRefreshToken|ExchangeAuthCredentials|BuildAuthorizationUrl)$"
-  OR protoPayload.methodName=~"\.(CreateEngine|UpdateEngine|DeleteEngine|ImportDocuments|PurgeDocuments)$"
-  OR protoPayload.methodName=~"\.(StreamAssist|Assist|AsyncAssist|ReadAsyncAssist|AddContextFile|UploadSessionFile|DownloadSessionFile|ListSessionFileMetadata|ExecuteUiWidgetAction|AnswerQuery|Search)$"
+(
+  logName=~"projects/${PROJECT_ID}/logs/cloudaudit.googleapis.com%2F(activity|data_access)"
+  AND protoPayload.serviceName="discoveryengine.googleapis.com"
+  AND (
+    protoPayload.methodName=~"\.(CreateAgent|UpdateAgent|DeleteAgent|GetIamPolicy|SetIamPolicy)$"
+    OR protoPayload.methodName=~"\.(CreateDataConnector|UpdateDataConnector|DeleteDataConnector|SyncDataConnector|RunDataConnector|GetDataConnector|AcquireAccessToken|AcquireAndStoreRefreshToken|ExchangeAuthCredentials|BuildAuthorizationUrl)$"
+    OR protoPayload.methodName=~"\.(CreateEngine|UpdateEngine|DeleteEngine|ImportDocuments|PurgeDocuments)$"
+    OR protoPayload.methodName=~"\.(StreamAssist|Assist|AsyncAssist|ReadAsyncAssist|AddContextFile|UploadSessionFile|DownloadSessionFile|ListSessionFileMetadata|ExecuteUiWidgetAction|AnswerQuery|Search)$"
+  )
 )
+OR logName=~"projects/${PROJECT_ID}/logs/discoveryengine.googleapis.com%2F(connector_activity|api_errors|data_connectors)"
 EOF
 )
 upsert_sink "sink-platform-audit" "ds_ge_audit_raw" "${SINK_AUDIT_FILTER}"

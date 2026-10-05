@@ -49,7 +49,7 @@ DEFAULT_LOOKBACK_DAYS = 90
 # The audit entry is written at request start, the activity entry at completion.
 DEFAULT_AUDIT_LAG_S = 1800
 DEFAULT_AUDIT_LEAD_S = 30
-JOB_LABELS = {'datacloud': 'jetski', 'app': 'vibelift'}
+JOB_LABELS = {'datacloud': 'antigravity', 'app': 'vibelift'}
 
 _PROJECT_RE = re.compile(r'^(?:[a-z][a-z0-9\-]{1,61}[a-z0-9]\.[a-z]{2,}:)?[a-z][a-z0-9\-]{4,61}[a-z0-9]$')
 _DATASET_RE = re.compile(r'^[A-Za-z0-9_]{1,1024}$')
@@ -63,26 +63,28 @@ class SourceSpec:
   dataset: str
   table: str
   json_columns: tuple[str, ...]
+  log_name_pattern: str = ''
 
 
 SOURCES: dict[str, SourceSpec] = {
     'assistant': SourceSpec(
         'ds_ge_assistant_raw', 'discoveryengine_googleapis_com_gemini_enterprise_user_activity',
-        ('jsonPayload', 'resource')),
+        ('jsonPayload', 'resource'), r'gemini_enterprise_user_activity$'),
     'search': SourceSpec(
         'ds_ge_search_raw', 'discoveryengine_googleapis_com_gemini_enterprise_user_activity',
-        ('jsonPayload', 'resource')),
+        ('jsonPayload', 'resource'), r'gemini_enterprise_user_activity$'),
     'inference': SourceSpec(
         'ds_vertex_agents_raw', 'discoveryengine_googleapis_com_gen_ai_client_inference_operation_details',
-        ('jsonPayload', 'labels', 'resource')),
+        ('jsonPayload', 'labels', 'resource'), r'gen_ai\.client\.inference\.operation\.details$'),
     'audit_activity': SourceSpec(
-        'ds_ge_audit_raw', 'cloudaudit_googleapis_com_activity', ('protopayload_auditlog', 'resource', 'operation')),
+        'ds_ge_audit_raw', 'cloudaudit_googleapis_com_activity',
+        ('protopayload_auditlog', 'resource', 'operation'), r'cloudaudit\.googleapis\.com%2Factivity$'),
     'audit_data_access': SourceSpec(
         'ds_ge_audit_raw', 'cloudaudit_googleapis_com_data_access',
-        ('protopayload_auditlog', 'resource', 'operation')),
+        ('protopayload_auditlog', 'resource', 'operation'), r'cloudaudit\.googleapis\.com%2Fdata_access$'),
     'armor': SourceSpec(
         'ds_security_guardrails_raw', 'modelarmor_googleapis_com_sanitize_operations',
-        ('jsonpayload_v1_sanitizeoperationlogentry', 'labels', 'resource')),
+        ('jsonpayload_v1_sanitizeoperationlogentry', 'labels', 'resource'), r'sanitize_operations$'),
 }
 
 # (layer, view name, description). Order matters: later views read earlier ones.
@@ -95,6 +97,7 @@ OBJECTS: tuple[tuple[str, str, str], ...] = (
     ('mart', 'fct_turns', 'VibeLift turn fact: one row per user interaction (materialized; see refreshed_at).'),
     ('mart', 'fct_sessions', 'VibeLift session fact: one row per logged session.'),
     ('mart', 'agg_daily_usage', 'VibeLift daily usage by engine, agent and model.'),
+    ('mart', 'v_looker_l1_l2_support', 'Denormalized L1/L2 IT Support & Session Triage view for Looker Studio.'),
 )
 
 # Objects built as tables instead of views: name -> (partition column, cluster columns).
@@ -148,6 +151,47 @@ def empty_source_sql(json_columns: tuple[str, ...]) -> str:
   cols = [f'CAST(NULL AS {t}) AS {c}' for c, t in _SCALAR_COLUMNS]
   cols += [f'CAST(NULL AS JSON) AS {c}' for c in json_columns]
   return 'SELECT ' + ', '.join(cols) + ' FROM UNNEST([1]) AS _empty WHERE FALSE'
+
+
+_EXPORT_ERROR_JSON_PATHS: dict[str, str] = {
+    'jsonPayload': 'jsonPayload',
+    'jsonpayload_v1_sanitizeoperationlogentry': 'jsonPayload',
+    'protopayload_auditlog': 'protoPayload',
+    'labels': 'labels',
+    'resource': 'resource',
+    'operation': 'operation',
+}
+
+
+def export_errors_sql(err_table_ref: str, err_schema: Mapping[str, str], json_columns: tuple[str, ...],
+                      lookback_days: int, log_name_pattern: str) -> str:
+  """Adapter that recovers Cloud Logging rows rejected into `<dataset>.export_errors`.
+
+  When BigQuery rejects a row due to a dynamic field type change (e.g., Gemini Enterprise eliding
+  a large tool `structuredContent` RECORD to a STRING), Cloud Logging writes the full JSON entry into
+  `export_errors.logEntry`.
+  """
+  err_table_ref = validate_table_ref(err_table_ref)
+  days = max(1, min(int(lookback_days), 400))
+  cols = []
+  for name, sql_type in _SCALAR_COLUMNS:
+    if name in err_schema:
+      cols.append(f'`{name}`')
+    else:
+      cols.append(f'CAST(NULL AS {sql_type}) AS {name}')
+  for name in json_columns:
+    json_field = _EXPORT_ERROR_JSON_PATHS.get(name)
+    if json_field:
+      cols.append(f'_le.{json_field} AS {name}')
+    else:
+      cols.append(f'CAST(NULL AS JSON) AS {name}')
+  where_log = f" AND REGEXP_CONTAINS(`logName`, r'{log_name_pattern}')" if log_name_pattern else ''
+  return (
+      'SELECT ' + ', '.join(cols)
+      + f' FROM `{err_table_ref}`, UNNEST([SAFE.PARSE_JSON(`logEntry`)]) AS _le'
+      f' WHERE `timestamp` >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {days} DAY)'
+      + where_log
+  )
 
 
 def source_sql(table_ref: str | None, schema: Mapping[str, str] | None, json_columns: tuple[str, ...],
@@ -236,9 +280,21 @@ def resolve_sources(raw_project: str, location: str, lookback_days: int, describ
       continue
     present = [c for c in spec.json_columns if c in schema or (
         c == 'jsonpayload_v1_sanitizeoperationlogentry' and 'json_payload' in schema)]
-    resolved[key] = ResolvedSource(
-        key, ref, 'FOUND', f'record columns present: {", ".join(present) or "none"}',
-        source_sql(ref, schema, spec.json_columns, lookback_days))
+    sql = source_sql(ref, schema, spec.json_columns, lookback_days)
+    detail = f'record columns present: {", ".join(present) or "none"}'
+    if key not in overrides and not ref.endswith('._AllLogs') and spec.log_name_pattern:
+      err_ref = validate_table_ref(f'{raw_project}.{spec.dataset}.export_errors')
+      err_schema = describe(err_ref)
+      if (
+          err_schema is not None
+          and str(err_schema.get('__location__') or location).upper() == location.upper()
+          and (err_schema.get('timestamp') or '').upper() == 'TIMESTAMP'
+          and (err_schema.get('logEntry') or '').upper() == 'STRING'
+          and (err_schema.get('logName') or '').upper() == 'STRING'
+      ):
+        sql = f'{sql}\nUNION ALL\n{export_errors_sql(err_ref, err_schema, spec.json_columns, lookback_days, spec.log_name_pattern)}'
+        detail += ' (+ export_errors recovery)'
+    resolved[key] = ResolvedSource(key, ref, 'FOUND', detail, sql)
   return resolved
 
 

@@ -15,7 +15,8 @@ WITH assistant AS (
     LOWER(REGEXP_EXTRACT(trace, r'([0-9a-fA-F]{32})$')) AS trace_id,
     insertId AS insert_id,
     severity,
-    jsonPayload AS jp
+    jsonPayload AS jp,
+    resource AS res
   FROM ({{src_assistant}})
   QUALIFY ROW_NUMBER() OVER (
     PARTITION BY COALESCE(insertId, CAST(UNIX_MICROS(timestamp) AS STRING))
@@ -39,7 +40,8 @@ search AS (
     LOWER(REGEXP_EXTRACT(trace, r'([0-9a-fA-F]{32})$')) AS trace_id,
     insertId AS insert_id,
     severity,
-    jsonPayload AS jp
+    jsonPayload AS jp,
+    resource AS res
   FROM ({{src_search}})
   QUALIFY ROW_NUMBER() OVER (
     PARTITION BY COALESCE(insertId, CAST(UNIX_MICROS(timestamp) AS STRING))
@@ -71,6 +73,7 @@ unioned AS (
       ELSE 'OTHER'
     END AS activity_category,
     resource_path,
+    res,
     NULLIF(COALESCE(
       REGEXP_EXTRACT(session_ref, r'sessions/([^/]+)'),
       IF(STRPOS(session_ref, '/') = 0, session_ref, NULL),
@@ -88,11 +91,15 @@ unioned AS (
     COALESCE(
       REGEXP_EXTRACT(LAX_STRING(jp.response.agentinfo.agent), r'agents/([^/]+)$'),
       LAX_STRING(jp.response.agentinfo.agent),
-      LAX_STRING(jp.request.agentsspec.agentspecs[0].agentid)
+      LAX_STRING(jp.request.agentsspec.agentspecs[0].agentid),
+      NULLIF(LAX_STRING(res.labels.agent_id), 'core_assistant')
     ) AS agent_id,
     LAX_STRING(jp.response.agentinfo.agentkind) AS agent_kind,
     LAX_BOOL(jp.response.agentinfo.coreassistant) AS is_core_assistant,
-    LAX_STRING(jp.response.modelinfo.model) AS model_name,
+    COALESCE(
+      LAX_STRING(jp.response.modelinfo.model),
+      LAX_STRING(jp.response.modelinfo.requestedmodel)
+    ) AS model_name,
     LAX_STRING(jp.response.modelinfo.modelselectionmode) AS model_selection_mode,
     LAX_STRING(jp.response.datasourceinfo.selectionmode) AS datastore_selection_mode,
     ARRAY_LENGTH(JSON_QUERY_ARRAY(jp.response.datasourceinfo.datastores)) AS datastore_count,
@@ -115,6 +122,79 @@ unioned AS (
       OR REGEXP_CONTAINS(COALESCE(request_str, ''), r'"file([nN]ame|[iI]ds?)"') AS has_uploaded_file,
     REGEXP_EXTRACT(request_str, r'"mime[tT]ype"\s*:\s*"([^"]+)"') AS uploaded_file_mimetype,
     SAFE_CAST(SAFE_CAST(REGEXP_EXTRACT(request_str, r'"byte[cC]ount"\s*:\s*"?([0-9.eE+]+)') AS FLOAT64) AS INT64) AS uploaded_file_byte_size,
+    SUBSTR(COALESCE(
+      NULLIF(CONCAT(
+        IFNULL(ARRAY_TO_STRING(ARRAY(
+          SELECT LAX_STRING(p.text) FROM UNNEST(JSON_QUERY_ARRAY(jp.request.query.parts)) AS p WITH OFFSET o
+          WHERE LAX_STRING(p.text) IS NOT NULL ORDER BY o
+        ), '\n'), ''),
+        IF(
+          NULLIF(LAX_STRING(jp.request.actionexecutionparams.actionname), '') IS NOT NULL,
+          CONCAT(
+            '\n[Confirmed Action: ',
+            LAX_STRING(jp.request.actionexecutionparams.actionname),
+            IF(JSON_TYPE(jp.request.actionexecutionparams.args) NOT IN ('null'), CONCAT(' ', TO_JSON_STRING(jp.request.actionexecutionparams.args)), ''),
+            ']'
+          ),
+          ''
+        )
+      ), ''),
+      IF(
+        api_method = 'UploadSessionFile',
+        IF(
+          NULLIF(LAX_STRING(jp.response.fileid), '') IS NOT NULL,
+          CONCAT('[File Upload Completed — fileId: ', LAX_STRING(jp.response.fileid), ']'),
+          '[File Upload Initiated]'
+        ),
+        NULL
+      )
+    ), 1, 2000) AS prompt_preview,
+    SUBSTR(COALESCE(
+      NULLIF(TRIM(LAX_STRING(jp.servicetextreply)), ''),
+      NULLIF(ARRAY_TO_STRING(ARRAY(
+        SELECT LAX_STRING(r.groundedcontent.content.text) FROM UNNEST(JSON_QUERY_ARRAY(jp.response.answer.replies)) AS r WITH OFFSET o
+        WHERE LAX_STRING(r.groundedcontent.content.text) IS NOT NULL ORDER BY o
+      ), ''), ''),
+      IF(
+        api_method = 'UploadSessionFile',
+        IF(
+          NULLIF(LAX_STRING(jp.response.fileid), '') IS NOT NULL,
+          CONCAT('Uploaded session file ID: ', LAX_STRING(jp.response.fileid)),
+          'Session file upload request received'
+        ),
+        NULL
+      )
+    ), 1, 2000) AS response_preview,
+    NULLIF(ARRAY_TO_STRING(ARRAY(
+      SELECT DISTINCT f FROM UNNEST(ARRAY_CONCAT(
+        IFNULL(REGEXP_EXTRACT_ALL(COALESCE(request_str, ''), r'"file[nN]ame"\s*:\s*"([^"]+)"'), CAST([] AS ARRAY<STRING>)),
+        IF(NULLIF(LAX_STRING(jp.response.fileid), '') IS NOT NULL, [LAX_STRING(jp.response.fileid)], CAST([] AS ARRAY<STRING>)),
+        IF(NULLIF(LAX_STRING(jp.request.fileid), '') IS NOT NULL, [LAX_STRING(jp.request.fileid)], CAST([] AS ARRAY<STRING>))
+      )) AS f
+      WHERE f IS NOT NULL AND f != ''
+      ORDER BY f
+    ), ', '), '') AS uploaded_file_names,
+    NULLIF(ARRAY_TO_STRING(ARRAY(
+      SELECT DISTINCT REGEXP_REPLACE(LAX_STRING(ds), r'^projects/[^/]+/locations/[^/]+/collections/[^/]+/dataStores/', '')
+      FROM UNNEST(JSON_QUERY_ARRAY(jp.response.datasourceinfo.datastores)) AS ds
+      WHERE NULLIF(LAX_STRING(ds), '') IS NOT NULL
+      ORDER BY 1
+    ), ', '), '') AS queried_data_stores,
+    NULLIF(ARRAY_TO_STRING(ARRAY(
+      SELECT DISTINCT COALESCE(
+        NULLIF(LAX_STRING(ref.documentmetadata.title), ''),
+        NULLIF(LAX_STRING(ref.documentmetadata.uri), ''),
+        NULLIF(LAX_STRING(ref.documentmetadata.domain), '')
+      )
+      FROM UNNEST(JSON_QUERY_ARRAY(jp.response.answer.replies)) AS reply,
+           UNNEST(JSON_QUERY_ARRAY(reply.groundedcontent.textgroundingmetadata.references)) AS ref
+      WHERE COALESCE(
+        NULLIF(LAX_STRING(ref.documentmetadata.title), ''),
+        NULLIF(LAX_STRING(ref.documentmetadata.uri), ''),
+        NULLIF(LAX_STRING(ref.documentmetadata.domain), '')
+      ) IS NOT NULL
+      LIMIT 15
+    ), ' | '), '') AS citation_sources,
     LAX_STRING(jp.response.sanitizationresult.sanitizationverdict) AS sanitization_verdict_raw,
     LAX_STRING(jp.response.sanitizationresult.sanitizationverdictreason) AS sanitization_verdict_reason,
     LAX_STRING(jp.response.sanitizationresult.filtermatchstate) AS sanitization_filter_match_state,
@@ -133,6 +213,7 @@ unioned AS (
     api_method,
     'SEARCH' AS activity_category,
     resource_path,
+    res,
     NULLIF(COALESCE(
       REGEXP_EXTRACT(session_ref, r'sessions/([^/]+)'),
       IF(STRPOS(session_ref, '/') = 0, session_ref, NULL),
@@ -160,6 +241,43 @@ unioned AS (
     FALSE AS has_uploaded_file,
     CAST(NULL AS STRING) AS uploaded_file_mimetype,
     CAST(NULL AS INT64) AS uploaded_file_byte_size,
+    SUBSTR(NULLIF(LAX_STRING(jp.request.query), ''), 1, 2000) AS prompt_preview,
+    CASE
+      WHEN IFNULL(ARRAY_LENGTH(JSON_QUERY_ARRAY(jp.response.results)), 0) + IFNULL(ARRAY_LENGTH(JSON_QUERY_ARRAY(jp.response.oneboxresults)), 0) > 0
+        THEN CONCAT(
+          'Returned ',
+          CAST(IFNULL(ARRAY_LENGTH(JSON_QUERY_ARRAY(jp.response.results)), 0) AS STRING),
+          ' search result(s)',
+          IF(
+            IFNULL(ARRAY_LENGTH(JSON_QUERY_ARRAY(jp.response.oneboxresults)), 0) > 0,
+            CONCAT(' and ', CAST(ARRAY_LENGTH(JSON_QUERY_ARRAY(jp.response.oneboxresults)) AS STRING), ' connector/onebox group(s)'),
+            ''
+          )
+        )
+      WHEN JSON_TYPE(jp.response) NOT IN ('null') THEN '0 search results returned'
+      ELSE CAST(NULL AS STRING)
+    END AS response_preview,
+    CAST(NULL AS STRING) AS uploaded_file_names,
+    NULLIF(ARRAY_TO_STRING(ARRAY(
+      SELECT DISTINCT ds
+      FROM UNNEST(IFNULL(REGEXP_EXTRACT_ALL(TO_JSON_STRING(jp.response), r'dataStores/([A-Za-z0-9_-]+)'), CAST([] AS ARRAY<STRING>))) AS ds
+      WHERE ds IS NOT NULL AND ds != ''
+      ORDER BY ds
+    ), ', '), '') AS queried_data_stores,
+    NULLIF(ARRAY_TO_STRING(ARRAY(
+      SELECT doc_title
+      FROM (
+        SELECT CONCAT('Document ', LAX_STRING(r.id)) AS doc_title
+        FROM UNNEST(JSON_QUERY_ARRAY(jp.response.results)) AS r
+        WHERE LAX_STRING(r.id) IS NOT NULL
+        UNION ALL
+        SELECT REGEXP_REPLACE(LAX_STRING(sr.document.name), r'^projects/[^/]+/locations/[^/]+/collections/[^/]+/', '') AS doc_title
+        FROM UNNEST(JSON_QUERY_ARRAY(jp.response.oneboxresults)) AS ob,
+             UNNEST(JSON_QUERY_ARRAY(ob.searchresults)) AS sr
+        WHERE LAX_STRING(sr.document.name) IS NOT NULL
+      )
+      LIMIT 15
+    ), ' | '), '') AS citation_sources,
     CAST(NULL AS STRING) AS sanitization_verdict_raw,
     CAST(NULL AS STRING) AS sanitization_verdict_reason,
     CAST(NULL AS STRING) AS sanitization_filter_match_state,
@@ -182,9 +300,19 @@ SELECT
   assist_token,
   attribution_token,
   user_email,
-  REGEXP_EXTRACT(resource_path, r'^projects/([^/]+)') AS project_ref,
-  REGEXP_EXTRACT(resource_path, r'/locations/([^/]+)') AS location,
-  REGEXP_EXTRACT(resource_path, r'/engines/([^/]+)') AS engine_id,
+  COALESCE(
+    REGEXP_EXTRACT(resource_path, r'^projects/([^/]+)'),
+    LAX_STRING(res.labels.project_id),
+    REGEXP_EXTRACT(LAX_STRING(res.labels.resource_container), r'([0-9]+)$')
+  ) AS project_ref,
+  COALESCE(
+    REGEXP_EXTRACT(resource_path, r'/locations/([^/]+)'),
+    LAX_STRING(res.labels.location)
+  ) AS location,
+  COALESCE(
+    REGEXP_EXTRACT(resource_path, r'/engines/([^/]+)'),
+    LAX_STRING(res.labels.engine_id)
+  ) AS engine_id,
   agent_display_name,
   agent_id,
   agent_kind,
@@ -200,6 +328,11 @@ SELECT
   has_uploaded_file,
   uploaded_file_mimetype,
   uploaded_file_byte_size,
+  prompt_preview,
+  response_preview,
+  uploaded_file_names,
+  queried_data_stores,
+  citation_sources,
   REGEXP_REPLACE(sanitization_verdict_raw, r'^MODEL_ARMOR_SANITIZATION_VERDICT_', '') AS sanitization_verdict,
   REGEXP_CONTAINS(sanitization_verdict_raw, r'(BLOCK|REDACT)$') AS is_guardrail_block,
   sanitization_filter_match_state = 'MATCH_FOUND' AS is_guardrail_policy_match,

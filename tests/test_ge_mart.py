@@ -217,9 +217,46 @@ class TemplateDefectFixTest(unittest.TestCase):
     self.assertIn('cj.result.Error', ops)
     self.assertIn('cj.error.message', ops)
     self.assertNotIn('OR part.response.error IS NOT NULL', ops)
-    # Multi-MCP aggregation across all tool parts
-    self.assertIn('SELECT DISTINCT LAX_STRING(part.response.structuredcontent.mcpservername)', ops)
-    self.assertIn('SELECT DISTINCT LAX_STRING(part.response.structuredcontent.authkind)', ops)
+    # Multi-MCP aggregation across all tool parts (both lowercase sink and camelCase export_errors)
+    self.assertIn('LAX_STRING(part.response.structuredcontent.mcpservername)', ops)
+    self.assertIn('LAX_STRING(part.response.structuredContent.mcpServerName)', ops)
+    self.assertIn('LAX_STRING(part.response.structuredcontent.authkind)', ops)
+    self.assertIn('LAX_STRING(part.response.structuredContent.authKind)', ops)
+    self.assertIn("IF(LAX_STRING(part.name) = 'invalid_tool_call_notifier'", ops)
+
+  def test_reasoning_output_tokens_and_dotted_export_error_paths_supported(self):
+    ops = self._tpl('curated', 'v_agentic_operations_curated')
+    self.assertIn('gen_ai_usage_reasoning_output_tokens', ops)
+    self.assertIn('$."gen_ai.usage.reasoning_output_tokens"', ops)
+    self.assertIn('$."gen_ai.usage.input_tokens"', ops)
+    self.assertIn('$."gen_ai.usage.output_tokens"', ops)
+    self.assertIn('$."gen_ai.usage.cache_read.input_tokens"', ops)
+    self.assertIn('$."gen_ai.input.messages"', ops)
+    self.assertIn('$."gen_ai.output.messages"', ops)
+
+  def test_export_errors_recovery_unioned_when_present(self):
+    def describe_with_export_errors(ref):
+      if ref.endswith('.export_errors'):
+        return {
+            '__location__': 'US', 'timestamp': 'TIMESTAMP', 'trace': 'STRING',
+            'insertId': 'STRING', 'severity': 'STRING', 'logName': 'STRING', 'logEntry': 'STRING',
+        }
+      return _describe_all_found(ref)
+
+    out = provision.resolve_sources('example-project', 'US', 30, describe_with_export_errors)
+    self.assertEqual(out['inference'].status, 'FOUND')
+    self.assertIn('export_errors recovery', out['inference'].detail)
+    self.assertIn('UNION ALL', out['inference'].sql)
+    self.assertIn('`example-project.ds_vertex_agents_raw.export_errors`', out['inference'].sql)
+    self.assertIn('UNNEST([SAFE.PARSE_JSON(`logEntry`)]) AS _le', out['inference'].sql)
+    self.assertIn('_le.jsonPayload AS jsonPayload', out['inference'].sql)
+    self.assertIn(r"REGEXP_CONTAINS(`logName`, r'gen_ai\.client\.inference\.operation\.details$')", out['inference'].sql)
+
+  def test_armor_execution_state_falls_back_to_invocation_result(self):
+    armor = self._tpl('curated', 'v_model_armor_curated')
+    self.assertIn('ma.sanitizationresult.invocationresult', armor)
+    self.assertIn('res.labels.location', self._tpl('curated', 'v_user_activity_curated'))
+    self.assertIn('jp.response.modelinfo.requestedmodel', self._tpl('curated', 'v_user_activity_curated'))
 
   def test_sessions_never_split_by_engine_key_and_turns_compute_latency(self):
     sessions = self._tpl('mart', 'fct_sessions')
@@ -257,6 +294,56 @@ class TemplateDefectFixTest(unittest.TestCase):
     audit = self._tpl('curated', 'v_consolidated_audit_log')
     for method in ('AsyncAssist', 'ReadAsyncAssist', 'DownloadSessionFile', 'ListSessionFileMetadata'):
       self.assertEqual(audit.count(f"'{method}'"), 2, method)
+
+  def test_looker_l1_l2_support_view_reads_materialized_turns_and_exposes_triage_fields(self):
+    looker = self._tpl('mart', 'v_looker_l1_l2_support')
+    turns = self._tpl('mart', 'v_fct_turns')
+    self.assertIn('FROM `{{mart}}.fct_turns`', looker)
+    self.assertNotIn('v_fct_turns', looker)
+    for col in (
+        'AS ticket_id',
+        'AS needs_support_attention',
+        'AS support_tier',
+        'AS issue_category',
+        'AS l1_runbook_action',
+        'AS issue_summary',
+        'AS error_signature',
+        'AS cloud_logging_url',
+        'AS cloud_trace_url',
+        'AS session_step_number',
+        'AS session_total_turns',
+        'AS session_has_issue',
+        'No Answer / Skipped',
+        'prompt_preview',
+        'response_preview',
+        'uploaded_file_names',
+        'queried_data_stores',
+        'citation_sources',
+        'tool_error_codes',
+        'tool_error_messages',
+        'tool_call_summary',
+        'AS tool_args_summary',
+        'tool_output_preview',
+        'armor_findings',
+        'armor_verdict_reasons',
+        'armor_sdp_info_types',
+    ):
+      self.assertIn(col, looker)
+    for col in (
+        'prompt_preview',
+        'response_preview',
+        'uploaded_file_names',
+        'queried_data_stores',
+        'citation_sources',
+        'tool_error_codes',
+        'tool_error_messages',
+        'tool_call_summary',
+        'tool_output_preview',
+        'armor_findings',
+        'armor_verdict_reasons',
+        'armor_sdp_info_types',
+    ):
+      self.assertIn(col, turns)
 
 
 class GeMartReaderTest(unittest.TestCase):
@@ -492,6 +579,7 @@ class InvariantVerifierTest(unittest.TestCase):
     sql = verify_invariants.build_invariant_sql('example-project', 'ds_ge_curated_staging', 'vibelift_mart')
     for inv in (
         'fct_turns_unique_turn_id',
+        'looker_support_view_no_fanout',
         'fct_sessions_unique_session_id',
         'session_turn_conservation',
         'session_token_conservation',

@@ -71,6 +71,13 @@ WITH
       COALESCE(SUM(total_tokens), 0) AS total_tokens
     FROM `{mart}.v_fct_turns`
   ),
+  looker_support AS (
+    SELECT
+      COUNT(1) AS total_rows,
+      COUNT(DISTINCT turn_id) AS distinct_turns,
+      COALESCE(SUM(total_tokens), 0) AS total_tokens
+    FROM `{mart}.v_looker_l1_l2_support`
+  ),
   sessions AS (
     SELECT
       COUNT(1) AS row_count,
@@ -131,6 +138,12 @@ SELECT
   CAST(t.total_turns - t.distinct_turns AS INT64) AS violations,
   CONCAT('rows=', CAST(t.total_turns AS STRING), ' distinct_turns=', CAST(t.distinct_turns AS STRING)) AS detail
 FROM turns AS t
+UNION ALL
+SELECT
+  'looker_support_view_no_fanout' AS name,
+  CAST((ls.total_rows - ls.distinct_turns) + ABS(ls.total_rows - t.total_turns) + ABS(ls.total_tokens - t.total_tokens) AS INT64) AS violations,
+  CONCAT('looker_rows=', CAST(ls.total_rows AS STRING), ' distinct_turns=', CAST(ls.distinct_turns AS STRING), ' looker_tokens=', CAST(ls.total_tokens AS STRING)) AS detail
+FROM looker_support AS ls, turns AS t
 UNION ALL
 SELECT
   'fct_sessions_unique_session_id' AS name,

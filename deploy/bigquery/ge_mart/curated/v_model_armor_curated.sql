@@ -27,13 +27,25 @@ fields AS (
     LAX_STRING(lb.modelarmor_googleapis_com_client_correlation_id) AS correlation_id,
     LAX_STRING(ma.sanitizationresult.sanitizationverdict) AS verdict_raw,
     LAX_STRING(ma.sanitizationresult.sanitizationverdictreason) AS verdict_reason,
-    LAX_STRING(ma.sanitizationresult.executionstate) AS execution_state,
+    COALESCE(
+      LAX_STRING(ma.sanitizationresult.executionstate),
+      LAX_STRING(ma.sanitizationresult.invocationresult)
+    ) AS execution_state,
     LAX_STRING(ma.sanitizationresult.filterresults.pi_and_jailbreak.piandjailbreakfilterresult.matchstate) = 'MATCH_FOUND' AS is_prompt_injection,
     LAX_STRING(ma.sanitizationresult.filterresults.sdp.sdpfilterresult.inspectresult.matchstate) = 'MATCH_FOUND'
       OR LAX_STRING(ma.sanitizationresult.filterresults.sdp.sdpfilterresult.deidentifyresult.matchstate) = 'MATCH_FOUND' AS is_sensitive_data,
     LAX_STRING(ma.sanitizationresult.filterresults.rai.raifilterresult.matchstate) = 'MATCH_FOUND' AS is_safety_violation,
     LAX_STRING(ma.sanitizationresult.filterresults.csam.csamfilterfilterresult.matchstate) = 'MATCH_FOUND' AS is_csam,
-    LAX_STRING(ma.sanitizationresult.filterresults.malicious_uris.maliciousurifilterresult.matchstate) = 'MATCH_FOUND' AS is_malicious_uri
+    LAX_STRING(ma.sanitizationresult.filterresults.malicious_uris.maliciousurifilterresult.matchstate) = 'MATCH_FOUND' AS is_malicious_uri,
+    LAX_STRING(ma.sanitizationinput.text) AS sanitized_text,
+    NULLIF(ARRAY_TO_STRING(ARRAY(
+      SELECT DISTINCT t FROM UNNEST(ARRAY_CONCAT(
+        ARRAY(SELECT LAX_STRING(x) FROM UNNEST(JSON_QUERY_ARRAY(ma.sanitizationresult.filterresults.sdp.sdpfilterresult.deidentifyresult.infotypes)) AS x),
+        ARRAY(SELECT LAX_STRING(x.infotype.name) FROM UNNEST(JSON_QUERY_ARRAY(ma.sanitizationresult.filterresults.sdp.sdpfilterresult.inspectresult.findings)) AS x)
+      )) AS t
+      WHERE t IS NOT NULL AND t != ''
+      ORDER BY t
+    ), ', '), '') AS sdp_info_types
   FROM armor
 )
 SELECT
@@ -63,11 +75,18 @@ SELECT
     AND NOT REGEXP_CONTAINS(COALESCE(verdict_reason, ''), r'(?i)not blocked as the enforcement type is inspect only')
     AND COALESCE(execution_state, 'SANITIZATION_EXECUTION_COMPLETED') NOT IN ('SANITIZATION_EXECUTION_SKIPPED', 'SANITZATION_EXECUTION_SKIPPED') AS is_blocked,
   LAX_STRING(ma.sanitizationresult.filtermatchstate) = 'MATCH_FOUND' AS is_policy_match,
+  (
+    LAX_STRING(ma.sanitizationresult.filtermatchstate) = 'MATCH_FOUND'
+    OR REGEXP_CONTAINS(verdict_raw, r'(BLOCK|REDACT)$')
+    OR COALESCE(execution_state, 'SUCCESS') NOT IN ('SUCCESS', 'SANITIZATION_EXECUTION_COMPLETED', 'SANITIZATION_EXECUTION_SKIPPED', 'SANITZATION_EXECUTION_SKIPPED')
+  ) AS is_finding,
   COALESCE(is_prompt_injection, FALSE) AS is_prompt_injection,
   COALESCE(is_sensitive_data, FALSE) AS is_sensitive_data,
   COALESCE(is_safety_violation, FALSE) AS is_safety_violation,
   COALESCE(is_csam, FALSE) AS is_csam,
   COALESCE(is_malicious_uri, FALSE) AS is_malicious_uri,
+  sdp_info_types,
+  sanitized_text,
   CASE
     WHEN is_prompt_injection THEN 'PROMPT_INJECTION'
     WHEN is_sensitive_data THEN 'SENSITIVE_DATA'
