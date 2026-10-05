@@ -133,8 +133,10 @@ configure_sink "sink-ge-assistant-activity" "ds_ge_assistant_raw" "${SINK_GE_ASS
 SINK_GE_SEARCH_FILTER="logName=\"projects/${PROJECT_ID}/logs/discoveryengine.googleapis.com%2Fgemini_enterprise_user_activity\" AND (jsonPayload.logMetadata.serviceName=\"google.cloud.discoveryengine.v1main.SearchService\" OR jsonPayload.logMetadata.serviceName=\"google.cloud.discoveryengine.v1main.ConversationSearchService\")"
 configure_sink "sink-ge-search-activity" "ds_ge_search_raw" "${SINK_GE_SEARCH_FILTER}"
 
-# Sink 3: Vertex AI Agents & Reasoning Engines
-SINK_VERTEX_FILTER="protoPayload.serviceName=\"aiplatform.googleapis.com\" AND (protoPayload.methodName=~\"(ReasoningEngineExecutionService|ReasoningEngineService)\" OR (protoPayload.methodName=\"Predict\" AND protoPayload.resourceName=~\"publishers/(google/models/gemini|anthropic/models)\"))"
+# Sink 3: Vertex AI Agents & Reasoning Engines (plus standalone Vertex Agent Engine OTel logs;
+# Discovery Engine gen_ai.client.inference.operation.details is routed separately by Sink 3b so
+# the two sinks never write duplicate rows into ds_vertex_agents_raw).
+SINK_VERTEX_FILTER="(protoPayload.serviceName=\"aiplatform.googleapis.com\" AND (protoPayload.methodName=~\"(ReasoningEngineExecutionService|ReasoningEngineService)\" OR ((protoPayload.methodName=\"Predict\" OR protoPayload.methodName=~\"GenerateContent\") AND protoPayload.resourceName=~\"publishers/(google/models/gemini|anthropic/models)\"))) OR logName=\"projects/${PROJECT_ID}/logs/gen_ai.client.inference.operation.details\""
 configure_sink "sink-vertex-reasoning-engine" "ds_vertex_agents_raw" "${SINK_VERTEX_FILTER}"
 
 # Sink 3b: Gemini Enterprise gen_ai inference logs. This is the ONLY source of per-turn input/output/
@@ -149,10 +151,10 @@ SINK_AUDIT_FILTER=$(cat <<EOF
 logName=~"projects/${PROJECT_ID}/logs/cloudaudit.googleapis.com%2F(activity|data_access)"
 AND protoPayload.serviceName="discoveryengine.googleapis.com"
 AND (
-  protoPayload.methodName=~"\.(CreateAgent|UpdateAgent|DeleteAgent|SetIamPolicy)$"
-  OR protoPayload.methodName=~"\.(CreateDataConnector|UpdateDataConnector|DeleteDataConnector|SyncDataConnector|RunDataConnector)$"
+  protoPayload.methodName=~"\.(CreateAgent|UpdateAgent|DeleteAgent|GetIamPolicy|SetIamPolicy)$"
+  OR protoPayload.methodName=~"\.(CreateDataConnector|UpdateDataConnector|DeleteDataConnector|SyncDataConnector|RunDataConnector|GetDataConnector|AcquireAccessToken|AcquireAndStoreRefreshToken|ExchangeAuthCredentials|BuildAuthorizationUrl)$"
   OR protoPayload.methodName=~"\.(CreateEngine|UpdateEngine|DeleteEngine|ImportDocuments|PurgeDocuments)$"
-  OR protoPayload.methodName=~"\.(StreamAssist|Assist|AddContextFile|AnswerQuery|Search)"
+  OR protoPayload.methodName=~"\.(StreamAssist|Assist|AsyncAssist|ReadAsyncAssist|AddContextFile|UploadSessionFile|DownloadSessionFile|ListSessionFileMetadata|ExecuteUiWidgetAction|AnswerQuery|Search)$"
 )
 EOF
 )

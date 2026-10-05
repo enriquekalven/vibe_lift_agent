@@ -52,14 +52,15 @@ SELECT
   method_name,
   method_short_name,
   method_short_name IN (
-    'StreamAssist', 'Assist', 'AnswerQuery', 'Search', 'ExecuteUiWidgetAction',
-    'UploadSessionFile', 'AddContextFile'
+    'StreamAssist', 'Assist', 'AsyncAssist', 'ReadAsyncAssist', 'AnswerQuery', 'Search',
+    'ExecuteUiWidgetAction', 'UploadSessionFile', 'DownloadSessionFile',
+    'ListSessionFileMetadata', 'AddContextFile'
   ) AS is_interactive,
   CASE
-    WHEN method_short_name IN ('StreamAssist', 'Assist', 'AnswerQuery') THEN 'CHAT'
+    WHEN method_short_name IN ('StreamAssist', 'Assist', 'AsyncAssist', 'ReadAsyncAssist', 'AnswerQuery') THEN 'CHAT'
     WHEN method_short_name = 'Search' THEN 'SEARCH'
     WHEN method_short_name = 'ExecuteUiWidgetAction' THEN 'WIDGET_ACTION'
-    WHEN method_short_name IN ('UploadSessionFile', 'AddContextFile') THEN 'FILE_UPLOAD'
+    WHEN method_short_name IN ('UploadSessionFile', 'DownloadSessionFile', 'ListSessionFileMetadata', 'AddContextFile') THEN 'FILE_UPLOAD'
   END AS interaction_kind,
   resource_name,
   COALESCE(

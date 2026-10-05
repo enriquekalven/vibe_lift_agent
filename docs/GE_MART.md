@@ -65,7 +65,7 @@ python3 deploy/bigquery/provision_ge_mart.py --project PROJECT --gcloud-auth --a
 # Rebuild only fct_turns (run this on a schedule) and verify invariants
 python3 deploy/bigquery/provision_ge_mart.py --project PROJECT --gcloud-auth --refresh
 
-# Run the 11 mathematical conservation & reconciliation invariants standalone
+# Run the 12 mathematical conservation & reconciliation invariants standalone
 python3 deploy/bigquery/verify_ge_mart_invariants.py --project PROJECT
 
 # Print only the standalone CREATE OR REPLACE TABLE ... fct_turns DDL for BigQuery Scheduled Queries
@@ -91,7 +91,7 @@ on-demand rebuild from the dashboard (**Cost & Billing → Refresh Mart** button
 |---|---|---|
 | `--raw-project` | `--project` | Project that holds the raw sink datasets. |
 | `--location` | `US` | Must match the raw datasets. BigQuery cannot join across locations. |
-| `--curated-dataset` / `--mart-dataset` | `ds_ge_curated_staging` / `vibelift_mart` | Set `VIBELIFT_GE_CURATED_DATASET` / `VIBELIFT_GE_MART_DATASET` to match. |
+| `--curated-dataset` / `--mart-dataset` | `ds_ge_curated_staging` / `vibelift_mart` | Set `VIBELIFT_GE_CURATED_DATASET` / `VIBELIFT_GE_MART_DATASET` to match. Note: if a customer project still relies on legacy `ds_ge_support_analytics.vw_support_master_events`, use `--curated-dataset vibelift_curated` (`VIBELIFT_GE_CURATED_DATASET=vibelift_curated`) so the legacy support views are not broken by schema hardening. |
 | `--lookback-days` | 90 | One window for every source (the stage views used different windows). Keep it equal to the raw log retention (`deploy/set_log_retention.sh`, default 90 days). The lookback is fixed in the curated views by `--apply`; `--refresh` and the scheduled query only re-read them. |
 | `--audit-lag-seconds` / `--audit-lead-seconds` | 1800 / 30 | Audit-to-activity matching window (see below). |
 | `--audit-only` | `errors` | `all` also creates turns from unmatched successful audit calls. |
@@ -144,6 +144,11 @@ scope selector (`#geScopeSelect`):
     still logging the real `principalEmail` in Cloud Audit Logs. Non-email values become `NULL` in
     `v_user_activity_curated`, and `v_fct_turns` falls back to engine + method + time matching
     (`ENGINE_TIME`) so `COALESCE(user_email, audit_principal_email)` recovers the real principal.
+17. Cloud Logging → BigQuery sinks deliver with at-least-once semantics and occasionally write
+    duplicate rows with the same `insertId` (observed in `gemini-enterprise-stage.ds_ge_search_raw`).
+    All four curated views (`v_user_activity_curated`, `v_agentic_operations_curated`,
+    `v_model_armor_curated`, and `v_consolidated_audit_log`) deduplicate by `insertId` so every
+    `turn_id` in `fct_turns` is strictly unique.
 
 ## Audit matching
 
@@ -189,16 +194,17 @@ Validation results (example runs in two reference projects; your numbers will di
 
 ## Automated Conservation & Reconciliation Invariants
 
-Every `provision_ge_mart.py --apply` and `--refresh` automatically runs `deploy/bigquery/verify_ge_mart_invariants.py`, which asserts 11 mathematical zero-loss invariants across the curated views and mart objects:
+Every `provision_ge_mart.py --apply` and `--refresh` automatically runs `deploy/bigquery/verify_ge_mart_invariants.py`, which asserts 12 mathematical zero-loss invariants across the curated views and mart objects:
 
-1. `fct_sessions_unique_session_id`: `COUNT(1) == COUNT(DISTINCT session_id)` in `fct_sessions` (no duplicate session rows across engine keys).
-2. `session_turn_conservation`: `SUM(fct_sessions.turns) + COUNTIF(fct_turns.session_id IS NULL) == COUNT(fct_turns)`.
-3. `session_token_conservation`: `SUM(fct_sessions.total_tokens) + SUM(IF(session_id IS NULL, total_tokens, 0)) == SUM(fct_turns.total_tokens)`.
-4. `daily_agg_turn_conservation`: `SUM(agg_daily_usage.interactions) == COUNT(fct_turns)`.
-5. `daily_agg_token_conservation`: `SUM(agg_daily_usage.total_tokens) == SUM(fct_turns.total_tokens)`.
-6. `inference_token_conservation`: `SUM(v_agentic_operations_curated.total_tokens)` (within lookback) `== SUM(fct_turns.total_tokens)` (0 dropped or fanned-out tokens).
-7. `tool_failure_bounds`: `0 <= tool_failure_count <= tool_call_count` per trace and per turn.
-8. `file_upload_session_coverage`: `UploadSessionFile` rows in `v_user_activity_curated` have non-null `session_id` and `has_uploaded_file = TRUE`.
-9. `armor_inspect_only_exclusion`: `v_model_armor_curated` never marks inspect-only (`enforcement type is inspect only` / `not blocked`) or `SANITIZATION_EXECUTION_SKIPPED` rows as `is_blocked = TRUE`.
-10. `audit_session_extraction_coverage`: `v_consolidated_audit_log` extracts `session_id` whenever `sessions/<id>` is present in `resource_name` or request/response JSON.
-11. `materialized_fct_turns_sync`: `fct_turns` row count and total tokens match live `v_fct_turns`.
+1. `fct_turns_unique_turn_id`: `COUNT(1) == COUNT(DISTINCT turn_id)` in `fct_turns` (no duplicate turn rows from at-least-once sink deliveries).
+2. `fct_sessions_unique_session_id`: `COUNT(1) == COUNT(DISTINCT session_id)` in `fct_sessions` (no duplicate session rows across engine keys).
+3. `session_turn_conservation`: `SUM(fct_sessions.turns) + COUNTIF(fct_turns.session_id IS NULL) == COUNT(fct_turns)`.
+4. `session_token_conservation`: `SUM(fct_sessions.total_tokens) + SUM(IF(session_id IS NULL, total_tokens, 0)) == SUM(fct_turns.total_tokens)`.
+5. `daily_agg_turn_conservation`: `SUM(agg_daily_usage.interactions) == COUNT(fct_turns)`.
+6. `daily_agg_token_conservation`: `SUM(agg_daily_usage.total_tokens) == SUM(fct_turns.total_tokens)`.
+7. `inference_token_conservation`: `SUM(v_agentic_operations_curated.total_tokens)` (within lookback) `== SUM(fct_turns.total_tokens)` (0 dropped or fanned-out tokens).
+8. `tool_failure_bounds`: `0 <= tool_failure_count <= tool_call_count` per trace and per turn.
+9. `file_upload_session_coverage`: `UploadSessionFile` rows in `v_user_activity_curated` have non-null `session_id` and `has_uploaded_file = TRUE`.
+10. `armor_inspect_only_exclusion`: `v_model_armor_curated` never marks inspect-only (`enforcement type is inspect only` / `not blocked`) or `SANITIZATION_EXECUTION_SKIPPED` rows as `is_blocked = TRUE`.
+11. `audit_session_extraction_coverage`: `v_consolidated_audit_log` extracts `session_id` whenever `sessions/<id>` is present in `resource_name` or request/response JSON.
+12. `materialized_fct_turns_sync`: `fct_turns` row count and total tokens match live `v_fct_turns`.

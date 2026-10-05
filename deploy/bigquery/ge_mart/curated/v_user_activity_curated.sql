@@ -17,6 +17,10 @@ WITH assistant AS (
     severity,
     jsonPayload AS jp
   FROM ({{src_assistant}})
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY COALESCE(insertId, CAST(UNIX_MICROS(timestamp) AS STRING))
+    ORDER BY timestamp DESC
+  ) = 1
 ),
 assistant_fields AS (
   SELECT
@@ -37,6 +41,10 @@ search AS (
     severity,
     jsonPayload AS jp
   FROM ({{src_search}})
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY COALESCE(insertId, CAST(UNIX_MICROS(timestamp) AS STRING))
+    ORDER BY timestamp DESC
+  ) = 1
 ),
 search_fields AS (
   SELECT

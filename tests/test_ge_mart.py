@@ -240,6 +240,24 @@ class TemplateDefectFixTest(unittest.TestCase):
     self.assertIn('NOT COALESCE(LAX_BOOL(auth.granted), FALSE)', audit)
     self.assertIn('COALESCE(status_code, 0) != 0 OR has_permission_denial AS is_error', audit)
 
+  def test_all_curated_views_deduplicate_by_insert_id(self):
+    for name in (
+        'v_user_activity_curated',
+        'v_agentic_operations_curated',
+        'v_model_armor_curated',
+        'v_consolidated_audit_log',
+    ):
+      body = self._tpl('curated', name)
+      self.assertIn('QUALIFY ROW_NUMBER() OVER', body, name)
+      self.assertIn('insertId', body, name)
+    # v_user_activity_curated unions assistant + search and must deduplicate both CTEs.
+    self.assertEqual(self._tpl('curated', 'v_user_activity_curated').count('QUALIFY ROW_NUMBER() OVER'), 2)
+
+  def test_audit_classifies_async_assist_and_session_file_methods_as_interactive(self):
+    audit = self._tpl('curated', 'v_consolidated_audit_log')
+    for method in ('AsyncAssist', 'ReadAsyncAssist', 'DownloadSessionFile', 'ListSessionFileMetadata'):
+      self.assertEqual(audit.count(f"'{method}'"), 2, method)
+
 
 class GeMartReaderTest(unittest.TestCase):
 
@@ -473,6 +491,7 @@ class InvariantVerifierTest(unittest.TestCase):
   def test_build_invariant_sql_covers_all_conservation_laws(self):
     sql = verify_invariants.build_invariant_sql('example-project', 'ds_ge_curated_staging', 'vibelift_mart')
     for inv in (
+        'fct_turns_unique_turn_id',
         'fct_sessions_unique_session_id',
         'session_turn_conservation',
         'session_token_conservation',

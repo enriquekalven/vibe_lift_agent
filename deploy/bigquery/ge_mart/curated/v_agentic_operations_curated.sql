@@ -18,6 +18,10 @@ WITH ops AS (
     labels AS lb,
     resource AS res
   FROM ({{src_inference}})
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY COALESCE(insertId, CAST(UNIX_MICROS(timestamp) AS STRING))
+    ORDER BY timestamp DESC
+  ) = 1
 ),
 fields AS (
   SELECT

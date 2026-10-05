@@ -55,6 +55,7 @@ WITH
   turns AS (
     SELECT
       COUNT(1) AS total_turns,
+      COUNT(DISTINCT turn_id) AS distinct_turns,
       COUNTIF(session_id IS NULL) AS sessionless_turns,
       COALESCE(SUM(total_tokens), 0) AS total_tokens,
       COALESCE(SUM(IF(session_id IS NULL, total_tokens, 0)), 0) AS sessionless_tokens,
@@ -125,6 +126,12 @@ WITH
       ) AS unextracted_audit_sessions
     FROM `{curated}.v_consolidated_audit_log`
   )
+SELECT
+  'fct_turns_unique_turn_id' AS name,
+  CAST(t.total_turns - t.distinct_turns AS INT64) AS violations,
+  CONCAT('rows=', CAST(t.total_turns AS STRING), ' distinct_turns=', CAST(t.distinct_turns AS STRING)) AS detail
+FROM turns AS t
+UNION ALL
 SELECT
   'fct_sessions_unique_session_id' AS name,
   CAST(s.row_count - s.distinct_sessions AS INT64) AS violations,
