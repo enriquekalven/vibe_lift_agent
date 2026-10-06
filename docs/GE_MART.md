@@ -170,6 +170,10 @@ scope selector (`#geScopeSelect`):
 21. Model Armor's top-level execution status in `modelarmor_googleapis_com_sanitize_operations` is
     `sanitizationresult.invocationresult` (`"SUCCESS"`), whereas `executionstate` appears in
     activity guardrail audits. `v_model_armor_curated` coalesces both.
+22. `UploadSessionFile` image/file Model Armor checks (`STARTS_WITH(sanitized_text, 'Sanitized file content')`)
+    emit a one-off correlation UUID instead of an `NMwK`/`M8gK` `assist_token`. `v_fct_turns` pairs each
+    unmatched file-upload Model Armor check 1:1 with the closest completed `UploadSessionFile` turn within ±10s,
+    recovering file-upload Model Armor findings (such as image scan errors) onto the corresponding file-upload turn.
 
 ## Audit matching
 
@@ -231,4 +235,4 @@ Every `provision_ge_mart.py --apply` and `--refresh` automatically runs `deploy/
 12. `audit_session_extraction_coverage`: `v_consolidated_audit_log` extracts `session_id` whenever `sessions/<id>` is present in `resource_name` or request/response JSON.
 13. `materialized_fct_turns_sync`: `fct_turns` row count and total tokens match live `v_fct_turns`.
 
-See [`docs/LOOKER_STUDIO_GUIDE.md`](./LOOKER_STUDIO_GUIDE.md) for the complete 2-page Looker Studio L1/L2 IT Support Dashboard specification, 1-click creation links, and zero-fan-out latency architecture.
+See [`docs/LOOKER_STUDIO_GUIDE.md`](./LOOKER_STUDIO_GUIDE.md) for the complete 4-page Looker Studio L1/L2 IT Support Dashboard specification, 1-click creation links, operational safeguards, and zero-fan-out latency architecture.

@@ -236,6 +236,38 @@ armor_by_trace AS (
   WHERE assist_token IS NULL AND trace_id IS NOT NULL
   GROUP BY trace_id
 ),
+armor_file_pairs AS (
+  SELECT
+    t.event_id AS turn_event_id,
+    m.*
+  FROM turn_events AS t
+  JOIN armor AS m
+    ON t.activity_category = 'FILE_UPLOAD'
+   AND t.uploaded_file_names IS NOT NULL
+   AND t.assist_token IS NULL
+   AND STARTS_WITH(COALESCE(m.sanitized_text, ''), 'Sanitized file content')
+   AND ABS(TIMESTAMP_DIFF(m.event_timestamp, t.event_timestamp, MILLISECOND)) <= 10000
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY m.event_id
+    ORDER BY ABS(TIMESTAMP_DIFF(m.event_timestamp, t.event_timestamp, MILLISECOND)), t.event_id
+  ) = 1
+),
+armor_by_file_upload AS (
+  SELECT
+    turn_event_id,
+    COUNT(1) AS armor_checks,
+    COUNTIF(is_blocked) AS armor_blocks,
+    COUNTIF(is_finding) AS armor_findings,
+    LOGICAL_OR(is_prompt_injection) AS is_prompt_injection,
+    LOGICAL_OR(is_sensitive_data) AS is_sensitive_data,
+    LOGICAL_OR(is_safety_violation) AS is_safety_violation,
+    LOGICAL_OR(is_malicious_uri) AS is_malicious_uri,
+    STRING_AGG(DISTINCT violation_category, ',' ORDER BY violation_category) AS guardrail_categories,
+    STRING_AGG(DISTINCT NULLIF(verdict_reason, ''), ' | ' ORDER BY NULLIF(verdict_reason, '')) AS armor_verdict_reasons,
+    STRING_AGG(DISTINCT sdp_info_types, ', ' ORDER BY sdp_info_types) AS armor_sdp_info_types
+  FROM armor_file_pairs
+  GROUP BY turn_event_id
+),
 activity_joined AS (
   SELECT
     t.*,
@@ -258,16 +290,16 @@ activity_joined AS (
     i.model_name AS inference_model_name, i.agent_name AS inference_agent_name,
     i.conversation_id, i.location AS inference_location, i.engine_id AS inference_engine_id,
     i.mcp_server_name, i.finish_reason,
-    COALESCE(tok.armor_checks, tr.armor_checks) AS armor_checks,
-    COALESCE(tok.armor_blocks, tr.armor_blocks) AS armor_blocks,
-    COALESCE(tok.armor_findings, tr.armor_findings) AS armor_findings,
-    COALESCE(tok.is_prompt_injection, tr.is_prompt_injection) AS armor_prompt_injection,
-    COALESCE(tok.is_sensitive_data, tr.is_sensitive_data) AS armor_sensitive_data,
-    COALESCE(tok.is_safety_violation, tr.is_safety_violation) AS armor_safety_violation,
-    COALESCE(tok.is_malicious_uri, tr.is_malicious_uri) AS armor_malicious_uri,
-    COALESCE(tok.guardrail_categories, tr.guardrail_categories) AS armor_categories,
-    COALESCE(tok.armor_verdict_reasons, tr.armor_verdict_reasons) AS armor_verdict_reasons,
-    COALESCE(tok.armor_sdp_info_types, tr.armor_sdp_info_types) AS armor_sdp_info_types,
+    COALESCE(tok.armor_checks, tr.armor_checks, fu.armor_checks) AS armor_checks,
+    COALESCE(tok.armor_blocks, tr.armor_blocks, fu.armor_blocks) AS armor_blocks,
+    COALESCE(tok.armor_findings, tr.armor_findings, fu.armor_findings) AS armor_findings,
+    COALESCE(tok.is_prompt_injection, tr.is_prompt_injection, fu.is_prompt_injection) AS armor_prompt_injection,
+    COALESCE(tok.is_sensitive_data, tr.is_sensitive_data, fu.is_sensitive_data) AS armor_sensitive_data,
+    COALESCE(tok.is_safety_violation, tr.is_safety_violation, fu.is_safety_violation) AS armor_safety_violation,
+    COALESCE(tok.is_malicious_uri, tr.is_malicious_uri, fu.is_malicious_uri) AS armor_malicious_uri,
+    COALESCE(tok.guardrail_categories, tr.guardrail_categories, fu.guardrail_categories) AS armor_categories,
+    COALESCE(tok.armor_verdict_reasons, tr.armor_verdict_reasons, fu.armor_verdict_reasons) AS armor_verdict_reasons,
+    COALESCE(tok.armor_sdp_info_types, tr.armor_sdp_info_types, fu.armor_sdp_info_types) AS armor_sdp_info_types,
     COALESCE(tok.armor_response_preview, tr.armor_response_preview) AS armor_response_preview,
     g.guardrail_audit_events,
     g.guardrail_audit_blocked
@@ -276,6 +308,7 @@ activity_joined AS (
   LEFT JOIN inference AS i ON t.trace_rank = 1 AND i.trace_id = t.trace_id
   LEFT JOIN armor_by_token AS tok ON tok.assist_token = t.assist_token
   LEFT JOIN armor_by_trace AS tr ON t.assist_token IS NULL AND t.trace_rank = 1 AND tr.trace_id = t.trace_id
+  LEFT JOIN armor_by_file_upload AS fu ON t.assist_token IS NULL AND fu.turn_event_id = t.event_id
   LEFT JOIN guardrail_audit AS g ON t.trace_rank = 1 AND g.trace_id = t.trace_id
 ),
 activity_turns AS (

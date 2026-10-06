@@ -37,20 +37,21 @@ This guide covers the deployed **`vibelift_mart.v_looker_l1_l2_support`** BigQue
 3. **Step 3 — Add the Top Filter Bar (Page 1)**:
    - Click **Add a control** in the top toolbar:
      - **Date range control**: Place at top-right → set default to **Last 30 days** (or **This quarter**).
-     - **Drop-down list**: Place 6 drop-downs across the top row and drag one field into each **Control field**:
-       1. `needs_support_attention`
-       2. `support_tier`
-       3. `issue_category`
-       4. `engine_key`
-       5. `user_email`
-       6. `session_id`
-     - **Input box**: Place next to the drop-downs → set **Control field** to `prompt_preview` → in the **Style** tab, set **Search type** to **Contains** (lets support engineers search by keyword).
+     - **Drop-down list**: Place 7 drop-downs across the top row and drag one field into each **Control field**:
+        1. `needs_support_attention`
+        2. `support_tier`
+        3. `issue_type` *(5 high-level MCP App badges: `Guardrail block`, `Access denied`, `Platform error`, `Tool error`, `No answer`, `Healthy`)*
+        4. `issue_category` *(11 granular root-cause categories)*
+        5. `engine_key`
+        6. `user_email`
+        7. `session_id`
+      - **Input box (Omni-Search)**: Place next to the drop-downs → set **Control field** to **`search_text`** → in the **Style** tab, set **Search type** to **Contains** (lets support engineers search across prompts, responses, trace IDs, session IDs, ticket IDs, user emails, tool names, tool error messages, data stores, file names, and guardrail verdicts in a single box).
 
 4. **Step 4 — Add the KPI Scorecards, Charts & L1/L2 Incident Queue Table (Page 1)**:
    - Delete the default starter table Looker Studio puts on the canvas.
-   - **KPI Scorecards**: Click **Add a chart → Scorecard** and drag the fields from **[Section 3.B](#b-top-kpi-scorecards-row-1--8-cards)** below.
-   - **Charts**: Add the **Stacked Combo Chart** (`event_date` + `support_tier`), **Horizontal Bar Chart** (`issue_category`), and **Blast Radius Table** (`error_signature` ranked by `COUNT_DISTINCT(user_email)`). At the bottom of the **Setup** panel for each chart, check ✅ **Cross-filtering**.
-   - **L1/L2 Incident Queue Table**: Click **Add a chart → Table**, stretch it full-width across the bottom of Page 1, and drag the columns listed in **[Section 3.D](#d-l1l2-incident-queue--runbook-table-row-3--full-width)**. In the **Style** tab of the table, check ✅ **Wrap text** under **Table Body** so full prompts, responses, tool errors, and runbooks are readable inline.
+   - **KPI Scorecards**: Click **Add a chart → Scorecard** and drag the fields from **[Section 3.B](#b-top-kpi-scorecards-row-1--8-cards)** below (plus a `MAX(refreshed_at)` **Data Freshness** indicator in the top header).
+   - **Charts**: Add the **Stacked Combo Chart** (`event_date` + `support_tier`), **Horizontal Bar Chart** (`issue_category` or `issue_type`), and **Blast Radius Table** (`error_signature` ranked by `COUNT_DISTINCT(user_email)`). At the bottom of the **Setup** panel for each chart, check ✅ **Cross-filtering**.
+   - **L1/L2 Incident Queue Table**: Click **Add a chart → Table**, stretch it full-width across the bottom of Page 1, and drag the columns listed in **[Section 3.D](#d-l1l2-incident-queue--runbook-table-row-3--full-width)**. In the **Style** tab of the table, check ✅ **Wrap text** under **Table Body** so full prompts, responses, tool errors, escalation summaries, and runbooks are readable inline.
 
 5. **Step 5 — Add Pages 2, 3, and 4**:
    - In the top-left toolbar, click **Page → New page** (repeat 3 times) and rename the pages via **Page → Manage pages**:
@@ -70,29 +71,30 @@ To guarantee that Looker Studio scorecards never double-count turns or tokens an
 2. **Pre-Aggregation of 1:N Child Entities (Zero Fan-Out)**:
    - **Tool Calls & Errors (`part_index = 0..N` and `llm_calls = 1..M`)**: Pre-aggregated per LLM call via `ARRAY_TO_STRING(..., ' | ')` in `v_agentic_operations_curated` and per `trace_id` (`GROUP BY inference_key`) via `STRING_AGG(..., ' | ' ORDER BY event_timestamp)` in `v_fct_turns`, attached strictly to `trace_rank = 1`.
    - **Prompts, Streamed Responses, Citations, Data Stores & Files**: Deduplicated by `insertId` (`QUALIFY ROW_NUMBER() OVER (PARTITION BY insertId ...) = 1`) with `citation_sources`, `queried_data_stores`, and `uploaded_file_names` flattened into scalar strings (`STRING`), plus streamed `SANITIZE_MODEL_RESPONSE` chunks reconstructed per `assist_token`.
-   - **Model Armor & SDP Checks**: Pre-aggregated per `assist_token` / `trace_id` into `armor_checks`, `armor_blocks`, `armor_findings`, `armor_verdict_reasons`, and `armor_sdp_info_types`.
+   - **Model Armor & SDP Checks (Including `UploadSessionFile` Image Scans)**: Pre-aggregated per `assist_token`, `trace_id`, and 1:1 timestamp-matched `UploadSessionFile` check into `armor_checks`, `armor_blocks`, `armor_findings`, `armor_verdict_reasons`, and `armor_sdp_info_types`.
    - **Enforced by Invariant #2 (`looker_support_view_no_fanout`)**: Every `--apply` and `--refresh` verifies `COUNT(1) == COUNT(DISTINCT turn_id) == COUNT(fct_turns)` and `SUM(total_tokens) == SUM(fct_turns.total_tokens)` (`1,086` rows = `1,086` distinct turns, `86,446,759` tokens, `1.55 MB` total physical table size).
 
 ---
 
 ## 3. Page 1: L1/L2 Support Triage Queue & Root-Cause Diagnostics
 
-### A. Top Filter Controls (7 Drop-Downs + Date Range + Search Box)
+### A. Top Filter Controls (7 Drop-Downs + Date Range + Omni-Search Box)
 
 | Control Type | Field Name | Purpose |
 |---|---|---|
 | **Date range control** | `event_date` | Restricts partitions scanned in `fct_turns` (default: Last 30 days) |
 | **Drop-down list** | `needs_support_attention` | Quick toggle (`true` = show only failed/blocked/tool-error turns) |
 | **Drop-down list** | `support_tier` | Filter by `L1 - User / Input / Policy`, `L2 - Platform / Agent / MCP`, or `L0 - Healthy` |
-| **Drop-down list** | `issue_category` | Filter by `MCP / Agent Tool Failure`, `Guardrail / DLP Block`, `No Answer / Skipped`, `File Upload Error`, `IAM / Auth Denial`, `Quota / Rate Limit`, `Timeout / Deadline Exceeded`, `Datastore / Federated Search Error`, etc. |
+| **Drop-down list** | `issue_type` | High-level 5-badge filter matching the MCP App (`Guardrail block`, `Access denied`, `Platform error`, `Tool error`, `No answer`, `Healthy`) |
+| **Drop-down list** | `issue_category` | Granular 11-category filter (`MCP / Agent Tool Failure`, `Guardrail / DLP Block`, `No Answer / Skipped`, `File Upload Error`, `IAM / Auth Denial`, `Quota / Rate Limit`, `Timeout / Deadline Exceeded`, `Datastore / Federated Search Error`, etc.) |
 | **Drop-down list** | `engine_key` | Filter by Gemini Enterprise App / Engine (`location/engine_id`) |
 | **Drop-down list** | `user_email` | Look up a specific user reporting an issue |
 | **Drop-down list** | `session_id` | Isolate a single conversation session |
-| **Input box (Search)** | `prompt_preview` (or `issue_summary`) | Free-text search across user prompts, error messages, tool names, and trace IDs |
+| **Input box (Omni-Search)** | `search_text` | Single free-text search box (set to **Contains**) that searches across 26 fields simultaneously: prompts, responses, `turn_id`, `ticket_id`, `trace_id`, `session_id`, `user_email`, `agent_name`, `tool_names`, `tool_error_messages`, `queried_data_stores`, `uploaded_file_names`, `citation_sources`, and `armor_verdict_reasons` |
 
 ---
 
-### B. Top KPI Scorecards (Row 1 — 8 Cards)
+### B. Top KPI Scorecards (Row 1 — 8 Cards + Data Freshness Header)
 
 | Scorecard Title | Metric / Field | Aggregation | Conditional Formatting |
 |---|---|---|---|
@@ -104,6 +106,7 @@ To guarantee that Looker Studio scorecards never double-count turns or tokens an
 | **Model Armor Findings** | `armor_findings` | `SUM` | Amber if `> 0` |
 | **MCP / Tool Call Failures** | `tool_failure_count` | `SUM` | Orange/Red if `> 0` |
 | **Affected Users** | `user_email` (Filter: `needs_support_attention = true`) | `COUNT_DISTINCT` | Amber if `> 0` |
+| **Mart Last Refreshed (Header)** | `refreshed_at` | `MAX` | Displays exact UTC timestamp of the materialized `fct_turns` snapshot |
 
 ---
 
@@ -114,12 +117,12 @@ To guarantee that Looker Studio scorecards never double-count turns or tokens an
    - **Breakdown Dimension**: `support_tier` (`L0 - Healthy`, `L1 - User / Input / Policy`, `L2 - Platform / Agent / MCP`)
    - **Metric**: `Record Count`
 2. **Incidents by Issue Category (Horizontal Bar Chart)**:
-   - **Dimension**: `issue_category`
+   - **Dimension**: `issue_category` *(or `issue_type` for the 5-badge view)*
    - **Metric**: `Record Count`
    - **Chart Filter**: `Exclude issue_category = "Healthy"`
    - **Cross-filtering**: Enabled (clicking a bar filters the L1/L2 Ticket Queue table below).
 3. **Recurring Error Patterns / Blast Radius (Table with Bars)**:
-   - **Dimensions**: `error_signature`, `issue_category`, `engine_key`
+   - **Dimensions**: `error_signature`, `issue_type`, `issue_category`, `engine_key`
    - **Metrics**:
      - `COUNT_DISTINCT(user_email)` (*Affected Users*)
      - `COUNT_DISTINCT(session_id)` (*Affected Sessions*)
@@ -140,23 +143,25 @@ Add a **Table** with **Cross-filtering** and **Text Wrapping** enabled:
   1. `ticket_id` *(Short 14-char incident key)*
   2. `event_timestamp` *(Sort Descending)*
   3. `support_tier` *(`L1 - User / Input / Policy` vs `L2 - Platform / Agent / MCP`)*
-  4. `issue_category`
-  5. `user_email`
-  6. `engine_key`
-  7. `agent_name`
-  8. `prompt_preview` *(User prompt / query text or `[Confirmed Action: ...]`)*
-  9. `response_preview` *(Assistant reply or search result count summary)*
-  10. `l1_runbook_action` *(Prescriptive step-by-step L1/L2 remediation guidance)*
-  11. `issue_summary` *(Combined method, status, guardrail category, failed tools, and error message)*
-  12. `tool_error_codes` *(Pre-aggregated error codes, e.g., `MCP_PAYLOAD_ERROR`, `400`, `500`)*
-  13. `tool_error_messages` *(Exact tool error strings across all failed tool calls in the turn)*
-  14. `queried_data_stores` *(Data stores / federated connectors queried or implicated in error)*
-  15. `uploaded_file_names` *(Uploaded file names / session `fileId`s)*
-  16. `armor_verdict_reasons` *(Model Armor verdict reasons & `armor_sdp_info_types`)*
-  17. `session_id`
-  18. `trace_id`
-  19. `cloud_logging_url` *(Configure field type as **URL → Hyperlink** with label `"Open in Cloud Logging"`)*
-  20. `cloud_trace_url` *(Configure field type as **URL → Hyperlink** with label `"Open in Cloud Trace"`)*
+  4. `issue_type` *(`Guardrail block`, `Access denied`, `Platform error`, `Tool error`, `No answer`, `Healthy`)*
+  5. `issue_category`
+  6. `user_email`
+  7. `engine_key`
+  8. `agent_name` *(Never NULL — automatically falls back to `Search`, `File upload`, `Widget action`, or `Core assistant`)*
+  9. `prompt_preview` *(User prompt / query text or `[Confirmed Action: ...]`)*
+  10. `response_preview` *(Assistant reply or search result count summary)*
+  11. `l1_runbook_action` *(Prescriptive step-by-step L1/L2 remediation guidance)*
+  12. `escalation_ticket_text` *(Pre-formatted 1-click copyable L1→L2 Jira/ServiceNow ticket payload with trace, session, user, latency, tool errors, and runbook)*
+  13. `issue_summary` *(Combined method, status, guardrail category, failed tools, and error message)*
+  14. `tool_error_codes` *(Pre-aggregated error codes, e.g., `MCP_PAYLOAD_ERROR`, `400`, `500`)*
+  15. `tool_error_messages` *(Exact tool error strings across all failed tool calls in the turn)*
+  16. `queried_data_stores` *(Data stores / federated connectors queried or implicated in error)*
+  17. `uploaded_file_names` *(Uploaded file names / session `fileId`s)*
+  18. `armor_verdict_reasons` *(Model Armor verdict reasons & `armor_sdp_info_types`)*
+  19. `session_id`
+  20. `trace_id`
+  21. `cloud_logging_url` *(Configure field type as **URL → Hyperlink** with label `"Open in Cloud Logging"`)*
+  22. `cloud_trace_url` *(Configure field type as **URL → Hyperlink** with label `"Open in Cloud Trace"`)*
 - **Metrics**:
   - `latency_ms` (`AVG` or `MAX`)
   - `tool_failure_count` (`SUM`)
@@ -177,7 +182,8 @@ Add a **Table** with **Cross-filtering** and **Text Wrapping** enabled:
 
 ### B. Session Summary Table (Master Table — Top Half)
 
-Clicking any session row in this table automatically cross-filters the **Turn-by-Turn Conversation & Tool Replay Table** below it:
+Clicking any session row in this table automatically cross-filters the **Turn-by-Turn Conversation & Tool Replay Table** below it.
+*(Tip: Add a chart filter `is_session_first_turn = true` OR use `MAX(...)` on the `session_*` metrics below so session-level window totals are never summed across turns.)*
 
 - **Dimension**: `session_id`, `user_email`, `engine_key`, `session_has_issue`
 - **Metrics**:
@@ -234,7 +240,7 @@ Maps directly to the **Users** and **Agents** tabs of the MCP App (`zscaler-it-s
 
 ### A. Agent & Engine Health Table (Top Half — Cross-Filtering Enabled)
 - **Dimensions**:
-  1. `agent_name`
+  1. `agent_name` *(Includes stand-in labels `Search`, `File upload`, `Widget action`, and `Core assistant` so no rows appear as `null`)*
   2. `engine_key`
   3. `model_name`
   4. `model_selection_mode` *(`AUTO` vs `EXPLICIT`)*
@@ -283,14 +289,15 @@ Maps directly to the **Model Armor & SDP** tab of the MCP App (`zscaler-it-suppo
   1. `event_timestamp`
   2. `user_email`
   3. `engine_key`
-  4. `turn_status`
-  5. `guardrail_categories` *(`PROMPT_INJECTION`, `SENSITIVE_DATA`, `SAFETY_VIOLATION`, `MALICIOUS_URI`)*
-  6. `armor_verdict_reasons` *(Specific Model Armor filter reason)*
-  7. `armor_sdp_info_types` *(Specific DLP InfoTypes matched, e.g., `PERSON_NAME`, `EMAIL_ADDRESS`, `CREDIT_CARD_NUMBER`)*
-  8. `prompt_preview`
-  9. `response_preview`
-  10. `l1_runbook_action`
-  11. `cloud_logging_url`
+  4. `turn_kind` *(`CHAT`, `FILE_UPLOAD`, etc. — includes `UploadSessionFile` image/file scan findings)*
+  5. `turn_status`
+  6. `guardrail_categories` *(`PROMPT_INJECTION`, `SENSITIVE_DATA`, `SAFETY_VIOLATION`, `MALICIOUS_URI`)*
+  7. `armor_verdict_reasons` *(Specific Model Armor filter reason)*
+  8. `armor_sdp_info_types` *(Specific DLP InfoTypes matched, e.g., `PERSON_NAME`, `EMAIL_ADDRESS`, `CREDIT_CARD_NUMBER`)*
+  9. `prompt_preview`
+  10. `response_preview`
+  11. `l1_runbook_action`
+  12. `cloud_logging_url`
 - **Metrics**:
   - `armor_checks` (`SUM`)
   - `armor_findings` (`SUM`)
@@ -302,10 +309,26 @@ Maps directly to the **Model Armor & SDP** tab of the MCP App (`zscaler-it-suppo
 
 | MCP App Tab / Feature | Looker Studio Equivalent | How It Works in Looker Studio |
 |---|---|---|
-| **Tab 1: Overview** | **Page 1 — Top Scorecards & Trend Charts** | 8 KPI scorecards + Daily Turns by Support Tier stacked combo chart + Issue Category horizontal bar chart. |
-| **Tab 2: Issues (Blast Radius Grouping)** | **Page 1 — Recurring Error Patterns Table (`error_signature`)** | Normalizes dynamic UUIDs/IDs into `error_signature` and ranks issues by `COUNT_DISTINCT(user_email)` (*Affected Users*) and `COUNT_DISTINCT(session_id)` (*Affected Sessions*). Clicking any pattern cross-filters the Incident Queue below to show only turns matching that signature. |
-| **Tab 3: Interactions & Turn Detail Drawer** | **Page 1 — L1/L2 Incident Queue & Runbook Table** | Displays `prompt_preview`, `response_preview`, `l1_runbook_action`, `tool_error_codes`, `tool_error_messages`, `tool_args_summary`, `tool_output_preview`, `queried_data_stores`, `uploaded_file_names`, and `citation_sources` inline with text wrapping, plus 1-click hyperlinks for **Open in Cloud Logging** and **Open in Cloud Trace**. |
+| **Tab 1: Overview** | **Page 1 — Top Scorecards & Trend Charts** | 8 KPI scorecards + `MAX(refreshed_at)` freshness badge + Daily Turns by Support Tier stacked combo chart + Issue Category horizontal bar chart. |
+| **Tab 2: Issues (Blast Radius Grouping)** | **Page 1 — Recurring Error Patterns Table (`error_signature`)** | Normalizes dynamic emails, URLs, ISO timestamps, UUIDs/hex IDs, and 5+ digit numbers into `error_signature` and ranks issues by `COUNT_DISTINCT(user_email)` (*Affected Users*) and `COUNT_DISTINCT(session_id)` (*Affected Sessions*). Also provides both 5-badge `issue_type` and 11-category `issue_category`. |
+| **Tab 3: Interactions & Turn Detail Drawer** | **Page 1 — L1/L2 Incident Queue & Runbook Table** | Displays `prompt_preview`, `response_preview`, `l1_runbook_action`, `escalation_ticket_text` (1-click copyable L1→L2 ticket summary), `tool_error_codes`, `tool_error_messages`, `tool_args_summary`, `tool_output_preview`, `queried_data_stores`, `uploaded_file_names`, and `citation_sources` inline with text wrapping, plus 1-click hyperlinks for **Open in Cloud Logging** and **Open in Cloud Trace**. |
 | **Tab 4: Sessions & Step-by-Step Timeline** | **Page 2 — Master-Detail Session Explorer** | Clicking a row in the **Session Summary Table** (top) cross-filters the **Turn-by-Turn Replay Table** (bottom) ordered by `session_step_number = 1, 2, 3...`. |
-| **Tab 5 & 6: Users & Agents** | **Page 3 — Users, Agents & MCP Tool Performance** | Cross-filtering tables showing per-agent `p50`/`p95` latency, MCP tool failure rates, model routing (`AUTO` vs `EXPLICIT`), and per-user impact. |
-| **Tab 7: Model Armor & SDP** | **Page 4 — Model Armor & SDP Security Audit** | Breaks down `armor_checks`, `armor_findings`, `armor_blocks`, `armor_verdict_reasons`, and `armor_sdp_info_types` (`PERSON_NAME`, `US_SOCIAL_SECURITY_NUMBER`, etc.). |
+| **Tab 5 & 6: Users & Agents** | **Page 3 — Users, Agents & MCP Tool Performance** | Cross-filtering tables showing per-agent `p50`/`p95` latency, MCP tool failure rates, model routing (`AUTO` vs `EXPLICIT`), fallback stand-in agent names (`Search`, `File upload`), and per-user impact. |
+| **Tab 7: Model Armor & SDP** | **Page 4 — Model Armor & SDP Security Audit** | Breaks down `armor_checks`, `armor_findings`, `armor_blocks`, `armor_verdict_reasons`, and `armor_sdp_info_types` (`PERSON_NAME`, `US_SOCIAL_SECURITY_NUMBER`, etc.), including `UploadSessionFile` file-upload image scan findings. |
+
+---
+
+## 8. Operational Safeguards & How to Prevent Support / Looker Studio Pitfalls
+
+1. **Refresh Fields in Looker Studio After Schema Updates**:
+   - Looker Studio caches the column list of a BigQuery view when you first add it. Whenever new columns are added to `v_looker_l1_l2_support`, open the report in Edit mode and click **Resource → Manage added data sources → Edit → Refresh fields** (bottom left) → **Apply**.
+2. **Use `search_text` (Not `prompt_preview`) for the Search Input Box**:
+   - Looker Studio's **Input box** control can only bind to a single column. Binding it to **`search_text`** (with Search type = **Contains**) allows L1/L2 engineers to paste a `trace_id`, `session_id`, `ticket_id`, `user_email`, `tool_name`, or `tool_error_message` and find the exact turn immediately.
+3. **Use `MAX(...)` or `is_session_first_turn = true` on Session Window Columns**:
+   - Columns prefixed with `session_*` (`session_total_turns`, `session_total_tokens`, `session_duration_seconds`, etc.) are window-function totals repeated on every turn of that session. In the **Session Summary Table** on Page 2, either aggregate them with `MAX(...)` or add a chart filter `is_session_first_turn = true` so Looker Studio does not `SUM` them across multiple turns in the same session.
+4. **Monitor Snapshot Freshness via `MAX(refreshed_at)`**:
+   - Because `v_looker_l1_l2_support` queries the materialized `fct_turns` table for sub-second response times, new logs appear after `provision_ge_mart.py --refresh` (or the hourly BigQuery Scheduled Query from `deploy/setup_mart_refresh.sh`) runs. Displaying `MAX(refreshed_at)` in the top header ensures support engineers always know the exact snapshot timestamp.
+5. **Unlinked Vertex AI Floor-Setting Model Armor Checks & Historical Connector SDP Logs**:
+   - `v_looker_l1_l2_support` is strictly 1 row per user turn (`turn_id`). It captures **100% of turn-linked Model Armor blocks** and **7 of 8 Model Armor findings** (including `UploadSessionFile` image scan errors).
+   - A small subset of Model Armor logs (`client_name = 'VERTEX_AI'` floor-setting checks with no `assist_token` or `trace_id`, plus aborted stream checks with no user activity log) have no user turn to attach to. Similarly, the 89 legacy connector DLP scan rows in `Stage_SDP_Default_Logging.v2_Stage_Default_Logging_table` are historical (`2026-08-14` to `2026-09-08`, prior to the `2026-09-29` activity sink cutover). If L2 security auditors ever want to inspect unlinked raw Model Armor checks alongside turn-linked checks on Page 4, they can add `vibelift_curated.v_model_armor_curated` as a secondary data source for a standalone raw-checks table.
 

@@ -19,7 +19,16 @@ SELECT
   engine_id,
   engine_key,
   project_ref,
-  agent_name,
+  COALESCE(
+    NULLIF(agent_name, ''),
+    CASE
+      WHEN turn_kind = 'SEARCH' THEN 'Search'
+      WHEN turn_kind = 'FILE_UPLOAD' THEN 'File upload'
+      WHEN turn_kind = 'WIDGET_ACTION' THEN 'Widget action'
+      WHEN COALESCE(is_core_assistant, FALSE) THEN 'Core assistant'
+      ELSE 'Assistant (unnamed)'
+    END
+  ) AS agent_name,
   agent_id,
   is_core_assistant,
   model_name,
@@ -31,24 +40,42 @@ SELECT
   is_failed,
   is_actionable_issue,
   COALESCE(tool_failure_count, 0) > 0 AS has_tool_failure,
-  COALESCE(is_actionable_issue, FALSE) OR COALESCE(tool_failure_count, 0) > 0 AS needs_support_attention,
+  COALESCE(is_actionable_issue, FALSE) OR COALESCE(tool_failure_count, 0) > 0 OR COALESCE(armor_findings, 0) > 0 AS needs_support_attention,
   CASE
     WHEN COALESCE(is_guardrail_blocked, FALSE)
-      OR turn_status IN ('MODEL_BLOCKED', 'INVALID_ARGUMENT', 'RATE_LIMITED')
+      OR turn_status IN ('MODEL_BLOCKED', 'INVALID_ARGUMENT', 'RATE_LIMITED', 'SKIPPED')
+      OR answer_state = 'SKIPPED'
       OR (status_code IN (3, 8) AND NOT REGEXP_CONTAINS(COALESCE(status_message, ''), r'(?i)catalog_configs'))
-      OR (turn_kind = 'FILE_UPLOAD' AND COALESCE(is_failed, FALSE))
+      OR (turn_kind = 'FILE_UPLOAD' AND (COALESCE(is_failed, FALSE) OR COALESCE(armor_findings, 0) > 0))
       THEN 'L1 - User / Input / Policy'
     WHEN COALESCE(tool_failure_count, 0) > 0
       OR COALESCE(is_failed, FALSE)
+      OR COALESCE(armor_findings, 0) > 0
       THEN 'L2 - Platform / Agent / MCP'
     ELSE 'L0 - Healthy'
   END AS support_tier,
   CASE
     WHEN COALESCE(is_guardrail_blocked, FALSE) OR turn_status = 'MODEL_BLOCKED'
+      THEN 'Guardrail block'
+    WHEN turn_status IN ('PERMISSION_DENIED', 'UNAUTHENTICATED') OR status_code IN (7, 16)
+      THEN 'Access denied'
+    WHEN COALESCE(is_failed, FALSE)
+      OR (turn_kind = 'FILE_UPLOAD' AND COALESCE(armor_findings, 0) > 0)
+      THEN 'Platform error'
+    WHEN COALESCE(tool_failure_count, 0) > 0
+      THEN 'Tool error'
+    WHEN COALESCE(armor_findings, 0) > 0
+      THEN 'Guardrail block'
+    WHEN turn_status = 'SKIPPED' OR answer_state = 'SKIPPED'
+      THEN 'No answer'
+    ELSE 'Healthy'
+  END AS issue_type,
+  CASE
+    WHEN COALESCE(is_guardrail_blocked, FALSE) OR turn_status = 'MODEL_BLOCKED'
       THEN 'Guardrail / DLP Block'
     WHEN COALESCE(tool_failure_count, 0) > 0
       THEN 'MCP / Agent Tool Failure'
-    WHEN (turn_kind = 'FILE_UPLOAD' OR COALESCE(has_uploaded_file, FALSE)) AND COALESCE(is_failed, FALSE)
+    WHEN (turn_kind = 'FILE_UPLOAD' OR COALESCE(has_uploaded_file, FALSE)) AND (COALESCE(is_failed, FALSE) OR COALESCE(armor_findings, 0) > 0)
       THEN 'File Upload Error'
     WHEN turn_kind = 'CONNECTOR' AND COALESCE(is_failed, FALSE)
       THEN 'Connector / OAuth Error'
@@ -67,6 +94,8 @@ SELECT
       THEN 'Invalid Request / Input'
     WHEN COALESCE(is_failed, FALSE)
       THEN CONCAT('Platform Error (', COALESCE(turn_status, 'UNKNOWN'), ')')
+    WHEN COALESCE(armor_findings, 0) > 0
+      THEN 'Guardrail / DLP Block'
     WHEN turn_status = 'SKIPPED' OR answer_state = 'SKIPPED'
       THEN 'No Answer / Skipped'
     ELSE 'Healthy'
@@ -76,8 +105,8 @@ SELECT
       THEN 'L1/SecOps: Blocked for Prompt Injection / Jailbreak attempt. Review guardrail_categories.'
     WHEN COALESCE(is_guardrail_blocked, FALSE) OR turn_status = 'MODEL_BLOCKED'
       THEN 'L1: Input/output blocked by Model Armor or Sensitive Data Protection. Verify user prompt against DLP policy.'
-    WHEN (turn_kind = 'FILE_UPLOAD' OR COALESCE(has_uploaded_file, FALSE)) AND COALESCE(is_failed, FALSE)
-      THEN 'L1: File upload rejected (check status_message for unsupported MIME type or session file quota).'
+    WHEN (turn_kind = 'FILE_UPLOAD' OR COALESCE(has_uploaded_file, FALSE)) AND (COALESCE(is_failed, FALSE) OR COALESCE(armor_findings, 0) > 0)
+      THEN 'L1: File upload rejected or flagged by Model Armor (check status_message / armor_verdict_reasons for unsupported MIME type, image scan error, or session file quota).'
     WHEN COALESCE(tool_failure_count, 0) > 0
       THEN 'L2: MCP/Agent tool call failed (inspect tool_error_messages and tool_call_summary).'
     WHEN turn_kind = 'CONNECTOR' AND COALESCE(is_failed, FALSE)
@@ -111,26 +140,42 @@ SELECT
     NULLIF(error_reason, '')
   ], ' | ') AS issue_summary,
   IF(
-    COALESCE(is_actionable_issue, FALSE) OR COALESCE(tool_failure_count, 0) > 0,
+    COALESCE(is_actionable_issue, FALSE) OR COALESCE(tool_failure_count, 0) > 0 OR COALESCE(armor_findings, 0) > 0,
     SUBSTR(
-      REGEXP_REPLACE(
+      TRIM(REGEXP_REPLACE(
         REGEXP_REPLACE(
-          COALESCE(
-            NULLIF(tool_error_messages, ''),
-            NULLIF(status_message, ''),
-            NULLIF(error_reason, ''),
-            IF(COALESCE(is_guardrail_blocked, FALSE), CONCAT('Guardrail Block: ', COALESCE(armor_verdict_reasons, guardrail_categories, 'Policy Match')), NULL),
-            NULLIF(skipped_reasons, ''),
-            turn_status
+          REGEXP_REPLACE(
+            REGEXP_REPLACE(
+              REGEXP_REPLACE(
+                REGEXP_REPLACE(
+                  COALESCE(
+                    NULLIF(tool_error_messages, ''),
+                    NULLIF(status_message, ''),
+                    NULLIF(error_reason, ''),
+                    IF(COALESCE(is_guardrail_blocked, FALSE) OR COALESCE(armor_findings, 0) > 0, CONCAT('Model Armor: ', COALESCE(armor_verdict_reasons, guardrail_categories, 'Policy Match')), NULL),
+                    IF(turn_status = 'SKIPPED' OR answer_state = 'SKIPPED', CONCAT('Answer skipped: ', COALESCE(NULLIF(skipped_reasons, ''), 'no reason logged')), NULL),
+                    turn_status
+                  ),
+                  r'[\w.+-]+@[\w-]+(?:\.[\w-]+)+',
+                  '<email>'
+                ),
+                r'https?://\S+',
+                '<url>'
+              ),
+              r'\b\d{4}-\d{2}-\d{2}[T ][\d:.]+(?:Z|[+-]\d{2}:?\d{2})?',
+              '<time>'
+            ),
+            r'(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b|\b[0-9a-f]{24,}\b',
+            '<id>'
           ),
-          r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}',
-          '<uuid>'
+          r'\d{5,}',
+          '<n>'
         ),
-        r'\b[0-9]{6,}\b',
-        '<id>'
-      ),
+        r'\s+',
+        ' '
+      )),
       1,
-      300
+      240
     ),
     CAST(NULL AS STRING)
   ) AS error_signature,
@@ -193,12 +238,61 @@ SELECT
     ),
     CAST(NULL AS STRING)
   ) AS cloud_trace_url,
+  ARRAY_TO_STRING([
+    turn_id,
+    SUBSTR(REGEXP_EXTRACT(turn_id, r'([^:]+)$'), 1, 14),
+    trace_id,
+    session_id,
+    user_email,
+    engine_key,
+    COALESCE(agent_name, IF(is_core_assistant, 'Core assistant', turn_kind)),
+    model_name,
+    api_method,
+    turn_status,
+    status_message,
+    error_reason,
+    skipped_reasons,
+    tool_names,
+    mcp_server_name,
+    tool_error_codes,
+    tool_error_messages,
+    tool_call_summary,
+    uploaded_file_names,
+    queried_data_stores,
+    citation_sources,
+    guardrail_categories,
+    armor_verdict_reasons,
+    armor_sdp_info_types,
+    prompt_preview,
+    response_preview
+  ], ' | ') AS search_text,
+  CONCAT(
+    '[Gemini Enterprise L1/L2 Escalation] ',
+    'Ticket: ', COALESCE(SUBSTR(REGEXP_EXTRACT(turn_id, r'([^:]+)$'), 1, 14), turn_id),
+    ' | Time: ', CAST(event_timestamp AS STRING),
+    ' | User: ', COALESCE(user_email, 'unknown'),
+    ' | Engine: ', COALESCE(engine_key, 'unknown'),
+    ' | Agent: ', COALESCE(agent_name, IF(is_core_assistant, 'Core assistant', turn_kind)),
+    ' | Session: ', COALESCE(session_id, 'n/a'),
+    ' | Trace: ', COALESCE(trace_id, 'n/a'),
+    ' | Status: ', COALESCE(turn_status, 'UNKNOWN'),
+    IF(latency_ms IS NOT NULL, CONCAT(' | Latency: ', CAST(latency_ms AS STRING), 'ms'), ''),
+    IF(tool_error_messages IS NOT NULL, CONCAT(' | Tool Errors: ', SUBSTR(tool_error_messages, 1, 400)), ''),
+    IF(status_message IS NOT NULL, CONCAT(' | API Error: ', SUBSTR(status_message, 1, 300)), ''),
+    IF(armor_verdict_reasons IS NOT NULL, CONCAT(' | Guardrail: ', SUBSTR(armor_verdict_reasons, 1, 300)), ''),
+    IF(prompt_preview IS NOT NULL, CONCAT(' | Prompt: ', SUBSTR(prompt_preview, 1, 300)), '')
+  ) AS escalation_ticket_text,
   -- Session-level context pre-joined via window functions so Looker Studio needs no data blend
   IF(
     session_id IS NULL,
     CAST(NULL AS INT64),
     ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY event_timestamp, turn_id)
   ) AS session_step_number,
+  IF(
+    session_id IS NULL,
+    TRUE,
+    ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY event_timestamp, turn_id) = 1
+  ) AS is_session_first_turn,
   IF(
     session_id IS NULL,
     CAST(NULL AS INT64),
@@ -244,3 +338,4 @@ SELECT
     LOGICAL_OR(COALESCE(is_actionable_issue, FALSE) OR COALESCE(tool_failure_count, 0) > 0) OVER (PARTITION BY session_id)
   ) AS session_has_issue
 FROM `{{mart}}.fct_turns`
+
