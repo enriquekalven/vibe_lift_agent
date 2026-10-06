@@ -4,19 +4,30 @@ This guide covers the deployed **`vibelift_mart.v_looker_l1_l2_support`** BigQue
 
 ---
 
-## 1. One-Click Looker Studio Creation Links
+## 1. Fastest Way to Open in Looker Studio (Zero Link Errors)
 
-Click either URL below to open Looker Studio in edit mode with the BigQuery connector pre-configured and bound directly to `v_looker_l1_l2_support`:
+> **Why `/reporting/create` URLs fail without a template ID:** Looker Studio's `/reporting/create` Linking API throws *"Something went wrong when building your report"* when called without an existing `c.reportId` template or `ds.billingProjectId` on a BigQuery View. Use **Option A (BigQuery Console 1-Click Handoff)** or **Option B (Looker Studio Home)** below — both work 100% of the time.
 
-- **[Open Looker Studio Connected to `gemini-enterprise-stage.vibelift_mart.v_looker_l1_l2_support`](https://lookerstudio.google.com/reporting/create?c.mode=edit&ds.connector=bigQuery&ds.projectId=gemini-enterprise-stage&ds.type=TABLE&ds.datasetId=vibelift_mart&ds.tableId=v_looker_l1_l2_support&r.reportName=Gemini+Enterprise+L1%2FL2+IT+Support+%28Stage%29)**
-- **[Open Looker Studio Connected to `project-maui.vibelift_mart.v_looker_l1_l2_support`](https://lookerstudio.google.com/reporting/create?c.mode=edit&ds.connector=bigQuery&ds.projectId=project-maui&ds.type=TABLE&ds.datasetId=vibelift_mart&ds.tableId=v_looker_l1_l2_support&r.reportName=Gemini+Enterprise+L1%2FL2+IT+Support+%28Maui%29)**
+### Option A (Recommended — 2 Clicks via BigQuery Console):
+1. Click the BigQuery Console link for your environment to open `v_looker_l1_l2_support` directly:
+   - **[Open `gemini-enterprise-stage.vibelift_mart.v_looker_l1_l2_support` in BigQuery Console](https://console.cloud.google.com/bigquery?project=gemini-enterprise-stage&ws=!1m5!1m4!4m3!1sgemini-enterprise-stage!2svibelift_mart!3sv_looker_l1_l2_support)**
+   - **[Open `project-maui.vibelift_mart.v_looker_l1_l2_support` in BigQuery Console](https://console.cloud.google.com/bigquery?project=project-maui&ws=!1m5!1m4!4m3!1sproject-maui!2svibelift_mart!3sv_looker_l1_l2_support)**
+2. In the BigQuery Console toolbar at the top of the view tab, click **Export → Explore with Looker Studio**.
+3. Once Looker Studio opens with the view loaded, click **Save and Share** (top right) → **Acknowledge and save** to unlock full multi-page report editing.
 
-### Step-by-Step Setup Walkthrough (5–10 Minutes)
+### Option B (Directly in Looker Studio — 3 Clicks):
+1. Open **[Looker Studio Home (`lookerstudio.google.com`)](https://lookerstudio.google.com/)**.
+2. Click **Create** (top-left) → **Report**.
+3. In the *Add data to report* panel, select **BigQuery** → choose:
+   - **Project**: `gemini-enterprise-stage` *(or `project-maui`)*
+   - **Dataset**: `vibelift_mart`
+   - **Table / View**: `v_looker_l1_l2_support`
+   - Click **Add** → **Add to report**.
 
-1. **Step 1 — Open & Save the Report**:
-   - Click the **`gemini-enterprise-stage`** link above (or connect manually via **lookerstudio.google.com → Create → Report → BigQuery → Project: `gemini-enterprise-stage` → Dataset: `vibelift_mart` → Table: `v_looker_l1_l2_support` → Add**).
-   - In the top-right corner of Looker Studio, click **Save and Share** → **Acknowledge and save** to convert the template into a permanent editable report.
-   - Set the canvas size for wide tables: click an empty area of the canvas → in the right-hand **Theme and layout** panel, click the **Layout** tab → under **Canvas size**, choose **16:9 Landscape (1920 × 1080)** or **Custom (`1800 × 1600`)**.
+### Step-by-Step Layout Walkthrough (5–10 Minutes)
+
+1. **Step 1 — Widen the Canvas**:
+   - Once your report is open in Edit mode, click an empty area of the canvas → in the right-hand **Theme and layout** panel, click the **Layout** tab → under **Canvas size**, choose **16:9 Landscape (1920 × 1080)** or **Custom (`1800 × 1600`)**.
 
 2. **Step 2 — Configure the 2 Deep-Link URL Columns (One-Time Data Source Setting)**:
    - In the top menu bar, click **Resource → Manage added data sources → Edit** (next to `v_looker_l1_l2_support`).
