@@ -11,6 +11,43 @@ Click either URL below to open Looker Studio in edit mode with the BigQuery conn
 - **[Open Looker Studio Connected to `gemini-enterprise-stage.vibelift_mart.v_looker_l1_l2_support`](https://lookerstudio.google.com/reporting/create?c.mode=edit&ds.connector=bigQuery&ds.projectId=gemini-enterprise-stage&ds.type=TABLE&ds.datasetId=vibelift_mart&ds.tableId=v_looker_l1_l2_support&r.reportName=Gemini+Enterprise+L1%2FL2+IT+Support+%28Stage%29)**
 - **[Open Looker Studio Connected to `project-maui.vibelift_mart.v_looker_l1_l2_support`](https://lookerstudio.google.com/reporting/create?c.mode=edit&ds.connector=bigQuery&ds.projectId=project-maui&ds.type=TABLE&ds.datasetId=vibelift_mart&ds.tableId=v_looker_l1_l2_support&r.reportName=Gemini+Enterprise+L1%2FL2+IT+Support+%28Maui%29)**
 
+### Step-by-Step Setup Walkthrough (5–10 Minutes)
+
+1. **Step 1 — Open & Save the Report**:
+   - Click the **`gemini-enterprise-stage`** link above (or connect manually via **lookerstudio.google.com → Create → Report → BigQuery → Project: `gemini-enterprise-stage` → Dataset: `vibelift_mart` → Table: `v_looker_l1_l2_support` → Add**).
+   - In the top-right corner of Looker Studio, click **Save and Share** → **Acknowledge and save** to convert the template into a permanent editable report.
+   - Set the canvas size for wide tables: click an empty area of the canvas → in the right-hand **Theme and layout** panel, click the **Layout** tab → under **Canvas size**, choose **16:9 Landscape (1920 × 1080)** or **Custom (`1800 × 1600`)**.
+
+2. **Step 2 — Configure the 2 Deep-Link URL Columns (One-Time Data Source Setting)**:
+   - In the top menu bar, click **Resource → Manage added data sources → Edit** (next to `v_looker_l1_l2_support`).
+   - Find **`cloud_logging_url`** and **`cloud_trace_url`** → change their **Type** from `Text` to **`URL`**.
+   - Find **`event_date`** → confirm it is set as the **Default date range dimension**. Click **Done** (top right) and **Close**.
+
+3. **Step 3 — Add the Top Filter Bar (Page 1)**:
+   - Click **Add a control** in the top toolbar:
+     - **Date range control**: Place at top-right → set default to **Last 30 days** (or **This quarter**).
+     - **Drop-down list**: Place 6 drop-downs across the top row and drag one field into each **Control field**:
+       1. `needs_support_attention`
+       2. `support_tier`
+       3. `issue_category`
+       4. `engine_key`
+       5. `user_email`
+       6. `session_id`
+     - **Input box**: Place next to the drop-downs → set **Control field** to `prompt_preview` → in the **Style** tab, set **Search type** to **Contains** (lets support engineers search by keyword).
+
+4. **Step 4 — Add the KPI Scorecards, Charts & L1/L2 Incident Queue Table (Page 1)**:
+   - Delete the default starter table Looker Studio puts on the canvas.
+   - **KPI Scorecards**: Click **Add a chart → Scorecard** and drag the fields from **[Section 3.B](#b-top-kpi-scorecards-row-1--8-cards)** below.
+   - **Charts**: Add the **Stacked Combo Chart** (`event_date` + `support_tier`), **Horizontal Bar Chart** (`issue_category`), and **Blast Radius Table** (`error_signature` ranked by `COUNT_DISTINCT(user_email)`). At the bottom of the **Setup** panel for each chart, check ✅ **Cross-filtering**.
+   - **L1/L2 Incident Queue Table**: Click **Add a chart → Table**, stretch it full-width across the bottom of Page 1, and drag the columns listed in **[Section 3.D](#d-l1l2-incident-queue--runbook-table-row-3--full-width)**. In the **Style** tab of the table, check ✅ **Wrap text** under **Table Body** so full prompts, responses, tool errors, and runbooks are readable inline.
+
+5. **Step 5 — Add Pages 2, 3, and 4**:
+   - In the top-left toolbar, click **Page → New page** (repeat 3 times) and rename the pages via **Page → Manage pages**:
+     - **Page 1**: `1. L1/L2 Triage & Issues` (follow Section 3)
+     - **Page 2**: `2. Session Explorer & Replay` (follow Section 4 — place the **Session Summary Table** on top with ✅ **Cross-filtering** enabled, and the **Turn-by-Turn Replay Table** sorted by `session_step_number` Ascending on the bottom)
+     - **Page 3**: `3. Users, Agents & MCP Tools` (follow Section 5)
+     - **Page 4**: `4. Model Armor & SDP Security` (follow Section 6)
+
 ---
 
 ## 2. Zero 1:N Row Fan-Out & Sub-Second Latency Architecture
