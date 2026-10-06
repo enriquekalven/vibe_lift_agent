@@ -145,10 +145,20 @@ class ProvisionerTest(unittest.TestCase):
     self.assertTrue(ddl.startswith('CREATE OR REPLACE VIEW `example-project.vibelift_mart.fct_turns`'))
 
   def test_inline_view_refs_for_dry_run(self):
-    bodies = {'m.a': 'SELECT 1 AS x', 'm.b': 'SELECT x FROM `p-proj1.m.a`'}
-    sql = provision.inline_view_refs('SELECT * FROM `p-proj1.m.b`', 'p-proj1', bodies)
+    bodies = {
+        'm.a': '-- comment with `p-proj1.m.a`\nSELECT 1 AS x',
+        'm.b': '-- comment referencing `p-proj1.m.a` inline\nSELECT x FROM `p-proj1.m.a`',
+    }
+    sql = provision.inline_view_refs('-- header `p-proj1.m.b`\nSELECT * FROM `p-proj1.m.b`', 'p-proj1', bodies)
     self.assertNotIn('`p-proj1.m.', sql)
+    self.assertNotIn('--', sql)
     self.assertIn('SELECT 1 AS x', sql)
+    sources = provision.resolve_sources('example-project', 'US', 30, _describe_all_found)
+    all_bodies = provision.build_view_bodies('example-project', 'ds_ge_curated_staging', 'vibelift_mart', sources)
+    for name, body in all_bodies.items():
+      inlined = provision.inline_view_refs(body, 'example-project', all_bodies)
+      self.assertNotIn('`example-project.ds_ge_curated_staging.', inlined, name)
+      self.assertNotIn('`example-project.vibelift_mart.', inlined, name)
 
 
 class TemplateDefectFixTest(unittest.TestCase):

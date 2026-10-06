@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Automated conservation and reconciliation invariant verifier for the Gemini Enterprise mart.
 
-Runs 10 mathematical zero-loss invariants across the curated views (`v_user_activity_curated`,
+Runs 13 mathematical zero-loss invariants across the curated views (`v_user_activity_curated`,
 `v_agentic_operations_curated`, `v_consolidated_audit_log`, `v_model_armor_curated`) and mart
-objects (`v_fct_turns`, `fct_turns`, `fct_sessions`, `agg_daily_usage`). Any non-zero violation
-causes a non-zero exit code so CI/CD or post-provision checks fail immediately on data loss,
-fan-out, or schema drift.
+objects (`v_fct_turns`, `fct_turns`, `fct_sessions`, `agg_daily_usage`, `v_looker_l1_l2_support`).
+Any non-zero violation causes a non-zero exit code so CI/CD or post-provision checks fail
+immediately on data loss, fan-out, or schema drift.
 
 Usage:
   python3 deploy/bigquery/verify_ge_mart_invariants.py --project project-maui
@@ -44,7 +44,7 @@ class InvariantResult:
 
 
 def build_invariant_sql(project: str, curated_dataset: str, mart_dataset: str) -> str:
-  """Builds a single BigQuery SQL query returning (name, violations, detail) for all 10 invariants."""
+  """Builds a single BigQuery SQL query returning (name, violations, detail) for all 13 invariants."""
   provision.validate_project(project)
   provision.validate_dataset(curated_dataset)
   provision.validate_dataset(mart_dataset)

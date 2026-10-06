@@ -1,5 +1,5 @@
 -- Denormalized L1/L2 Support & Session Triage view for Looker Studio.
--- Reads ONLY the materialized, date-partitioned `{{mart}}.fct_turns` table so Looker Studio
+-- Reads ONLY the materialized, date-partitioned fct_turns table so Looker Studio
 -- scorecards, filter controls, and drill-down tables execute in sub-second time without data blends
 -- or raw JSON log scans.
 SELECT

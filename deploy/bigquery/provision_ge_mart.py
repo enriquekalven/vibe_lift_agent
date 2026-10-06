@@ -366,6 +366,7 @@ def object_ddl(project: str, qualified_name: str, body: str, description: str) -
 
 def inline_view_refs(sql: str, project: str, bodies: Mapping[str, str]) -> str:
   """Replaces references to not-yet-created views with their SQL, for dry-run validation."""
+  sql = '\n'.join(line for line in sql.splitlines() if not line.lstrip().startswith('--'))
   for name, body in bodies.items():
     ref = f'`{project}.{name}`'
     if ref in sql:

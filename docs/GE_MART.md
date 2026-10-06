@@ -67,7 +67,7 @@ python3 deploy/bigquery/provision_ge_mart.py --project PROJECT --gcloud-auth --a
 # Rebuild only fct_turns (run this on a schedule) and verify invariants
 python3 deploy/bigquery/provision_ge_mart.py --project PROJECT --gcloud-auth --refresh
 
-# Run the 12 mathematical conservation & reconciliation invariants standalone
+# Run the 13 mathematical conservation & reconciliation invariants standalone
 python3 deploy/bigquery/verify_ge_mart_invariants.py --project PROJECT
 
 # Print only the standalone CREATE OR REPLACE TABLE ... fct_turns DDL for BigQuery Scheduled Queries
