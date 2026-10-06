@@ -96,17 +96,19 @@ To guarantee that Looker Studio scorecards never double-count turns or tokens an
 
 ### B. Top KPI Scorecards (Row 1 — 8 Cards + Data Freshness Header)
 
-| Scorecard Title | Metric / Field | Aggregation | Conditional Formatting |
+> **1-Click Shortcut for Scorecards:** Because `v_looker_l1_l2_support` is strictly **1 row per `turn_id`**, Looker Studio's default **`Record Count`** metric gives the exact same result as `Count Distinct(turn_id)`. To rename any scorecard or change its aggregation, hover over the left side of the metric pill (`AUT` / `CTD` / `SUM`) in the **Setup** panel until the **pencil icon (`✏️`)** appears, click it, and type the scorecard title.
+
+| Scorecard Title | Metric / Field | Aggregation | Chart Filter (Setup → Add a filter) |
 |---|---|---|---|
-| **Total Turns** | `turn_id` | `COUNT_DISTINCT` | Neutral (Blue) |
-| **Needs Support Attention** | `needs_support_attention` (Filter: `needs_support_attention = true`) | `COUNT_DISTINCT(turn_id)` | Red if `> 0` |
-| **Failed API / Platform Turns** | `is_failed` (Filter: `is_failed = true`) | `COUNT_DISTINCT(turn_id)` | Red if `> 0` |
-| **No Answer / Skipped Turns** | `issue_category` (Filter: `issue_category = "No Answer / Skipped"`) | `COUNT_DISTINCT(turn_id)` | Amber if `> 0` |
-| **Guardrail / DLP Blocks** | `is_guardrail_blocked` (Filter: `is_guardrail_blocked = true`) | `COUNT_DISTINCT(turn_id)` | Amber/Red if `> 0` |
-| **Model Armor Findings** | `armor_findings` | `SUM` | Amber if `> 0` |
-| **MCP / Tool Call Failures** | `tool_failure_count` | `SUM` | Orange/Red if `> 0` |
-| **Affected Users** | `user_email` (Filter: `needs_support_attention = true`) | `COUNT_DISTINCT` | Amber if `> 0` |
-| **Mart Last Refreshed (Header)** | `refreshed_at` | `MAX` | Displays exact UTC timestamp of the materialized `fct_turns` snapshot |
+| **Total Turns** | `Record Count` *(or `turn_id`)* | `AUT` *(or `Count Distinct`)* | *None* |
+| **Needs Support Attention** | `Record Count` *(or `turn_id`)* | `AUT` *(or `Count Distinct`)* | `Include needs_support_attention = true` |
+| **Failed API / Platform Turns** | `Record Count` *(or `turn_id`)* | `AUT` *(or `Count Distinct`)* | `Include is_failed = true` |
+| **No Answer / Skipped Turns** | `Record Count` *(or `turn_id`)* | `AUT` *(or `Count Distinct`)* | `Include issue_category = No Answer / Skipped` |
+| **Guardrail / DLP Blocks** | `Record Count` *(or `turn_id`)* | `AUT` *(or `Count Distinct`)* | `Include is_guardrail_blocked = true` |
+| **Model Armor Findings** | `armor_findings` | `SUM` | *None* |
+| **MCP / Tool Call Failures** | `tool_failure_count` | `SUM` | *None* |
+| **Affected Users** | `user_email` | `Count Distinct (CTD)` | `Include needs_support_attention = true` |
+| **Mart Last Refreshed (Header)** | `refreshed_at` | `MAX` | *None* |
 
 ---
 
