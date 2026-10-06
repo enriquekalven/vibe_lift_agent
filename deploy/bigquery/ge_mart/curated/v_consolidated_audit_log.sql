@@ -9,11 +9,11 @@
 --     operation.id (operation.first=true and operation.last=true at the same timestamp).
 --     Deduplicate by operation.id so each RPC is counted once.
 WITH audit AS (
-  SELECT 'ADMIN_ACTIVITY' AS audit_log_type, timestamp, trace, insertId, severity,
+  SELECT 'ADMIN_ACTIVITY' AS audit_log_type, timestamp, trace, spanId, insertId, severity,
          protopayload_auditlog AS pp, operation AS op
   FROM ({{src_audit_activity}})
   UNION ALL
-  SELECT 'DATA_ACCESS' AS audit_log_type, timestamp, trace, insertId, severity,
+  SELECT 'DATA_ACCESS' AS audit_log_type, timestamp, trace, spanId, insertId, severity,
          protopayload_auditlog AS pp, operation AS op
   FROM ({{src_audit_data_access}})
 ),
@@ -47,6 +47,7 @@ SELECT
   audit_log_type,
   severity,
   LOWER(REGEXP_EXTRACT(trace, r'([0-9a-fA-F]{32})$')) AS trace_id,
+  NULLIF(spanId, '') AS span_id,
   insertId AS insert_id,
   LAX_STRING(pp.serviceName) AS service_name,
   method_name,

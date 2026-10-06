@@ -55,7 +55,13 @@ _PROJECT_RE = re.compile(r'^(?:[a-z][a-z0-9\-]{1,61}[a-z0-9]\.[a-z]{2,}:)?[a-z][
 _DATASET_RE = re.compile(r'^[A-Za-z0-9_]{1,1024}$')
 _TABLE_RE = re.compile(r'^[A-Za-z0-9_\-]{1,1024}$')
 _PLACEHOLDER_RE = re.compile(r'\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}')
-_SCALAR_COLUMNS = (('timestamp', 'TIMESTAMP'), ('trace', 'STRING'), ('insertId', 'STRING'), ('severity', 'STRING'))
+_SCALAR_COLUMNS = (
+    ('timestamp', 'TIMESTAMP'),
+    ('trace', 'STRING'),
+    ('spanId', 'STRING'),
+    ('insertId', 'STRING'),
+    ('severity', 'STRING'),
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -213,6 +219,8 @@ def source_sql(table_ref: str | None, schema: Mapping[str, str] | None, json_col
       cols.append(f'`{name}`')
     elif name == 'insertId' and 'insert_id' in schema:
       cols.append('`insert_id` AS insertId')
+    elif name == 'spanId' and 'span_id' in schema:
+      cols.append('`span_id` AS spanId')
     else:
       cols.append(f'CAST(NULL AS {sql_type}) AS {name}')
   extra_where = ''

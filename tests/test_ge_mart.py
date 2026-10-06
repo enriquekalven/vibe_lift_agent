@@ -302,6 +302,7 @@ class TemplateDefectFixTest(unittest.TestCase):
     self.assertNotIn('v_fct_turns', looker)
     for col in (
         'AS ticket_id',
+        'span_id',
         'AS needs_support_attention',
         'AS support_tier',
         'AS issue_type',
@@ -336,6 +337,7 @@ class TemplateDefectFixTest(unittest.TestCase):
     ):
       self.assertIn(col, looker)
     for col in (
+        'span_id',
         'armor_file_pairs',
         'armor_by_file_upload',
         'prompt_preview',

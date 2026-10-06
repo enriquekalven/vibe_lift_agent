@@ -13,6 +13,7 @@ WITH ops AS (
   SELECT
     timestamp AS event_timestamp,
     LOWER(REGEXP_EXTRACT(trace, r'([0-9a-fA-F]{32})$')) AS trace_id,
+    NULLIF(spanId, '') AS span_id,
     insertId AS insert_id,
     jsonPayload AS jp,
     labels AS lb,
@@ -89,6 +90,7 @@ SELECT
   DATE(event_timestamp) AS event_date,
   CONCAT('INFERENCE:', COALESCE(insert_id, CAST(UNIX_MICROS(event_timestamp) AS STRING))) AS event_id,
   trace_id,
+  span_id,
   insert_id,
   NULLIF(COALESCE(
     LAX_STRING(jp.gen_ai_conversation_id),

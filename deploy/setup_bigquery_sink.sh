@@ -21,8 +21,8 @@
 #      - vw_fleet_finops_summary
 #   2b. Raw log retention: VIBELIFT_RETENTION_DAYS (default 90) via deploy/set_log_retention.sh
 #   4. Curated Staging Views & Reporting Mart (via deploy/bigquery/provision_ge_mart.py):
-#      - ds_ge_curated_staging (v_user_activity_curated, v_agentic_operations_curated, v_consolidated_audit_log)
-#      - vibelift_mart (v_fct_turns, fct_turns, fct_sessions, agg_daily_usage)
+#      - ds_ge_curated_staging (v_user_activity_curated, v_agentic_operations_curated, v_consolidated_audit_log, v_model_armor_curated)
+#      - vibelift_mart (v_fct_turns, fct_turns, fct_sessions, agg_daily_usage, v_looker_l1_l2_support)
 #
 # Idempotent and safe to run on existing or clean GCP projects.
 set -euo pipefail
@@ -33,6 +33,8 @@ PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-$(gcloud config get-value project 2>/dev/nul
 BQ_LOCATION="${BQ_LOCATION:-US}"
 REGION="${GOOGLE_CLOUD_REGION:-us-central1}"
 DATASET_ID="vibelift_analytics"
+CURATED_DATASET="${VIBELIFT_GE_CURATED_DATASET:-ds_ge_curated_staging}"
+MART_DATASET="${VIBELIFT_GE_MART_DATASET:-vibelift_mart}"
 # Days of raw log history kept in BigQuery and read by the mart (see deploy/set_log_retention.sh).
 RETENTION_DAYS="${VIBELIFT_RETENTION_DAYS:-90}"
 SINK_NAME="vibelift-telemetry-sink"
@@ -81,8 +83,8 @@ create_dataset_if_missing "ds_vertex_agents_raw" "Vertex AI Reasoning Engine and
 create_dataset_if_missing "ds_ge_audit_raw" "Gemini Enterprise and Cloud Audit data access & activity log sink"
 create_dataset_if_missing "ds_security_guardrails_raw" "Model Armor and Sensitive Data Protection guardrail log sink"
 create_dataset_if_missing "${DATASET_ID}" "VibeLift agent runtime turns, evaluations, and optimizer snapshots"
-create_dataset_if_missing "ds_ge_curated_staging" "Curated typed views over raw Gemini Enterprise log sinks"
-create_dataset_if_missing "vibelift_mart" "VibeLift turn, session, and daily usage reporting mart"
+create_dataset_if_missing "${CURATED_DATASET}" "Curated typed views over raw Gemini Enterprise log sinks"
+create_dataset_if_missing "${MART_DATASET}" "VibeLift turn, session, and daily usage reporting mart"
 
 # 3. Helper to create or update Cloud Logging Sinks idempotently
 configure_sink() {
@@ -293,12 +295,13 @@ echo "--- Step 4: Provisioning Curated Staging Views & Reporting Mart ---"
 # Raw tables that do not exist yet (no logs routed so far) resolve to empty views, not errors.
 MART_STATUS="ok"
 if ! python3 deploy/bigquery/provision_ge_mart.py --project="${PROJECT_ID}" --location="${BQ_LOCATION}" \
+    --curated-dataset="${CURATED_DATASET}" --mart-dataset="${MART_DATASET}" \
     --gcloud-auth --apply --lookback-days="${RETENTION_DAYS}"; then
   MART_STATUS="failed"
-  echo "ERROR: provision_ge_mart.py failed; curated views and vibelift_mart may be incomplete." >&2
+  echo "ERROR: provision_ge_mart.py failed; curated views and ${MART_DATASET} may be incomplete." >&2
   echo "  Needs: python3 with 'pip install -r requirements.txt' (google-cloud-bigquery), and BigQuery" >&2
   echo "  Data Editor + Job User for your account. Re-run just this step with:" >&2
-  echo "  python3 deploy/bigquery/provision_ge_mart.py --project=${PROJECT_ID} --location=${BQ_LOCATION} --gcloud-auth --apply --lookback-days=${RETENTION_DAYS}" >&2
+  echo "  python3 deploy/bigquery/provision_ge_mart.py --project=${PROJECT_ID} --location=${BQ_LOCATION} --curated-dataset=${CURATED_DATASET} --mart-dataset=${MART_DATASET} --gcloud-auth --apply --lookback-days=${RETENTION_DAYS}" >&2
 fi
 
 echo ""
@@ -311,8 +314,8 @@ echo "   - \`${PROJECT_ID}.ds_vertex_agents_raw\`"
 echo "   - \`${PROJECT_ID}.ds_ge_audit_raw\`"
 echo "   - \`${PROJECT_ID}.ds_security_guardrails_raw\`"
 echo "   - \`${PROJECT_ID}.${DATASET_ID}\`"
-echo "   - \`${PROJECT_ID}.ds_ge_curated_staging\`"
-echo "   - \`${PROJECT_ID}.vibelift_mart\` (provisioning: ${MART_STATUS})"
+echo "   - \`${PROJECT_ID}.${CURATED_DATASET}\`"
+echo "   - \`${PROJECT_ID}.${MART_DATASET}\` (provisioning: ${MART_STATUS})"
 echo ""
 echo " Raw log retention: ${RETENTION_DAYS} days (mart lookback: ${RETENTION_DAYS} days)"
 echo ""

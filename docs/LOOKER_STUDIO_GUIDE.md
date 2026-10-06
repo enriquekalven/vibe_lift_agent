@@ -90,25 +90,25 @@ To guarantee that Looker Studio scorecards never double-count turns or tokens an
 | **Drop-down list** | `engine_key` | Filter by Gemini Enterprise App / Engine (`location/engine_id`) |
 | **Drop-down list** | `user_email` | Look up a specific user reporting an issue |
 | **Drop-down list** | `session_id` | Isolate a single conversation session |
-| **Input box (Omni-Search)** | `search_text` | Single free-text search box (set to **Contains**) that searches across 26 fields simultaneously: prompts, responses, `turn_id`, `ticket_id`, `trace_id`, `session_id`, `user_email`, `agent_name`, `tool_names`, `tool_error_messages`, `queried_data_stores`, `uploaded_file_names`, `citation_sources`, and `armor_verdict_reasons` |
+| **Input box (Omni-Search)** | `search_text` | Single free-text search box (set to **Contains**) that searches across 27 fields simultaneously: prompts, responses, `turn_id`, `ticket_id`, `trace_id`, `span_id`, `session_id`, `user_email`, `agent_name`, `tool_names`, `tool_error_messages`, `queried_data_stores`, `uploaded_file_names`, `citation_sources`, and `armor_verdict_reasons` |
 
 ---
 
 ### B. Top KPI Scorecards (Row 1 — 8 Cards + Data Freshness Header)
 
-> **1-Click Shortcut for Scorecards:** Because `v_looker_l1_l2_support` is strictly **1 row per `turn_id`**, Looker Studio's default **`Record Count`** metric gives the exact same result as `Count Distinct(turn_id)`. To rename any scorecard or change its aggregation, hover over the left side of the metric pill (`AUT` / `CTD` / `SUM`) in the **Setup** panel until the **pencil icon (`✏️`)** appears, click it, and type the scorecard title.
+> **How to set titles on Scorecards (`CTD` / `SUM`):** When you drag `turn_id` (or `user_email`) into **Metric**, Looker Studio automatically sets the badge on the left of the pill to **`CTD`** (**Count Distinct**). Hover over **`CTD`** (or **`SUM`**) until it turns into a **pencil icon (`✏️`)**, click it, and type the **Scorecard Title** in the **Name** box.
 
-| Scorecard Title | Metric / Field | Aggregation | Chart Filter (Setup → Add a filter) |
+| Scorecard Title (via `✏️` icon) | Metric Field | Badge Shown in Looker Studio | Chart Filter (`Setup → Add a filter`) |
 |---|---|---|---|
-| **Total Turns** | `Record Count` *(or `turn_id`)* | `AUT` *(or `Count Distinct`)* | *None* |
-| **Needs Support Attention** | `Record Count` *(or `turn_id`)* | `AUT` *(or `Count Distinct`)* | `Include needs_support_attention = true` |
-| **Failed API / Platform Turns** | `Record Count` *(or `turn_id`)* | `AUT` *(or `Count Distinct`)* | `Include is_failed = true` |
-| **No Answer / Skipped Turns** | `Record Count` *(or `turn_id`)* | `AUT` *(or `Count Distinct`)* | `Include issue_category = No Answer / Skipped` |
-| **Guardrail / DLP Blocks** | `Record Count` *(or `turn_id`)* | `AUT` *(or `Count Distinct`)* | `Include is_guardrail_blocked = true` |
-| **Model Armor Findings** | `armor_findings` | `SUM` | *None* |
-| **MCP / Tool Call Failures** | `tool_failure_count` | `SUM` | *None* |
-| **Affected Users** | `user_email` | `Count Distinct (CTD)` | `Include needs_support_attention = true` |
-| **Mart Last Refreshed (Header)** | `refreshed_at` | `MAX` | *None* |
+| **Total Turns** | `turn_id` | **`CTD`** *(Count Distinct)* | *None* |
+| **Needs Support Attention** | `turn_id` | **`CTD`** *(Count Distinct)* | `Include` → `needs_support_attention` → `True` |
+| **Failed API / Platform Turns** | `turn_id` | **`CTD`** *(Count Distinct)* | `Include` → `is_failed` → `True` |
+| **No Answer / Skipped Turns** | `turn_id` | **`CTD`** *(Count Distinct)* | `Include` → `issue_category` → `Equals` → `No Answer / Skipped` |
+| **Guardrail / DLP Blocks** | `turn_id` | **`CTD`** *(Count Distinct)* | `Include` → `is_guardrail_blocked` → `True` |
+| **Model Armor Findings** | `armor_findings` | **`SUM`** | *None* |
+| **MCP / Tool Call Failures** | `tool_failure_count` | **`SUM`** | *None* |
+| **Affected Users** | `user_email` | **`CTD`** *(Count Distinct)* | `Include` → `needs_support_attention` → `True` |
+| **Mart Last Refreshed (Header)** | `refreshed_at` | **`MAX`** | *None* |
 
 ---
 
@@ -139,32 +139,23 @@ To guarantee that Looker Studio scorecards never double-count turns or tokens an
 
 ### D. L1/L2 Incident Queue & Runbook Table (Row 3 — Full Width)
 
+> **Important Looker Studio Limit (Max 10 Dimensions per Table):** A Looker Studio Table allows a maximum of **10 Dimensions** at once. Put `session_id` and `trace_id` in your first 10 dimensions (and skip `ticket_id`) so they are always visible!
+
 Add a **Table** with **Cross-filtering** and **Text Wrapping** enabled:
 
-- **Dimensions (in column order)**:
-  1. `ticket_id` *(Short 14-char incident key)*
-  2. `event_timestamp` *(Sort Descending)*
-  3. `support_tier` *(`L1 - User / Input / Policy` vs `L2 - Platform / Agent / MCP`)*
-  4. `issue_type` *(`Guardrail block`, `Access denied`, `Platform error`, `Tool error`, `No answer`, `Healthy`)*
-  5. `issue_category`
-  6. `user_email`
-  7. `engine_key`
-  8. `agent_name` *(Never NULL — automatically falls back to `Search`, `File upload`, `Widget action`, or `Core assistant`)*
-  9. `prompt_preview` *(User prompt / query text or `[Confirmed Action: ...]`)*
-  10. `response_preview` *(Assistant reply or search result count summary)*
-  11. `l1_runbook_action` *(Prescriptive step-by-step L1/L2 remediation guidance)*
-  12. `escalation_ticket_text` *(Pre-formatted 1-click copyable L1→L2 Jira/ServiceNow ticket payload with trace, session, user, latency, tool errors, and runbook)*
-  13. `issue_summary` *(Combined method, status, guardrail category, failed tools, and error message)*
-  14. `tool_error_codes` *(Pre-aggregated error codes, e.g., `MCP_PAYLOAD_ERROR`, `400`, `500`)*
-  15. `tool_error_messages` *(Exact tool error strings across all failed tool calls in the turn)*
-  16. `queried_data_stores` *(Data stores / federated connectors queried or implicated in error)*
-  17. `uploaded_file_names` *(Uploaded file names / session `fileId`s)*
-  18. `armor_verdict_reasons` *(Model Armor verdict reasons & `armor_sdp_info_types`)*
-  19. `session_id`
-  20. `trace_id`
-  21. `cloud_logging_url` *(Configure field type as **URL → Hyperlink** with label `"Open in Cloud Logging"`)*
-  22. `cloud_trace_url` *(Configure field type as **URL → Hyperlink** with label `"Open in Cloud Trace"`)*
-- **Metrics**:
+- **Top 10 Dimensions (drag in this exact order so all 10 fit in Looker Studio)**:
+  1. `event_timestamp` *(Sort Descending)*
+  2. `support_tier` *(`L1 - User / Input / Policy` vs `L2 - Platform / Agent / MCP`)*
+  3. `issue_category` *(`MCP / Agent Tool Failure`, `Guardrail / DLP Block`, etc.)*
+  4. `user_email`
+  5. `session_id` *(Conversation session ID)*
+  6. `trace_id` *(Cloud Trace ID)*
+  7. `prompt_preview` *(User prompt / query text)*
+  8. `response_preview` *(Assistant reply or search result summary)*
+  9. `tool_error_messages` *(Exact tool error strings across failed tool calls, or `issue_summary`)*
+  10. `l1_runbook_action` *(Prescriptive step-by-step L1/L2 remediation guidance, or `cloud_logging_url`)*
+- *(Optional swap-in Dimensions if you want a second detail table below it)*: `span_id`, `turn_id`, `engine_key`, `agent_name`, `tool_error_codes`, `queried_data_stores`, `uploaded_file_names`, `armor_verdict_reasons`, `escalation_ticket_text`, `cloud_logging_url`, `cloud_trace_url`
+- **Metrics (no 10-column limit)**:
   - `latency_ms` (`AVG` or `MAX`)
   - `tool_failure_count` (`SUM`)
   - `total_tokens` (`SUM`)
@@ -204,25 +195,18 @@ Clicking any session row in this table automatically cross-filters the **Turn-by
 
 Reconstructs the exact chronological flow (`Step 1 → Step 2 → Step 3...`) of a user's session:
 
-- **Dimensions (in column order)**:
+- **Top 10 Dimensions (fits Looker Studio's 10-Dimension limit)**:
   1. `session_step_number` *(Sort Ascending: `1, 2, 3...`)*
   2. `event_timestamp`
-  3. `turn_kind` *(`CHAT`, `FILE_UPLOAD`, `WIDGET_ACTION`, `SEARCH`, `AGENT_CALL`)*
-  4. `api_method` *(`StreamAssist`, `UploadSessionFile`, `ExecuteUiWidgetAction`, `Search`)*
-  5. `turn_status` *(`SUCCESS`, `SKIPPED`, `SERVER_ERROR`, `PERMISSION_DENIED`, `RATE_LIMITED`, `MODEL_BLOCKED`)*
-  6. `prompt_preview` *(User prompt, query, or confirmed UI action)*
-  7. `response_preview` *(Assistant grounded response or streamed Model Armor reply)*
-  8. `uploaded_file_names` *(Files attached in this step)*
-  9. `queried_data_stores` *(Enterprise connectors / data stores queried)*
-  10. `citation_sources` *(Grounded reference titles/domains/URIs returned)*
-  11. `agent_name`
-  12. `model_name`
-  13. `tool_args_summary` *(Pre-aggregated tool calls and JSON arguments invoked during the turn)*
-  14. `tool_output_preview` *(Pre-aggregated tool output previews)*
-  15. `tool_error_messages` *(Pre-aggregated tool error messages if any tool call failed)*
-  16. `armor_verdict_reasons` *(Model Armor verdict & `armor_sdp_info_types`)*
-  17. `l1_runbook_action`
-  18. `cloud_logging_url`
+  3. `session_id`
+  4. `trace_id`
+  5. `turn_kind` *(`CHAT`, `FILE_UPLOAD`, `WIDGET_ACTION`, `SEARCH`, `AGENT_CALL`)*
+  6. `turn_status` *(`SUCCESS`, `SKIPPED`, `SERVER_ERROR`, `PERMISSION_DENIED`, `RATE_LIMITED`, `MODEL_BLOCKED`)*
+  7. `prompt_preview` *(User prompt, query, or confirmed UI action)*
+  8. `response_preview` *(Assistant grounded response or streamed Model Armor reply)*
+  9. `tool_args_summary` *(Pre-aggregated tool calls and JSON arguments invoked during the turn)*
+  10. `tool_error_messages` *(Pre-aggregated tool error messages if any tool call failed, or `cloud_logging_url`)*
+- *(Optional swap-in Dimensions)*: `uploaded_file_names`, `queried_data_stores`, `citation_sources`, `agent_name`, `model_name`, `tool_output_preview`, `armor_verdict_reasons`, `l1_runbook_action`, `cloud_logging_url`
 - **Metrics**:
   - `latency_ms`
   - `input_tokens`
@@ -240,13 +224,22 @@ Reconstructs the exact chronological flow (`Step 1 → Step 2 → Step 3...`) of
 
 Maps directly to the **Users** and **Agents** tabs of the MCP App (`zscaler-it-support`), enabling L1/L2 engineers to spot whether an issue is isolated to one user's ACLs/OAuth token or systemic to a specific Agent / MCP connector.
 
-### A. Agent & Engine Health Table (Top Half — Cross-Filtering Enabled)
+### A. Top Filter Controls (Page 3)
+- **Date range control**: `event_date`
+- **Drop-down list**: `engine_key` *(Filter by App / Engine)*
+- **Drop-down list**: `agent_name` *(Filter by Agent)*
+- **Drop-down list**: `mcp_server_name` *(Filter by MCP Server / Connector)*
+- **Drop-down list**: `user_email` *(Filter by User)*
+- **Drop-down list**: `has_tool_failure` *(Set to `true` to isolate failed MCP tool calls)*
+
+### B. Agent & Engine Health Table (Top Half — Cross-Filtering Enabled)
 - **Dimensions**:
   1. `agent_name` *(Includes stand-in labels `Search`, `File upload`, `Widget action`, and `Core assistant` so no rows appear as `null`)*
   2. `engine_key`
   3. `model_name`
   4. `model_selection_mode` *(`AUTO` vs `EXPLICIT`)*
   5. `mcp_server_name`
+  6. `tool_names`
 - **Metrics**:
   - `COUNT_DISTINCT(turn_id)` *(Total Turns)*
   - `COUNT_DISTINCT(user_email)` *(Active Users)*
@@ -258,7 +251,7 @@ Maps directly to the **Users** and **Agents** tabs of the MCP App (`zscaler-it-s
   - `SUM(cached_input_tokens)` *(Cached Input Tokens)*
   - `SUM(reasoning_tokens)` *(Reasoning Tokens)*
 
-### B. User Adoption & Issue Impact Table (Bottom Half — Cross-Filtering Enabled)
+### C. User Adoption & Issue Impact Table (Bottom Half — Cross-Filtering Enabled)
 - **Dimensions**:
   1. `user_email`
   2. `user_domain`
@@ -277,7 +270,15 @@ Maps directly to the **Users** and **Agents** tabs of the MCP App (`zscaler-it-s
 
 Maps directly to the **Model Armor & SDP** tab of the MCP App (`zscaler-it-support`).
 
-### A. Security KPI Scorecards (Row 1)
+### A. Top Filter Controls (Page 4)
+- **Date range control**: `event_date`
+- **Drop-down list**: `is_guardrail_blocked` *(`true` = show only blocked turns)*
+- **Drop-down list**: `guardrail_categories` *(`PROMPT_INJECTION`, `SENSITIVE_DATA`, `SAFETY_VIOLATION`, `MALICIOUS_URI`)*
+- **Drop-down list**: `armor_sdp_info_types` *(Filter by DLP InfoType: `PERSON_NAME`, `EMAIL_ADDRESS`, `CREDIT_CARD_NUMBER`, etc.)*
+- **Drop-down list**: `engine_key`
+- **Drop-down list**: `user_email`
+
+### B. Security KPI Scorecards (Row 1)
 - **Total Model Armor Checks**: `SUM(armor_checks)`
 - **Guardrail / DLP Blocked Turns**: `COUNT_DISTINCT(turn_id)` (Filter: `is_guardrail_blocked = true`)
 - **Model Armor Findings**: `SUM(armor_findings)`
@@ -285,21 +286,19 @@ Maps directly to the **Model Armor & SDP** tab of the MCP App (`zscaler-it-suppo
 - **Sensitive Data (SDP / DLP) Flags**: `COUNT_DISTINCT(turn_id)` (Filter: `is_sensitive_data = true`)
 - **Safety / Malicious URI Flags**: `COUNT_DISTINCT(turn_id)` (Filter: `is_safety_violation = true OR is_malicious_uri = true`)
 
-### B. Flagged & Inspected Turns Table (Row 2)
+### C. Flagged & Inspected Turns Table (Row 2)
 - **Chart Filter**: `armor_checks > 0 OR is_guardrail_blocked = true`
-- **Dimensions**:
+- **Top 10 Dimensions (fits Looker Studio's 10-Dimension limit)**:
   1. `event_timestamp`
   2. `user_email`
-  3. `engine_key`
-  4. `turn_kind` *(`CHAT`, `FILE_UPLOAD`, etc. — includes `UploadSessionFile` image/file scan findings)*
-  5. `turn_status`
+  3. `session_id`
+  4. `trace_id`
+  5. `turn_kind` *(`CHAT`, `FILE_UPLOAD`, etc. — includes `UploadSessionFile` image/file scan findings)*
   6. `guardrail_categories` *(`PROMPT_INJECTION`, `SENSITIVE_DATA`, `SAFETY_VIOLATION`, `MALICIOUS_URI`)*
   7. `armor_verdict_reasons` *(Specific Model Armor filter reason)*
   8. `armor_sdp_info_types` *(Specific DLP InfoTypes matched, e.g., `PERSON_NAME`, `EMAIL_ADDRESS`, `CREDIT_CARD_NUMBER`)*
   9. `prompt_preview`
-  10. `response_preview`
-  11. `l1_runbook_action`
-  12. `cloud_logging_url`
+  10. `l1_runbook_action` *(or `cloud_logging_url`)*
 - **Metrics**:
   - `armor_checks` (`SUM`)
   - `armor_findings` (`SUM`)

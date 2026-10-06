@@ -25,6 +25,8 @@ cd "$(dirname "$0")/.."
 
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
 BQ_LOCATION="${BQ_LOCATION:-US}"
+CURATED_DATASET="${VIBELIFT_GE_CURATED_DATASET:-ds_ge_curated_staging}"
+MART_DATASET="${VIBELIFT_GE_MART_DATASET:-vibelift_mart}"
 SCHEDULE="${VIBELIFT_REFRESH_SCHEDULE:-every 1 hours}"
 SA_EMAIL="${VIBELIFT_REFRESH_SA:-vibe-lift-runtime-sa@${PROJECT_ID}.iam.gserviceaccount.com}"
 RUN_NOW="${VIBELIFT_REFRESH_RUN_NOW:-1}"
@@ -35,17 +37,17 @@ if [[ -z "${PROJECT_ID}" ]]; then
   exit 1
 fi
 
-echo "Project: ${PROJECT_ID}  Location: ${BQ_LOCATION}  Schedule: ${SCHEDULE}"
+echo "Project: ${PROJECT_ID}  Location: ${BQ_LOCATION}  Mart: ${MART_DATASET}  Schedule: ${SCHEDULE}"
 echo "Runs as: ${SA_EMAIL}"
 
 if ! gcloud iam service-accounts describe "${SA_EMAIL}" --project="${PROJECT_ID}" &>/dev/null; then
   echo "ERROR: service account ${SA_EMAIL} not found. Run ./deploy/deploy_cloud_run.sh first," >&2
   echo "  or set VIBELIFT_REFRESH_SA to an account with BigQuery Job User, Data Viewer and" >&2
-  echo "  Data Editor on vibelift_mart." >&2
+  echo "  Data Editor on ${MART_DATASET}." >&2
   exit 1
 fi
-if ! bq show --format=none "${PROJECT_ID}:vibelift_mart.v_fct_turns" &>/dev/null; then
-  echo "ERROR: ${PROJECT_ID}:vibelift_mart.v_fct_turns not found. Run ./deploy/setup_bigquery_sink.sh first." >&2
+if ! bq show --format=none "${PROJECT_ID}:${MART_DATASET}.v_fct_turns" &>/dev/null; then
+  echo "ERROR: ${PROJECT_ID}:${MART_DATASET}.v_fct_turns not found. Run ./deploy/setup_bigquery_sink.sh first." >&2
   exit 1
 fi
 
@@ -64,7 +66,9 @@ gcloud iam service-accounts add-iam-policy-binding "${SA_EMAIL}" --project="${PR
 
 QUERY_FILE="$(mktemp)"
 trap 'rm -f "${QUERY_FILE}"' EXIT
-python3 deploy/bigquery/provision_ge_mart.py --project="${PROJECT_ID}" --print-refresh > "${QUERY_FILE}"
+python3 deploy/bigquery/provision_ge_mart.py --project="${PROJECT_ID}" \
+    --curated-dataset="${CURATED_DATASET}" --mart-dataset="${MART_DATASET}" \
+    --print-refresh > "${QUERY_FILE}"
 PARAMS=$(python3 -c 'import json,sys; print(json.dumps({"query": open(sys.argv[1]).read()}))' "${QUERY_FILE}")
 
 EXISTING=$(bq ls --transfer_config --transfer_location="${BQ_LOCATION}" --project_id="${PROJECT_ID}" \

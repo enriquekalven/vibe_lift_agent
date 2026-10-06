@@ -110,23 +110,26 @@ vibe_lift_agent/
 │       ├── template.py          # Dashboard HTML/JS
 │       ├── logo_asset.py        # Embedded brand assets
 │       └── static/              # Source logo images
-├── tests/                       # Offline test suite (204 tests, no live API calls; see docs/TESTING.md)
+├── tests/                       # Offline test suite (215 tests, no live API calls; see docs/TESTING.md)
 ├── deploy/
 │   ├── deploy_cloud_run.sh      # Tests, then idempotent Cloud Run + IAM deploy
 │   ├── cloudbuild.yaml          # Build -> test -> push -> deploy
 │   ├── cloud_run_service.yaml   # Declarative service reference
 │   ├── setup_bigquery_sink.sh   # BigQuery datasets, Logging sinks, analytics tables, curated views + mart
 │   ├── set_log_retention.sh     # Raw log retention (partition expiration, default 90 days)
+│   ├── fix_customer_sinks_and_retention.sh # Audits & remediates customer sinks, retention, and mart views
 │   ├── setup_mart_refresh.sh    # Hourly BigQuery scheduled query that rebuilds fct_turns
 │   ├── register_ge_agent.sh     # Deploys Custom MCP Data Store (BYO_MCP) & registers it + A2A agent to a GE App instance
 │   ├── setup_mcp_connector.py   # Deploys Custom MCP Data Store (NOT Agent Registry) & links dataStoreIds to GE App instance
 │   └── bigquery/
 │       ├── provision_ge_mart.py # Curated views + vibelift_mart (apply / refresh / scheduled-query DDL)
+│       ├── verify_ge_mart_invariants.py # 13 conservation & reconciliation invariants across raw/curated/mart
 │       └── ge_mart/             # SQL templates for the curated and mart layers
 ├── docs/
 │   ├── PERMISSIONS.md           # Every IAM role, API and org policy VibeLift needs
 │   ├── spec.md                  # Architecture and data-source specification
 │   ├── GE_MART.md               # Gemini Enterprise curated views and reporting mart
+│   ├── LOOKER_STUDIO_GUIDE.md   # 4-page Looker Studio L1/L2 IT Support Dashboard guide
 │   ├── SME_EVALUATION_REPORT.md # 6-Persona x 5-Dimension (30-check) SME evaluation report
 │   ├── HACKATHON_DEMO_SCRIPT.md # 3-minute high-impact demo script & Q&A cheat sheet
 │   ├── TESTING.md               # Requirement -> test map, CI gates
@@ -182,8 +185,8 @@ Runtime variables are read by the service (set on Cloud Run by `deploy/deploy_cl
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `VIBELIFT_GE_CURATED_DATASET` | `ds_ge_curated_staging` | Curated views dataset (see [docs/GE_MART.md](docs/GE_MART.md)). |
-| `VIBELIFT_GE_MART_DATASET` | `vibelift_mart` | Reporting mart dataset (`fct_turns`, `fct_sessions`, `agg_daily_usage`). |
+| `VIBELIFT_GE_CURATED_DATASET` | `ds_ge_curated_staging` | Curated views dataset (`v_user_activity_curated`, `v_agentic_operations_curated`, `v_consolidated_audit_log`, `v_model_armor_curated`; see [docs/GE_MART.md](docs/GE_MART.md)). |
+| `VIBELIFT_GE_MART_DATASET` | `vibelift_mart` | Reporting mart dataset (`v_fct_turns`, `fct_turns`, `fct_sessions`, `agg_daily_usage`, `v_looker_l1_l2_support`). |
 | `VIBELIFT_BILLING_EXPORT_TABLE` | *(empty)* | Cloud Billing BigQuery export table (`project.dataset.gcp_billing_export_v1_XXXX`). Empty = billed cost shown as unknown. |
 | `VIBELIFT_BQ_MAX_BYTES_BILLED` | `10737418240` (10 GB) | FinOps safeguard capping `maximumBytesBilled` per BigQuery REST query (`0` disables the cap). |
 | `VIBELIFT_RATE_CARDS_JSON` | *(empty)* | Optional JSON override for model token pricing rate cards. |
@@ -463,9 +466,9 @@ Idempotent. It creates:
 | Log sinks (partitioned tables) | `sink-ge-assistant-activity`, `sink-ge-search-activity`, `sink-vertex-reasoning-engine`, **`sink-ge-inference-tokens`** (the only source of per-turn tokens), `sink-platform-audit`, `sink-model-armor-sdp`, `vibelift-telemetry-sink`. Each sink's writer identity gets `roles/bigquery.dataEditor` on the project. |
 | Raw log retention | Partition expiration of `VIBELIFT_RETENTION_DAYS` (default **90 days**) on the raw sink datasets, set on each dataset (new tables) and each existing table, by `deploy/set_log_retention.sh`. `vibelift_analytics` is not expired. |
 | Analytics tables | `vibelift_analytics.agent_turns`, `agent_eval_runs`, `alpha_evolve_generations`, `agent_registry_snapshots`, view `vw_fleet_finops_summary` |
-| Curated views + mart | `ds_ge_curated_staging` (`v_user_activity_curated`, `v_agentic_operations_curated`, `v_consolidated_audit_log`) and `vibelift_mart` (`v_fct_turns`, table `fct_turns`, `fct_sessions`, `agg_daily_usage`), built by `deploy/bigquery/provision_ge_mart.py --apply --lookback-days=$VIBELIFT_RETENTION_DAYS` |
+| Curated views + mart | `ds_ge_curated_staging` (`v_user_activity_curated`, `v_agentic_operations_curated`, `v_consolidated_audit_log`, `v_model_armor_curated`) and `vibelift_mart` (`v_fct_turns`, table `fct_turns`, `fct_sessions`, `agg_daily_usage`, `v_looker_l1_l2_support`), built by `deploy/bigquery/provision_ge_mart.py --apply --lookback-days=$VIBELIFT_RETENTION_DAYS` |
 
-On a new project the raw tables do not exist until the first logs arrive; the curated views then return no rows instead of failing. The script exits non-zero if the mart step fails and prints the command to re-run just that step. Details of the mart logic: [docs/GE_MART.md](docs/GE_MART.md).
+On a new project the raw tables do not exist until the first logs arrive; the curated views then return no rows instead of failing. The script exits non-zero if the mart step fails and prints the command to re-run just that step. Details of the mart logic: [docs/GE_MART.md](docs/GE_MART.md). For connecting Looker Studio to `vibelift_mart.v_looker_l1_l2_support`, see [docs/LOOKER_STUDIO_GUIDE.md](docs/LOOKER_STUDIO_GUIDE.md). To verify all 13 data conservation & reconciliation invariants across the raw, curated, and mart layers, run `python3 deploy/bigquery/verify_ge_mart_invariants.py --project=PROJECT_ID --gcloud-auth`.
 
 To change retention later, run `VIBELIFT_RETENTION_DAYS=180 ./deploy/set_log_retention.sh` and rebuild the views with the same window: `python3 deploy/bigquery/provision_ge_mart.py --project=PROJECT_ID --gcloud-auth --apply --lookback-days=180`. Data that already expired cannot be recovered.
 
