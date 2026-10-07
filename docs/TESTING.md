@@ -1,6 +1,6 @@
 # Testing
 
-344 tests across 16 files. They run offline: `GOOGLE_APPLICATION_CREDENTIALS` points at a file that does not
+345 tests across 16 files. They run offline: `GOOGLE_APPLICATION_CREDENTIALS` points at a file that does not
 exist, and every Google Cloud API is replaced by an in-process fake (`FakeGoogleApi` in
 [`tests/test_fleet.py`](../tests/test_fleet.py)), so no live project is touched.
 

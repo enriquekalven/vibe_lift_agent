@@ -67,6 +67,7 @@ ALLOWED_WINDOWS_HOURS = (1, 6, 24, 168, 720, 2160, 4320, 8760)
 AGENT_TYPE_LABELS = {
     'ADK': 'ADK agent on Vertex AI Agent Engine',
     'A2A': 'A2A agent',
+    'MCP_CONNECTOR': 'BYO MCP Server Connector (Registered in GE)',
     'MANAGED': 'Google-managed agent',
     'LOW_CODE': 'No-code agent (Agent Designer)',
     'DIALOGFLOW': 'Dialogflow agent',
@@ -802,6 +803,78 @@ def classify_agent(engine_id: str, assistant_id: str, raw: dict[str, Any]) -> di
   }
 
 
+def classify_mcp_connector(engine_id: str, collection_id: str, raw: dict[str, Any]) -> dict[str, Any]:
+  """Normalizes a Gemini Enterprise BYO_MCP DataConnector resource into the fleet schema."""
+  action_params = ((raw.get('actionConfig') or {}).get('actionParams') or {})
+  params = raw.get('params') or {}
+  url = str(action_params.get('instance_uri') or params.get('instance_uri') or '')
+  run = cloud_run_service_from_url(url) if url else None
+  enabled_actions = [str(a) for a in ((raw.get('bapConfig') or {}).get('enabledActions') or []) if a]
+  dynamic_tools = [
+      str(t.get('name'))
+      for t in (raw.get('dynamicTools') or [])
+      if isinstance(t, dict) and t.get('name')
+  ]
+  tools = list(dict.fromkeys(enabled_actions + dynamic_tools))
+  backend: dict[str, Any] = {
+      'kind': 'cloud_run' if run else 'external_endpoint',
+      'url': url or None,
+      'collection_id': collection_id,
+      'data_source': raw.get('dataSource') or 'custom_mcp',
+      'connector_state': raw.get('state'),
+      'action_state': raw.get('actionState'),
+      'mcp_tools': tools,
+  }
+  if run:
+    backend.update(run)
+
+  raw_state = str(raw.get('state') or 'STATE_UNSPECIFIED')
+  state = 'ENABLED' if raw_state == 'ACTIVE' else raw_state
+  tools_preview = f" [{', '.join(tools[:6])}{'...' if len(tools) > 6 else ''}]" if tools else ''
+  default_desc = f"Registered BYO MCP Connector ({collection_id}) -> {url or 'external'}{tools_preview}"
+  description = str(raw.get('description') or default_desc)
+  return {
+      'agent_id': f'mcp-{collection_id}',
+      'resource_name': raw.get('name'),
+      'display_name': raw.get('displayName') or collection_id,
+      'description': description[:280] + ('...' if len(description) > 280 else ''),
+      'engine_id': engine_id,
+      'assistant_id': 'mcp_connector',
+      'type': 'MCP_CONNECTOR',
+      'type_label': AGENT_TYPE_LABELS['MCP_CONNECTOR'],
+      'state': state,
+      'sharing_scope': 'GE_MCP_CONNECTOR',
+      'created': raw.get('createTime'),
+      'updated': raw.get('updateTime'),
+      'starter_prompts': len(tools),
+      'backend': backend,
+      'observability_config': {
+          'observability_enabled': False,
+          'sensitive_logging_enabled': False,
+      },
+      'telemetry_scope': 'service' if backend.get('kind') == 'cloud_run' else 'none',
+      'metrics': {
+          'requests': None,
+          'errors_4xx': None,
+          'errors_5xx': None,
+          'error_rate_pct': None,
+          'latency_p50_ms': None,
+          'latency_p95_ms': None,
+          'llm_calls': None,
+          'input_tokens': None,
+          'output_tokens': None,
+          'cached_tokens': None,
+          'conversations': None,
+          'last_activity': None,
+          'vcpu_hours': None,
+          'memory_gib_hours': None,
+          'billable_instance_hours': None,
+      },
+      'data_sources': ['Discovery Engine DataConnector API (BYO_MCP)'],
+      'notes': [],
+  }
+
+
 # Each segment allows only the characters Google resource IDs use: no '/', '?', '#', '@', quotes or
 # whitespace, so a resource name can neither change the API host nor break out of the shell snippets.
 _GE_AGENT_RESOURCE_RE = re.compile(
@@ -1445,6 +1518,14 @@ class GeminiEnterpriseFleetService:
         f'/collections/{self.collection}/engines'
     )
 
+  def _de_collection_base(self, location: str | None = None, collection_id: str | None = None) -> str:
+    loc = location or self.location
+    coll = collection_id or self.collection
+    host = 'discoveryengine.googleapis.com'
+    if loc != 'global':
+      host = f'{loc}-{host}'
+    return f'https://{host}/v1alpha/projects/{self.project_id}/locations/{loc}/collections/{coll}'
+
   def _paged(self, url: str, key: str) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     token = ''
@@ -1511,6 +1592,25 @@ class GeminiEnterpriseFleetService:
         agent['engine_key'] = f'{loc}/{engine_id}'
         agent['engine_display_name'] = display
         agents.append(agent)
+    for ds_id in engine.get('dataStoreIds') or []:
+      ds_str = str(ds_id or '').strip()
+      if not ds_str.endswith('_mcp_data'):
+        continue
+      cid = ds_str[:-len('_mcp_data')]
+      if not cid or not _RESOURCE_ID_RE.match(cid):
+        continue
+      try:
+        raw_conn = self._api.call('GET', f'{self._de_collection_base(loc, cid)}/dataConnector')
+      except FleetSourceError:
+        continue
+      if not isinstance(raw_conn, dict) or not raw_conn:
+        continue
+      self._record_project_alias(raw_conn.get('name'))
+      conn_agent = classify_mcp_connector(engine_id, cid, raw_conn)
+      conn_agent['location'] = loc
+      conn_agent['engine_key'] = f'{loc}/{engine_id}'
+      conn_agent['engine_display_name'] = display
+      agents.append(conn_agent)
     meta = {
         'engine_id': engine_id,
         'engine_key': f'{loc}/{engine_id}',
@@ -2705,6 +2805,42 @@ class GeminiEnterpriseFleetService:
             'registration_scope': 'UNREGISTERED_STANDALONE',
             'last_activity': sinfo.get('updated'),
         })
+
+    # Also surface registered BYO_MCP DataConnectors in the Skills & MCP inventory as GE_REGISTERED
+    for a in registered_agents:
+      if a.get('type') != 'MCP_CONNECTOR':
+        continue
+      b = a.get('backend') or {}
+      m = a.get('metrics') or {}
+      svc_name = str(b.get('service') or '')
+      sinfo = run_catalog.get(svc_name) if svc_name else None
+      if sinfo:
+        b.setdefault('min_instances', int(sinfo.get('min_instances') or 0))
+        b.setdefault('max_instances', sinfo.get('max_instances'))
+        b.setdefault('cpu', sinfo.get('cpu'))
+        b.setdefault('memory', sinfo.get('memory'))
+        if not m.get('last_activity'):
+          m['last_activity'] = sinfo.get('updated') or a.get('updated')
+      req_cnt = int(m.get('requests') or 0)
+      trace_skills_mcp.append({
+          'name': a.get('display_name') or b.get('collection_id') or svc_name or a.get('agent_id'),
+          'kind': 'MCP_CONNECTOR_RUNTIME',
+          'calls': req_cnt,
+          'traces_count': req_cnt,
+          'co_occurring_input_tokens': 0,
+          'co_occurring_output_tokens': 0,
+          'avg_latency_ms': m.get('latency_p50_ms'),
+          'latency_p95_ms': m.get('latency_p95_ms'),
+          'billable_instance_hours': m.get('billable_instance_hours'),
+          'min_instances': b.get('min_instances'),
+          'uri': b.get('url'),
+          'mcp_tools': list(b.get('mcp_tools') or []),
+          'engines': [str(a.get('engine_key') or a.get('engine_id') or 'global')],
+          'engine_names': [str(a.get('engine_display_name') or a.get('engine_id') or 'GE App')],
+          'models': [],
+          'registration_scope': 'GE_REGISTERED',
+          'last_activity': m.get('last_activity') or a.get('updated'),
+      })
 
     gke_raw = unreg_results.get(('discover_gke', project)) or unreg_results.get(('gke_workloads', project)) or {'clusters': [], 'workloads': []}
     if isinstance(gke_raw, list):

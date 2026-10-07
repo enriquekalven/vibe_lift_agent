@@ -668,10 +668,71 @@ class GeFleetHelpersTest(unittest.TestCase):
     self.assertEqual(fallback['fallback_from_window_hours'], 24)
     self.assertTrue(any('showing cached 24h snapshot' in n for n in fallback['notes']))
 
+  def test_byo_mcp_connector_registered_not_unregistered(self):
+    api = FakeGoogleApi()
+    original_discovery = api._discovery
+    original_call = api.call
+
+    def discovery(path, query):
+      if path == ENGINE_PATH:
+        return {
+            'name': ENGINE_PATH,
+            'displayName': 'GB Agent Platform Demo',
+            'appType': 'APP_TYPE_INTRANET',
+            'dataStoreIds': ['it-support-dashboard-mcp_mcp_data'],
+        }
+      if path == f'/v1alpha/projects/{PROJECT}/locations/global/collections/it-support-dashboard-mcp/dataConnector':
+        return {
+            'name': f'projects/{RE_PROJECT}/locations/global/collections/it-support-dashboard-mcp/dataConnector',
+            'dataSource': 'custom_mcp',
+            'state': 'ACTIVE',
+            'actionState': 'ACTIVE',
+            'actionConfig': {
+                'actionParams': {
+                    'instance_uri': f'https://it-support-dashboard-mcp-{RE_PROJECT}.us-central1.run.app/mcp',
+                }
+            },
+            'bapConfig': {
+                'enabledActions': ['open_support_dashboard', 'get_support_kpis'],
+            },
+        }
+      return original_discovery(path, query)
+
+    def call(method, url, body=None):
+      parts = urllib.parse.urlsplit(url)
+      if parts.netloc == 'run.googleapis.com':
+        return {
+            'services': [
+                {'name': f'projects/{PROJECT}/locations/us-central1/services/vibe-lift-agent'},
+                {
+                    'name': f'projects/{PROJECT}/locations/us-central1/services/it-support-dashboard-mcp',
+                    'uri': f'https://it-support-dashboard-mcp-{RE_PROJECT}.us-central1.run.app',
+                    'template': {'scaling': {'minInstanceCount': 0}, 'containers': [{'resources': {'limits': {'cpu': '1', 'memory': '1Gi'}}}]},
+                },
+            ]
+        }
+      return original_call(method, url, body)
+
+    api._discovery = discovery
+    api.call = call
+    service = ge_fleet.GeminiEnterpriseFleetService(
+        project_id=PROJECT, engine_ids=[ENGINE], location='global', collection='default_collection', api=api)
+    payload = service.collect(window_hours=24)
+    agents = _by_name(payload)
+    self.assertIn('it-support-dashboard-mcp', agents)
+    mcp_conn = agents['it-support-dashboard-mcp']
+    self.assertEqual(mcp_conn['type'], 'MCP_CONNECTOR')
+    self.assertEqual(mcp_conn['state'], 'ENABLED')
+    self.assertEqual(mcp_conn['backend']['kind'], 'cloud_run')
+    self.assertEqual(mcp_conn['backend']['service'], 'it-support-dashboard-mcp')
+    self.assertEqual(mcp_conn['backend']['mcp_tools'], ['open_support_dashboard', 'get_support_kpis'])
+    self.assertEqual(mcp_conn['registration']['status'], 'OK')
+    unreg_names = [r['display_name'] for r in payload['unregistered_runtimes']]
+    self.assertNotIn('it-support-dashboard-mcp', unreg_names)
+    mcp_items = [s for s in payload['skills_and_mcp'] if s.get('name') == 'it-support-dashboard-mcp']
+    self.assertEqual(len(mcp_items), 1)
+    self.assertEqual(mcp_items[0]['registration_scope'], 'GE_REGISTERED')
+
 
 if __name__ == '__main__':
   unittest.main()
-
-
-
-
