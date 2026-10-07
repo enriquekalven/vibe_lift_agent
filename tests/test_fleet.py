@@ -560,7 +560,8 @@ class GeFleetHelpersTest(unittest.TestCase):
     re_unreg = next(x for x in unreg if x['backend']['kind'] == 'agent_engine')
     self.assertEqual(re_unreg['registration']['finops_status'], 'ZOMBIE_IDLE_ENGINE')
     self.assertIn('gcloud ai reasoning-engines delete', re_unreg['registration']['action']['delete_command'])
-    self.assertGreater(re_unreg['metrics']['est_infra_cost_usd'], 0.0)
+    # Compute is reported as measured usage, never converted to dollars with an assumed price.
+    self.assertIsNone(re_unreg['metrics']['est_infra_cost_usd'])
 
     cr_unreg = next(x for x in unreg if x['backend']['kind'] == 'cloud_run')
     self.assertEqual(cr_unreg['type'], 'MCP_SERVER')
@@ -569,7 +570,14 @@ class GeFleetHelpersTest(unittest.TestCase):
 
     gke_unreg = next(x for x in unreg if x['backend']['kind'] == 'gke_workload')
     self.assertEqual(gke_unreg['type'], 'GKE_WORKLOAD')
-    self.assertGreater(gke_unreg['metrics']['est_infra_cost_usd'], 0.0)
+    self.assertIsNone(gke_unreg['metrics']['est_infra_cost_usd'])
+    self.assertIsNone(gke_unreg['metrics']['memory_gib_hours'])  # avg GiB is not GiB-hours
+    self.assertIn('avg_memory_gib', gke_unreg['metrics'])
+    self.assertIsNone(cr_unreg['metrics']['est_infra_cost_usd'])
+    summary = inv['unregistered_summary']
+    # The dashboard reads these keys (it used to read keys that were never produced).
+    self.assertEqual(summary['zombie_runtimes_count'], 1)
+    self.assertEqual(summary['unregistered_unpriced_runtimes'], 0)
 
   def test_project_alias_normalization_deduplicates_project_number(self):
     service, _ = make_fake_service()

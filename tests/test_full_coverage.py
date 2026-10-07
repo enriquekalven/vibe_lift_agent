@@ -519,7 +519,7 @@ class TestTelemetryDecoratorsFullCoverage(unittest.TestCase):
         self.assertEqual(m[0], 20000)
         self.assertEqual(m[1], 15000)
 
-        # Invalid numeric strings gracefully fall back
+        # Malformed values are recorded as unknown (None), never replaced by a made-up default.
         m_bad = telemetry._extract_result_metrics({
             'prompt_tokens': 'bad',
             'cached_tokens': 'bad',
@@ -527,7 +527,9 @@ class TestTelemetryDecoratorsFullCoverage(unittest.TestCase):
             'context_bloat_pct': 'bad',
             'idle_ratio_pct': 'bad',
         })
-        self.assertEqual(m_bad[0], 16400)
+        self.assertEqual(m_bad, (None, None, None, None, None))
+        # Nothing reported at all is also unknown.
+        self.assertEqual(telemetry._extract_result_metrics(None), (None, None, None, None, None))
 
         @telemetry.vibelift_telemetry(agent_name='test_sync_agent')
         def sync_ok() -> dict[str, int]:
@@ -551,6 +553,17 @@ class TestTelemetryDecoratorsFullCoverage(unittest.TestCase):
         self.assertEqual(asyncio.run(async_ok())['prompt_tokens'], 9000)
         with self.assertRaises(RuntimeError):
             asyncio.run(async_fail())
+
+        by_agent = {e['agent_name']: e for e in telemetry.get_recent_decorator_events()}
+        ok = by_agent['test_sync_agent']
+        self.assertEqual((ok['prompt_tokens'], ok['cached_tokens'], ok['output_tokens']), (8000, 6000, 300))
+        self.assertEqual(ok['status'], 'OK')
+        self.assertEqual(by_agent['test_async_agent']['cached_tokens'], 7500)
+        failed = by_agent['test_sync_err']
+        self.assertEqual(failed['status'], 'ERROR (ValueError)')
+        self.assertIsNone(failed['prompt_tokens'])
+        self.assertIsNone(failed['cache_hit_pct'])
+        self.assertEqual(by_agent['test_async_err']['status'], 'ERROR (RuntimeError)')
 
         telemetry.set_live_decorator_events([{'handler_name': 'live_bq_span', 'agent_name': 'sre'}])
         evts = telemetry.get_recent_decorator_events()
@@ -738,6 +751,7 @@ class TestServerAndHttpHandlerFullCoverage(unittest.TestCase):
             for path in (
                 '/.well-known/agent-card.json',
                 '/healthz',
+                '/api/health',
                 '/api/tokenomics_cockpit',
                 '/api/validate_telemetry?run_llm_judge=false',
                 '/api/sme_eval?fresh=true',
@@ -749,31 +763,57 @@ class TestServerAndHttpHandlerFullCoverage(unittest.TestCase):
                 urllib.request.urlopen(f'{base}/nonexistent', timeout=30)
             self.assertEqual(ctx.exception.code, 404)
 
+            def _post(route: str, data: bytes) -> urllib.request.Request:
+                return urllib.request.Request(
+                    f'{base}{route}', data=data, headers={'Content-Type': 'application/json'}, method='POST',
+                )
+
             post_routes = [
                 ('/api/validate_telemetry', {'run_llm_judge': False}),
                 ('/api/sme_eval/run', {}),
                 ('/api/sme_eval/rate', {'persona_id': 'finops_lead', 'overall_rating': 5, 'verdict': 'APPROVED'}),
                 ('/api/select_optimizer', {'platform_id': 'alpha_evolve'}),
-                ('/api/decorator_ingest', {'prompt_tokens': 'bad', 'latency_ms': 'bad'}),
+                ('/api/decorator_ingest', {'agent_name': 'http_agent', 'prompt_tokens': 1200, 'cached_tokens': 900}),
                 ('/api/nl2sql', {'question': 'Show top users'}),
-                ('/api/aive_log', {'prompt': 'Test turn'}),
-                ('/api/csat_rating', {'rating': 'bad'}),
+                ('/api/aive_log', {'user_email': 'user-a@example.com', 'task_type': 'CHAT', 'total_tokens': 42}),
+                ('/api/csat_rating', {'rating': 4, 'session_id': 's-http'}),
                 ('/api/what_if_simulate', {'thinking_budget_tok': 'bad', 'history_window_turns': 'bad', 'traffic_canary_pct': 'bad'}),
                 ('/api/what_if_live', {'kind': 'cache_share', 'model': 'gemini-2.5-flash', 'target_cache_share_pct': 60}),
                 ('/api/recompute_finops', {}),
                 ('/api/step_turn', {}),
                 ('/api/ge_mart/refresh', {}),
-                ('/api/reset', {}),
             ]
             for route, body in post_routes:
-                req = urllib.request.Request(
-                    f'{base}{route}',
-                    data=json.dumps(body).encode('utf-8'),
-                    headers={'Content-Type': 'application/json'},
-                    method='POST',
-                )
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    self.assertEqual(resp.status, 200)
+                with urllib.request.urlopen(_post(route, json.dumps(body).encode('utf-8')), timeout=30) as resp:
+                    self.assertEqual(resp.status, 200, route)
+
+            # Invalid ingest bodies get HTTP 422, the reasons, and a dead-letter record; nothing is filled in.
+            telemetry.reset_decorator_events()
+            invalid_ingest = [
+                ('/api/decorator_ingest', b'{"prompt_tokens": "bad", "latency_ms": "bad"}', 'agent_name: required'),
+                ('/api/aive_log', b'{"prompt": "Test turn"}', 'user_email: required'),
+                ('/api/csat_rating', b'{"rating": "bad"}', 'rating: required, a whole number from 1 to 5'),
+                ('/api/decorator_ingest', b'{not json', 'body: not valid JSON'),
+                ('/api/aive_log', b'[1, 2]', 'body: must be a JSON object'),
+            ]
+            for route, data, expected_error in invalid_ingest:
+                with self.assertRaises(urllib.error.HTTPError) as bad:
+                    urllib.request.urlopen(_post(route, data), timeout=30)
+                self.assertEqual(bad.exception.code, 422, route)
+                detail = json.loads(bad.exception.read().decode('utf-8'))
+                bad.exception.close()
+                self.assertEqual(detail['error'], 'invalid_payload')
+                self.assertIn(expected_error, detail['errors'])
+                self.assertEqual(detail['dead_letter']['source'], route)
+                self.assertNotIn('Test turn', json.dumps(detail))  # values are never echoed back
+
+            with urllib.request.urlopen(f'{base}/api/state', timeout=30) as resp:
+                dead = json.loads(resp.read().decode('utf-8'))['ingest_dead_letters']
+            self.assertEqual(len(dead), len(invalid_ingest))
+            self.assertEqual(dead[0]['errors'], ['body: must be a JSON object'])  # newest first
+
+            with urllib.request.urlopen(_post('/api/reset', b'{}'), timeout=30) as resp:
+                self.assertEqual(resp.status, 200)
         finally:
             httpd.shutdown()
             httpd.server_close()

@@ -1,10 +1,13 @@
-# VibeLift — Gemini Enterprise Agent Fleet Observability, FinOps & Optimization Studio
+# VibeLift — Gemini Enterprise Agent Fleet Observability & Prompt-Cache FinOps
 
 [![tests](https://github.com/enriquekalven/vibe_lift_agent/actions/workflows/tests.yml/badge.svg)](https://github.com/enriquekalven/vibe_lift_agent/actions/workflows/tests.yml)
 
-**VibeLift** is an enterprise observability, prompt cache FinOps, and autonomous multi-objective optimization platform built on Google Cloud with the **Google Agent Development Kit (ADK)**, **FastAPI**, and the **Model Context Protocol (MCP)**.
+**VibeLift** is an observability and prompt-cache FinOps tool for Gemini Enterprise agent fleets. It is built on Google Cloud with the **Google Agent Development Kit (ADK)**, **FastAPI** and the **Model Context Protocol (MCP)**.
 
-Designed for production deployment on **Google Cloud Run** and native embedding inside **Gemini Enterprise**, VibeLift enumerates registered agents across global and regional Gemini Enterprise instances, joins inventory with real-time Google Cloud Monitoring and OpenTelemetry `gen_ai` logs, measures prompt cache and skill/MCP token economics, and runs closed-loop prompt optimization across **AlphaEvolve**, **Opus Frontier Critic**, and **Hybrid Ensemble**.
+It runs as a private **Cloud Run** service and opens inside **Gemini Enterprise** as an MCP App. VibeLift lists the agents registered in your global and regional Gemini Enterprise apps, joins that inventory with Cloud Monitoring metrics, OpenTelemetry `gen_ai` logs and Cloud Trace, and estimates token cost and prompt-cache savings from measured token counts and list prices. It also ships a clearly labeled **optimizer simulator** (`alpha_evolve`, `opus_critic` and `hybrid_ensemble` modes). The simulator applies fixed improvement factors to demo profiles; it calls no optimizer or model and changes no agent.
+
+> [!IMPORTANT]
+> **What is live, what is simulated, and what is not built yet:** see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (diagram legend and known gaps) and [Security controls and known gaps](#security-controls-and-known-gaps) below.
 
 > **Deploying to your own project?**
 > - **No AI tools or no local CLI installed?** Follow the **[Manual Deployment Contingency Guide (Browser-Only, Zero Local Setup)](#manual-deployment-contingency-guide-browser-only-zero-local-setup)**.
@@ -14,74 +17,118 @@ Designed for production deployment on **Google Cloud Run** and native embedding 
 
 ## Architecture Overview
 
+Every box names the file or Google Cloud resource behind it. The legend in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) says which parts read live data, which part is a simulator, and what is not configured.
+
+<!-- BEGIN ARCHITECTURE DIAGRAM: copied from docs/ARCHITECTURE.md; tests/test_docs_integrity.py checks that both copies match -->
 ```mermaid
-flowchart TB
-  subgraph GE["Gemini Enterprise (Global & Regional US/EU Engines)"]
-    Chat["Gemini Enterprise Assistant & StreamAssist"]
-    SidePanel["Embedded MCP App Host (Right Side Panel & Fullscreen)"]
+flowchart LR
+  subgraph GE["Gemini Enterprise app (Discovery Engine)"]
+    direction TB
+    Chat["Assistant chat"]
+    DS["Custom MCP Server data store<br/>vibelift-analytics-mcp_mcp_data<br/>deploy/setup_mcp_connector.py"]
+    Panel["MCP App side panel<br/>sandboxed iframe + AppBridge"]
   end
 
-  subgraph CR["Google Cloud Run — vibe-lift-agent (Private IAM)"]
-    MCP["Streamable HTTP MCP Server (/mcp)\nJSON-RPC 2.0 • Protocol 2025-06-18"]
-    UI["7-Tab Interactive MCP UI App\nui://vibelift-analytics/dashboard"]
-    ADK["ADK Root Agent (app/agent.py)\nGemini 2.5 Flash • Vertex AI"]
-    REST["FastAPI Telemetry & Optimization API (/api/*)"]
+  Browser["Operator browser<br/>gcloud run services proxy<br/>needs roles/run.invoker"]
+
+  subgraph RUN["Cloud Run service vibe-lift-agent: private, IAM run.invoker"]
+    direction TB
+    ASGI["app/fast_api_app.py<br/>ASGI app served by uvicorn"]
+    MCP["vibelift/mcp_server.py<br/>/mcp JSON-RPC 2.0, 9 tools<br/>ui://vibelift-analytics/dashboard"]
+    REST["vibelift/server.py<br/>/api/* routes + dashboard HTML<br/>vibelift/ui/template.py"]
+    ADK["app/agent.py<br/>ADK root_agent, gemini-2.5-flash"]
+    Collect["Collectors<br/>vibelift/fleet.py, gcp_telemetry.py<br/>ge_mart.py, billing_export.py"]
+    Econ["Cost and cache analysis<br/>vibelift/finops.py, prompt_xray.py<br/>telemetry.py RATE_CARDS"]
+    Judge["vibelift/validator.py<br/>deterministic checks + Vertex AI judge"]
+    Ingest["vibelift/telemetry.py<br/>ingest validation: HTTP 422 + dead letters"]
+    Sim["SIMULATOR, synthetic numbers<br/>vibelift/optimizer.py<br/>vibelift/long_running_agent.py"]
   end
 
-  subgraph GCP["Google Cloud Telemetry & Agent Runtimes"]
-    DE["Discovery Engine API\n(Multi-Region Agent Inventory)"]
-    RE["Vertex AI Agent Engine\n(ADK Reasoning Engines)"]
-    Mon["Cloud Monitoring API\n(Requests, Latency, vCPU/GiB, Publisher Tokens)"]
-    Log["Cloud Logging & BigQuery\n(OpenTelemetry gen_ai Events & Audit Views)"]
-    Dec["@vibelift_telemetry Python Decorator\n(Real-Time Function & Tool Spans)"]
+  subgraph APIS["Google Cloud APIs, called as vibe-lift-runtime-sa"]
+    direction TB
+    DEAPI["Discovery Engine API<br/>engines, assistants, agents"]
+    OBS["Cloud Monitoring, Cloud Logging, Cloud Trace"]
+    RUNTIMES["Vertex AI Agent Engine, Cloud Run, GKE<br/>unregistered agent discovery"]
+    GEMINI["Vertex AI Gemini<br/>ADK model and judge"]
   end
 
-  Chat <-->|"BYO MCP Connector (vibelift-analytics-mcp)"| MCP
-  MCP -->|"open_dashboard + embedded state"| SidePanel
-  SidePanel <-->|"AppBridge postMessage / REST"| UI
-  UI <--> REST
-  ADK --> REST
-  REST --> DE
-  REST --> RE
-  REST --> Mon
-  REST --> Log
-  Dec -->|"In-Memory & POST /api/decorator_ingest"| REST
+  subgraph BQ["BigQuery, created by deploy/setup_bigquery_sink.sh"]
+    direction TB
+    Sinks["7 Cloud Logging sinks into ds_*_raw datasets"]
+    Curated["ds_ge_curated_staging views<br/>deploy/bigquery/ge_mart/curated/"]
+    Mart["vibelift_mart: fct_turns, fct_sessions, agg_daily_usage<br/>deploy/bigquery/ge_mart/mart/"]
+    DTS["Hourly scheduled query, full rebuild of fct_turns<br/>deploy/setup_mart_refresh.sh"]
+    Billing["Cloud Billing export table<br/>NOT CONFIGURED"]
+  end
+
+  Chat -->|"tools/call"| DS
+  DS -->|"HTTPS, ID token of the Discovery Engine service agent"| MCP
+  MCP -->|"open_dashboard: HTML + state snapshot"| Panel
+  Panel -.->|"tools/call through the host bridge"| MCP
+  Browser -->|"HTTPS + identity token"| REST
+  ASGI --- MCP
+  ASGI --- REST
+  ASGI --- ADK
+  MCP --> Collect
+  MCP --> Sim
+  REST --> Collect
+  REST --> Econ
+  REST --> Judge
+  REST --> Ingest
+  REST --> Sim
+  ADK --> Collect
+  ADK --> GEMINI
+  Judge --> GEMINI
+  Collect --> DEAPI
+  Collect --> OBS
+  Collect --> RUNTIMES
+  Collect --> Mart
+  Collect -.-> Billing
+  Sinks --> Curated
+  Curated --> Mart
+  DTS --> Mart
 ```
+<!-- END ARCHITECTURE DIAGRAM -->
 
 ---
 
 ## Core Capabilities
 
-### 1. Live Gemini Enterprise Agent Fleet (`Tab 0`)
-- **Multi-Region Discovery Engine Inventory**: Enumerates every agent deployed across configured Gemini Enterprise engines (`VIBELIFT_GE_ENGINES`, supporting both `global/engine-id` and regional `us/engine-id` or `eu/engine-id` specifications) across all assistants and pages.
-- **Joined Cloud Telemetry**:
-  - **ADK Agents on Vertex AI Agent Engine**: Joins Cloud Monitoring `reasoning_engine` metrics (request volume, 4xx/5xx error rates, p50/p95 latency, vCPU and memory allocation) with per-agent OpenTelemetry `gen_ai` log events (LLM invocations, input/output tokens, cached tokens, active conversations, and last activity timestamp). Prompt message bodies are never read into the payload.
-  - **A2A Agents on Cloud Run**: Joins service-level `run.googleapis.com` request, error, latency, and container allocation metrics from the agent card endpoint.
-  - **Low-Code / Workflow & Google-Managed Agents**: Automatically classifies Agent Designer (`lowCodeAgentDefinition`, `workflowAgentDefinition`), Dialogflow, and Google-managed agents (`Deep Research`).
-- **Project-Wide Model Economics**: Aggregates Vertex AI publisher model invocations and token counts (`publisher/online_serving/*`) priced against list rate cards alongside Gemini Enterprise `StreamAssist` traffic.
-- **Zero Synthetic Fallbacks**: Unavailable telemetry sources return `null` metrics with explicit diagnostics in `source_status` and `errors`. Fleet snapshots are cached in-memory (`VIBELIFT_FLEET_TTL_SECONDS=60`) with rate-limited forced refreshes (`VIBELIFT_FLEET_MIN_REFRESH_SECONDS=10`).
+The dashboard has 4 basic tabs (**Overview**, **Agents**, **Cost**, **Users**) and 3 advanced tabs (**Goals & Metrics**, **Optimizer & Testing**, **SDK & Tools**). When it is connected to a real project, panels that run on example inputs are hidden.
 
-### 2. Prompt Cache Economics & Prefix Breakpoint Diagnostics (`Tab 1`)
-- **Turn-by-Turn Token Valuation**: Tracks total input tokens, cached prefix tokens, uncached input tokens, and output tokens across multi-turn agent trajectories using official model rate cards (`gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.0-flash`, `claude-3-7-sonnet`, `claude-3-5-sonnet`).
-- **Prefix Breakpoint Detection**: Pinpoints the exact line and character offset where dynamic tokens (such as timestamps, session UUIDs, or unpinned tool schemas) invalidate static prefix caching.
-- **Custom Multi-Objective Parameters**: Allows operators to register and weight custom optimization parameters (`minimize` or `maximize`) with live baseline-to-current delta tracking.
+### 1. Live Gemini Enterprise agent fleet (Agents tab)
+- **Multi-region Discovery Engine inventory**: lists every agent in the configured Gemini Enterprise apps (`VIBELIFT_GE_ENGINES`; `auto` scans `global`, `us` and `eu`) across all assistants and pages. With `VIBELIFT_DISCOVER_UNREGISTERED`, it also finds standalone Agent Engine, Cloud Run and GKE workloads.
+- **Joined Cloud telemetry**:
+  - **ADK agents on Vertex AI Agent Engine**: Cloud Monitoring `reasoning_engine` metrics (request volume, 4xx/5xx error rates, p50/p95 latency, vCPU and memory allocation) joined with per-agent OpenTelemetry `gen_ai` log events (LLM calls, input/output/cached tokens, active conversations, last activity). Prompt message bodies are never read into the payload.
+  - **A2A agents on Cloud Run**: service-level `run.googleapis.com` request, error, latency and container allocation metrics.
+  - **Low-code, workflow and Google-managed agents**: classifies Agent Designer (`lowCodeAgentDefinition`, `workflowAgentDefinition`), Dialogflow and Google-managed agents (`Deep Research`).
+- **Project-wide model usage**: Vertex AI publisher token and invocation metrics (`publisher/online_serving/*`) next to Gemini Enterprise `StreamAssist` traffic. Models without a rate card stay unpriced instead of getting a guessed price.
+- **No synthetic fallbacks in the collectors**: an unavailable source returns `null` metrics and is listed in `source_status` and `errors`. Fleet snapshots are cached in memory (`VIBELIFT_FLEET_TTL_SECONDS=60`) with rate-limited forced refreshes (`VIBELIFT_FLEET_MIN_REFRESH_SECONDS=10`).
+- **Trace logging switch**: turns Discovery Engine trace logging (`observabilityConfig`) on or off for one agent or for all agents. This changes live agent settings, so the MCP tool asks the user to confirm.
 
-### 3. Multi-Platform Optimization Studio (`Tab 2`)
-- **Pluggable Optimizer Backends**: Supports live switching and side-by-side comparison across three optimization engines:
-  - **AlphaEvolve** (`alpha_evolve`) — Evolutionary Pareto-frontier prompt prefix, schema, and context optimization (`DEFAULT`).
-  - **Opus Frontier Critic** (`opus_critic`) — Frontier LLM structural prompt refactoring, instruction synthesis, and schema compaction.
-  - **Hybrid Ensemble** (`hybrid_ensemble`) — Combined pipeline uniting Opus structural critique and AlphaEvolve Pareto selection.
-- **Closed-Loop Safety Guardrails**: Evaluates candidate prompt mutations against accuracy, safety, and latency guardrails—automatically committing Pareto improvements or rolling back regressions when anomalies occur.
+### 2. Cost and Users tabs
+- **Token cost estimates**: measured token counts multiplied by the list prices in `RATE_CARDS` ([vibelift/telemetry.py](vibelift/telemetry.py)) for `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3.5-flash`, `gemini-3.6-flash`, `gemini-3.7-flash`, `gemini-3.8-flash`, `gemini-3.1-flash`, `gemini-3.1-flash-lite`, `gemini-3.5-pro`, `gemini-1.5-flash`, `gemini-1.5-pro`, `claude-opus-5-5` and `claude-opus-4-6`. Cards that were checked against the Vertex AI pricing page say so in a code comment. These are estimates, not billed cost.
+- **Billed cost**: read from the Cloud Billing BigQuery export when `VIBELIFT_BILLING_EXPORT_TABLE` is set. When it is not set, or the query fails, the Cost tab shows the status and a fix hint (`invalid_table_name`, `permission_denied`, `schema_mismatch`, `not_found`, `bytes_limit`, `auth`, `timeout`) instead of a number.
+- **Per-user and per-session tokens** (Users tab): rollups from `vibelift_mart.fct_sessions` / `fct_turns`, with a list-price estimate per user. Token counts only, no prompt text.
+- **Plain-English search** (advanced, `/api/nl2sql`): the question picks one of 5 fixed `SELECT` templates over `vibelift_mart`; its text never enters the SQL. On a real project the query is checked (one read-only statement over the mart) and run on BigQuery with a 100 MB `maximumBytesBilled` cap, and the drawer shows BigQuery's rows or its error. In demo mode the rows are labeled simulator output.
+- **What-if from observed usage** (`/api/what_if_live`): projects a model switch or a different cache share from the project's measured usage. The parametric what-if and Tokenomics cockpit panels use example inputs, so they are off on a real project.
 
-### 4. User-Centric FinOps & `@vibelift_telemetry` Decorator (`Tab 3`)
-- **Zero-Boilerplate Python Decorator**: Instrument any ADK tool, agent turn, or Python function (sync or async) with `@vibelift_telemetry(agent_id=..., skill_name=..., mcp_tool=...)` to capture real-time wall-clock latency, token consumption, context bloat, and idle ratio metrics.
-- **Context Bloat & Idle Cost Attribution**: Separates wasted uncached context bloat (`context_bloat_pct`) and idle compute provisioning overhead (`idle_ratio_pct`) from productive token spend.
-- **Per-User & Skill/MCP Token Economics**: Surfaces user-level cache hit rates, waste attribution, and token cost per call across agent skills and MCP tools, alongside prioritized optimization recommendations.
+### 3. Prompt Cache X-Ray and telemetry validator
+- **Prompt Cache X-Ray** (`xray_prompt_cache`, `/api/prompt_xray`): compares two prompt snapshots character by character, reports the line and column where dynamic content (timestamps, IDs) breaks the cached prefix, and proposes a cache-friendly rewrite. Live mode compares logged turns from the prompt-log bucket. It shows raw user prompts, so it is opt-in (`VIBELIFT_PROMPT_XRAY_LIVE=1`).
+- **Telemetry validator** (`/api/validate_telemetry`): deterministic grounding checks on the dashboard numbers, plus an optional Vertex AI Gemini judge ([vibelift/validator.py](vibelift/validator.py), `VIBELIFT_JUDGE_MODEL`, default `gemini-2.5-flash`).
 
-### 5. Native Gemini Enterprise BYO MCP App (`ui://vibelift-analytics/dashboard`)
-- **Streamable HTTP MCP Server**: Compliant with MCP specification versions `2025-06-18` and `2025-03-26` at `/mcp`.
-- **Responsive Side-Panel & Fullscreen Workspace**: Opens natively in the Gemini Enterprise **Right Side Panel (`pip`)** by default for side-by-side chat analysis, with a one-click **Fullscreen (`fullscreen`)** toggle powered by the MCP AppBridge (`ui/request-display-mode`).
-- **Embedded Live State**: Every `open_dashboard` invocation and `resources/read` response embeds a fresh server-side snapshot of `state`, `gcp_telemetry`, and `ge_fleet` directly into the HTML payload so the dashboard renders live fleet data immediately inside sandboxed iframes without waiting on cross-origin XHR calls.
+### 4. Instrumentation and validated ingest (SDK & Tools tab)
+- **`@vibelift_telemetry` decorator**: wraps a sync or async agent handler, measures wall-clock latency, and reads token counts from the handler's return value (a Gemini response's `usage_metadata`, or `prompt_tokens` / `cached_tokens` / `output_tokens` keys). Values the handler does not report stay empty; nothing is filled in.
+- **Validated HTTP ingest**: `POST /api/decorator_ingest`, `/api/aive_log` and `/api/csat_rating` check every field. An invalid body gets HTTP 422 and a values-free dead-letter record (key names, size and SHA-256 only; newest 50, in memory), shown in the *Rejected ingest bodies* table. Prompt text is kept only as a count, a character total and a digest.
+
+### 5. Optimizer simulator (Optimizer & Testing tab, advanced)
+- Three modes, `alpha_evolve`, `opus_critic` and `hybrid_ensemble`, apply **fixed improvement factors to built-in demo profiles**. The simulator calls no optimizer and no model, reads no logs and changes no agent. Responses carry `simulator: true`, and the turns it creates are hidden on a real project.
+- The MCP tool `run_alpha_evolve_generation` and the ADK tool `trigger_alpha_evolve_cycle` describe themselves as simulators.
+
+### 6. Native Gemini Enterprise MCP App (`ui://vibelift-analytics/dashboard`)
+- **Streamable HTTP MCP server**: MCP `2025-06-18` and `2025-03-26` at `/mcp`, with 9 tools.
+- **Side panel and fullscreen**: opens in the Gemini Enterprise right side panel (`pip`) by default, with a Fullscreen toggle through the MCP AppBridge (`ui/request-display-mode`).
+- **Embedded live state**: every `open_dashboard` call and `resources/read` response embeds a fresh server-side snapshot of `state`, `gcp_telemetry` and `ge_fleet` in the HTML, so the dashboard renders inside the sandboxed iframe without cross-origin calls.
 
 ---
 
@@ -104,13 +151,13 @@ vibe_lift_agent/
 │   ├── sme_eval.py              # 6-Persona x 5-Dimension (30-check) SME evaluation engine
 │   ├── telemetry.py             # Rate cards, cache economics, @vibelift_telemetry
 │   ├── validator.py             # Deterministic checks + LLM-as-judge audit
-│   ├── optimizer.py             # Optimization engine and user analytics
+│   ├── optimizer.py             # Optimizer SIMULATOR (demo profiles) and user analytics
 │   ├── long_running_agent.py    # Multi-turn trajectory simulator
 │   └── ui/
 │       ├── template.py          # Dashboard HTML/JS
 │       ├── logo_asset.py        # Embedded brand assets
 │       └── static/              # Source logo images
-├── tests/                       # Offline test suite (215 tests, no live API calls; see docs/TESTING.md)
+├── tests/                       # Offline test suite (no live API calls; see docs/TESTING.md)
 ├── deploy/
 │   ├── deploy_cloud_run.sh      # Tests, then idempotent Cloud Run + IAM deploy
 │   ├── cloudbuild.yaml          # Build -> test -> push -> deploy
@@ -119,13 +166,14 @@ vibe_lift_agent/
 │   ├── set_log_retention.sh     # Raw log retention (partition expiration, default 90 days)
 │   ├── fix_customer_sinks_and_retention.sh # Audits & remediates customer sinks, retention, and mart views
 │   ├── setup_mart_refresh.sh    # Hourly BigQuery scheduled query that rebuilds fct_turns
-│   ├── register_ge_agent.sh     # Deploys Custom MCP Data Store (BYO_MCP) & registers it + A2A agent to a GE App instance
+│   ├── register_ge_agent.sh     # Deploys Custom MCP Data Store (BYO_MCP) & registers it to a GE App instance (A2A opt-in)
 │   ├── setup_mcp_connector.py   # Deploys Custom MCP Data Store (NOT Agent Registry) & links dataStoreIds to GE App instance
 │   └── bigquery/
 │       ├── provision_ge_mart.py # Curated views + vibelift_mart (apply / refresh / scheduled-query DDL)
 │       ├── verify_ge_mart_invariants.py # 13 conservation & reconciliation invariants across raw/curated/mart
 │       └── ge_mart/             # SQL templates for the curated and mart layers
 ├── docs/
+│   ├── ARCHITECTURE.md          # Diagram as code, legend (live / simulated / not configured), known gaps
 │   ├── PERMISSIONS.md           # Every IAM role, API and org policy VibeLift needs
 │   ├── spec.md                  # Architecture and data-source specification
 │   ├── GE_MART.md               # Gemini Enterprise curated views and reporting mart
@@ -156,7 +204,7 @@ Runtime variables are read by the service (set on Cloud Run by `deploy/deploy_cl
 | `GOOGLE_GENAI_USE_VERTEXAI` | `TRUE` (when no API key is set) | Routes ADK `root_agent` model calls through Vertex AI using the runtime service account. |
 | `GOOGLE_CLOUD_LOCATION` | `GOOGLE_CLOUD_REGION` | Vertex AI location for ADK model calls. |
 | `VIBELIFT_PUBLIC_URL` | `https://SERVICE-PROJECT_NUMBER.REGION.run.app` | Canonical public URL published in the A2A agent card and MCP metadata. |
-| `PUBLIC_A2A_URL` | `${VIBELIFT_PUBLIC_URL}/a2a/app` | Explicit override for the `url` field in the A2A agent card. |
+| `PUBLIC_A2A_URL` | `${VIBELIFT_PUBLIC_URL}/a2a/app` | Override for the `url` field in the A2A agent card. The card is published, but the A2A endpoint itself is not served. |
 | `PORT` / `HOST` | `8080` / `0.0.0.0` | Listen address. |
 | `USE_UVICORN` | `0` (deploy sets `1`) | Serve the FastAPI app with uvicorn instead of the stdlib server. |
 | `ALLOWED_ORIGINS` | `*` | Comma-separated CORS origin allowlist. |
@@ -188,8 +236,9 @@ Runtime variables are read by the service (set on Cloud Run by `deploy/deploy_cl
 | `VIBELIFT_GE_CURATED_DATASET` | `ds_ge_curated_staging` | Curated views dataset (`v_user_activity_curated`, `v_agentic_operations_curated`, `v_consolidated_audit_log`, `v_model_armor_curated`; see [docs/GE_MART.md](docs/GE_MART.md)). |
 | `VIBELIFT_GE_MART_DATASET` | `vibelift_mart` | Reporting mart dataset (`v_fct_turns`, `fct_turns`, `fct_sessions`, `agg_daily_usage`, `v_looker_l1_l2_support`). |
 | `VIBELIFT_BILLING_EXPORT_TABLE` | *(empty)* | Cloud Billing BigQuery export table (`project.dataset.gcp_billing_export_v1_XXXX`). Empty = billed cost shown as unknown. |
-| `VIBELIFT_BQ_MAX_BYTES_BILLED` | `10737418240` (10 GB) | FinOps safeguard capping `maximumBytesBilled` per BigQuery REST query (`0` disables the cap). |
-| `VIBELIFT_RATE_CARDS_JSON` | *(empty)* | Optional JSON override for model token pricing rate cards. |
+| `VIBELIFT_BQ_MAX_BYTES_BILLED` | `10737418240` (10 GB) | Default `maximumBytesBilled` for the service's BigQuery REST queries (`0` disables it). Plain-English search always sends its own 100 MB cap. |
+| `VIBELIFT_RATE_CARDS_JSON` | *(empty)* | Optional JSON that adds or overrides list-price rate cards (`input`, `output`, `cached_read`, `cache_write` per 1M tokens) for the fleet and per-user cost estimates. |
+| `VIBELIFT_PROMPT_XRAY_LIVE` | *(off)* | `1` lets the Prompt Cache X-Ray read logged prompts from the prompt-log bucket. Those are raw user prompts, so it is opt-in. |
 | `VIBELIFT_JUDGE_MODEL` | `gemini-2.5-flash` | Model used by the LLM-as-judge audit. |
 | `VIBELIFT_JUDGE_LOCATION` | `us-central1` | Vertex AI location for the judge model. |
 | `VIBELIFT_JUDGE_TIMEOUT_S` | `25` | Judge call timeout in seconds. |
@@ -207,6 +256,8 @@ Runtime variables are read by the service (set on Cloud Run by `deploy/deploy_cl
 | `VIBELIFT_REFRESH_SA` | `setup_mart_refresh.sh` | `vibe-lift-runtime-sa@PROJECT.iam.gserviceaccount.com` | Service account the scheduled query runs as. |
 | `GE_ENGINE_ID` | `register_ge_agent.sh`, `setup_mcp_connector.py`, `deploy_cloud_run.sh` | *(required for step 4)* | Gemini Enterprise app instance ID to register the GE Data Store to (or pass it as the first argument to `register_ge_agent.sh`). |
 | `GE_LOCATION` | `register_ge_agent.sh`, `setup_mcp_connector.py` | `global` | Location of that Gemini Enterprise app instance (`global`, `us`, `eu`). |
+| `VIBELIFT_PUBLISH_A2A` | `register_ge_agent.sh` | `0` | `1` also publishes the A2A agent card with `agents-cli`. Off by default because the A2A endpoint is not served. |
+| `VIBELIFT_PROMPT_LOG_BUCKET` | `deploy_cloud_run.sh` | *(empty)* | Prompt-log bucket for the X-Ray live mode. Setting it grants the runtime SA read access and sets `VIBELIFT_PROMPT_XRAY_LIVE=1`. |
 
 ---
 
@@ -242,29 +293,30 @@ Open [http://localhost:8080](http://localhost:8080) to inspect the dashboard loc
 
 ## Instrumenting Functions with `@vibelift_telemetry`
 
-Decorate any synchronous or asynchronous agent function, skill, or tool to stream real-time execution metrics into **Tab 3 (User-Centric FinOps & Decorator)**:
+Decorate a synchronous or asynchronous agent handler, skill or tool. Each call is recorded as an in-process telemetry event; when the handler runs inside the VibeLift process, the event appears in the **SDK & Tools** tab. `tests/test_docs_integrity.py` runs this example.
 
 ```python
 from vibelift.telemetry import vibelift_telemetry
 
 @vibelift_telemetry(
-    agent_id="adk_service_desk",
-    user_id="user@your-company.com",
-    skill_name="it-ticket-triage",
-    mcp_tool="query_ge_agent_fleet",
-    model_name="gemini-2.5-flash",
+    agent_name="adk_service_desk",
+    model="gemini-2.5-flash",          # optional; defaults to the response's model_version
+    protocol="ADK",                    # optional label
+    skill_or_mcp="query_ge_agent_fleet",
+    user_cohort="enterprise-it-support",
 )
 def handle_support_request(query: str) -> dict:
-    # Return dict or object with optional token usage metadata
+    # Token counts are read from the return value when the handler reports them:
+    # a Gemini response's usage_metadata, or these dict keys.
     return {
         "status": "resolved",
-        "input_tokens": 8200,
+        "prompt_tokens": 8200,
         "cached_tokens": 6800,
         "output_tokens": 420,
     }
 ```
 
-External services can also push telemetry spans over HTTP via `POST /api/decorator_ingest`.
+Services in other processes can send the same event over HTTP with `POST /api/decorator_ingest`. The body is validated: a malformed body gets HTTP 422 and a values-free dead-letter record instead of being stored.
 
 ---
 
@@ -414,7 +466,7 @@ flowchart LR
   pip install -r requirements.txt -c constraints.txt
   pip install ruff   # optional; the deploy gate runs it when present
   ```
-- `agents-cli` (optional, only if you also want `register_ge_agent.sh` to publish the standalone A2A agent).
+- `agents-cli` (optional, only with `VIBELIFT_PUBLISH_A2A=1`, to publish the A2A agent card; the A2A endpoint itself is not served).
 
 **Google Cloud**
 - A project with billing enabled, selected with `gcloud config set project PROJECT_ID`.
@@ -423,7 +475,7 @@ flowchart LR
 - **Organization Policy Administrator** (`roles/orgpolicy.policyAdmin`) on the project, or someone who has it, to allow custom MCP servers (see below). In Argolis you normally administer your own organization and can grant it to yourself.
 
 **OAuth client: not needed.** VibeLift does not need an OAuth client ID or consent screen:
-- Gemini Enterprise calls the private Cloud Run service with a Google-signed ID token for its Discovery Engine service agent (`X-Serverless-Authorization` header), for both the A2A agent and the custom MCP server. `deploy_cloud_run.sh` grants that agent `roles/run.invoker` on the service. This only works with the default `*.run.app` URL, not a custom domain.
+- Gemini Enterprise calls the private Cloud Run service with a Google-signed ID token for its Discovery Engine service agent (`X-Serverless-Authorization` header) when it calls the custom MCP server. `deploy_cloud_run.sh` grants that agent `roles/run.invoker` on the service. This only works with the default `*.run.app` URL, not a custom domain.
 - The dashboard reads all telemetry with its own runtime service account, never with the end user's token.
 - You and your teammates open the dashboard with `gcloud` credentials (proxy or identity token), not a browser OAuth flow.
 
@@ -465,7 +517,7 @@ Idempotent. It creates:
 | Raw datasets (`BQ_LOCATION`) | `ds_ge_assistant_raw`, `ds_ge_search_raw`, `ds_vertex_agents_raw`, `ds_ge_audit_raw`, `ds_security_guardrails_raw`, `vibelift_analytics` |
 | Log sinks (partitioned tables) | `sink-ge-assistant-activity`, `sink-ge-search-activity`, `sink-vertex-reasoning-engine`, **`sink-ge-inference-tokens`** (the only source of per-turn tokens), `sink-platform-audit`, `sink-model-armor-sdp`, `vibelift-telemetry-sink`. Each sink's writer identity gets `roles/bigquery.dataEditor` on the project. |
 | Raw log retention | Partition expiration of `VIBELIFT_RETENTION_DAYS` (default **90 days**) on the raw sink datasets, set on each dataset (new tables) and each existing table, by `deploy/set_log_retention.sh`. `vibelift_analytics` is not expired. |
-| Analytics tables | `vibelift_analytics.agent_turns`, `agent_eval_runs`, `alpha_evolve_generations`, `agent_registry_snapshots`, view `vw_fleet_finops_summary` |
+| Analytics tables | `vibelift_analytics.agent_turns`, `agent_eval_runs`, `alpha_evolve_generations`, `agent_registry_snapshots`, view `vw_fleet_finops_summary` (created for later use; the service does not read them today) |
 | Curated views + mart | `ds_ge_curated_staging` (`v_user_activity_curated`, `v_agentic_operations_curated`, `v_consolidated_audit_log`, `v_model_armor_curated`) and `vibelift_mart` (`v_fct_turns`, table `fct_turns`, `fct_sessions`, `agg_daily_usage`, `v_looker_l1_l2_support`), built by `deploy/bigquery/provision_ge_mart.py --apply --lookback-days=$VIBELIFT_RETENTION_DAYS` |
 
 On a new project the raw tables do not exist until the first logs arrive; the curated views then return no rows instead of failing. The script exits non-zero if the mart step fails and prints the command to re-run just that step. Details of the mart logic: [docs/GE_MART.md](docs/GE_MART.md). For connecting Looker Studio to `vibelift_mart.v_looker_l1_l2_support`, see [docs/LOOKER_STUDIO_GUIDE.md](docs/LOOKER_STUDIO_GUIDE.md). To verify all 13 data conservation & reconciliation invariants across the raw, curated, and mart layers, run `python3 deploy/bigquery/verify_ge_mart_invariants.py --project=PROJECT_ID --gcloud-auth`.
@@ -533,7 +585,7 @@ What `./deploy/register_ge_agent.sh GE_APP_ID` does:
 1. Checks the private Cloud Run service health with your identity token and ensures the Discovery Engine service agent (`service-PROJECT_NUMBER@gcp-sa-discoveryengine.iam.gserviceaccount.com`) holds `roles/run.invoker`.
 2. **Stage 4a — Deploys to the Gemini Enterprise Data Store (`deploy/setup_mcp_connector.py`):** Creates the `Custom MCP Server` connector (`collectionId=vibelift-analytics-mcp`, `mcp_server_source="BYO_MCP"`, `use_agent_gateway_egress=false`, `auth_type="NO_AUTH"`) in Gemini Enterprise Data Stores ([docs](https://cloud.google.com/gemini/enterprise/docs/connectors/custom-mcp-server/set-up-custom-mcp-server)), waits for `ACTIVE`, imports all 9 tools from `/mcp`, and enables all 9 as actions (`--tools` to choose). If a connector with that collection ID already exists but its `mcp_server_source` is not `BYO_MCP`, the script stops instead of reusing it.
 3. **Stage 4b — Registers the GE Data Store to the Gemini Enterprise App Instance:** Renames the data store (`vibelift-analytics-mcp_mcp_data`) to `VibeLift Analytics`, links it into `engines/GE_APP_ID.dataStoreIds` while keeping the app instance's existing connected data stores, and verifies the registration with a follow-up `GET`.
-4. **Optional A2A Agent Registration:** If `agents-cli` is installed, also registers the A2A agent card on the Gemini Enterprise App instance (`--registration-type a2a`, no OAuth).
+4. **Optional A2A agent card registration:** only with `VIBELIFT_PUBLISH_A2A=1` and `agents-cli` installed (`--registration-type a2a`, no OAuth). Off by default because the A2A endpoint named in the card is not served.
 
 Safe to re-run. Remove a connector with `python3 deploy/setup_mcp_connector.py --delete --collection-id=ID`. You need **Discovery Engine Editor** (`roles/discoveryengine.editor`). Some orgs also block custom MCP servers with an org policy (see step 0); in `project-maui` creation worked without an override.
 
@@ -570,7 +622,7 @@ Exposed MCP tools (9):
 - `query_ge_agent_fleet`: live inventory and telemetry for all agents in Gemini Enterprise.
 - `query_project_telemetry`: Cloud Run service metrics and BigQuery triage log summaries.
 - `calculate_prompt_cache_economics`: prompt prefix cache hit rates and savings.
-- `run_alpha_evolve_generation`: one closed-loop optimization generation (`alpha_evolve`, `opus_critic`, `hybrid_ensemble`).
+- `run_alpha_evolve_generation`: runs one generation of the optimizer **simulator** on a demo profile (`alpha_evolve`, `opus_critic`, `hybrid_ensemble`). No model is called and nothing is deployed.
 - `get_vibelift_state`: active agent state, parameters and turn trajectory.
 - `xray_prompt_cache`: character-level Prompt Cache X-Ray diff and cache-friendly rewrite.
 - `list_prompt_snapshot_turns`: lists logged OpenTelemetry prompt snapshot turns for live X-Ray comparison.
@@ -630,36 +682,73 @@ Operators can filter by Gemini Enterprise app, standalone runtimes and time wind
 
 ## REST API & MCP Endpoint Reference
 
+Routes marked **Simulator** act only on the built-in demo profiles. `tests/test_docs_integrity.py` checks that every route listed here exists and that every `/api/*` route is listed.
+
 | Endpoint | Method | Description |
 | :--- | :--- | :--- |
-| `/` , `/ui` , `/app` | `GET` | Interactive VibeLift Analytics, FinOps & Optimization Dashboard |
-| `/mcp` | `POST` | Streamable JSON-RPC 2.0 MCP server (`initialize`, `tools/list`, `tools/call`, `resources/list`, `resources/read`) |
-| `/mcp` | `DELETE` | Terminates an MCP session (`HTTP 204`) |
-| `/health` | `GET` | External Cloud Run health check (`{"status": "ok"}`) |
-| `/healthz` | `GET` | Container-internal & local health probe (`{"ok": true}`) |
-| `/.well-known/agent-card.json` | `GET` | A2A protocol metadata card (also served at `/a2a/app/.well-known/agent-card.json`) |
-| `/api/state` | `GET` | Full runtime state including optimization platforms, decorator telemetry, and User-Centric FinOps |
-| `/api/ge_fleet` | `GET` | Live Gemini Enterprise agent fleet inventory & telemetry (`?window_hours=24&force_refresh=false`) |
-| `/api/sync_ge_fleet` | `POST` | Triggers an immediate Gemini Enterprise fleet collection (`window_hours`) |
-| `/api/gcp_telemetry` | `GET` | Live Google Cloud Run service metrics and BigQuery triage log telemetry |
-| `/api/sync_gcp_telemetry` | `POST` | Syncs live Google Cloud Logging turns into the active agent profile |
-| `/api/user_centric_finops` | `GET` | User-centric FinOps plus `session_drilldown`: per-user session token rollup (sessions, turns, input/output/cached/reasoning/total tokens) and a per-session turn-by-turn token dictionary from `vibelift_mart.fct_sessions` / `fct_turns` (`?window_hours=168`). Token counts only, no prompt text |
-| `/api/select_optimizer` | `POST` | Switches active optimization platform (`platform_id`: `alpha_evolve`, `opus_critic`, `hybrid_ensemble`) |
-| `/api/decorator_ingest` | `POST` | Ingests a real-time `@vibelift_telemetry` span from an instrumented function or tool |
-| `/api/select_agent` | `POST` | Switches the active optimization agent profile (`agent_id`) |
-| `/api/add_parameter` | `POST` | Registers or updates a weighted multi-objective optimization parameter |
-| `/api/inject_anomaly` | `POST` | Simulates a production prefix-cache or latency regression for guardrail testing |
-| `/api/evolve_generation` | `POST` | Runs a closed-loop optimization generation (`platform_id` optional) |
-| `/api/reset` | `POST` | Resets optimizer trajectories, parameters, and decorator telemetry to baseline |
+| `/` , `/ui` , `/app` | `GET` | Dashboard HTML |
+| `/mcp` | `POST` | Streamable HTTP MCP server, JSON-RPC 2.0 (`initialize`, `tools/list`, `tools/call`, `resources/list`, `resources/read`) |
+| `/mcp` | `DELETE` | Ends an MCP session (`HTTP 204`) |
+| `/health` | `GET` | ADK app health check (`{"status": "ok"}`); served when the ADK app loads |
+| `/api/health` | `GET` | VibeLift health check for browsers and external checks |
+| `/healthz` | `GET` | Container probe only. Cloud Run's front end reserves paths ending in `z`, so this returns 404 from outside |
+| `/.well-known/agent-card.json` | `GET` | A2A agent card (also at `/a2a/app/.well-known/agent-card.json`). Card only: `/a2a/app` itself is not served |
+| `/api/state` | `GET` | Dashboard state: live fleet and telemetry, decorator events, rejected ingest bodies, and simulator state (`?window_hours=`) |
+| `/api/ge_fleet` | `GET` | Live Gemini Enterprise agent inventory and telemetry (`?window_hours=24&force_refresh=false`) |
+| `/api/sync_ge_fleet` | `POST` | Forces a fleet collection (`window_hours`) |
+| `/api/gcp_telemetry` | `GET` | Cloud Run service metrics and BigQuery log summaries |
+| `/api/sync_gcp_telemetry` | `POST` | Loads recent Cloud Logging turns into the active agent profile |
+| `/api/user_centric_finops` | `GET` | Per-user FinOps plus `session_drilldown`: per-user session token rollups and a per-session turn-by-turn token dictionary from `vibelift_mart.fct_sessions` / `fct_turns` (`?window_hours=168`). Token counts only, no prompt text |
+| `/api/ge_mart/refresh` | `POST` | Rebuilds `vibelift_mart.fct_turns` from `v_fct_turns` (the service's only BigQuery write) |
+| `/api/agent_observability`, `/api/enable_agent_observability` | `POST` | Turns trace logging (`observabilityConfig`) on or off for one or all Gemini Enterprise agents. Changes live agent settings |
+| `/api/decorator_ingest` | `POST` | Validated `@vibelift_telemetry` event. Invalid body: HTTP 422 and a dead-letter record |
+| `/api/aive_log` | `POST` | Validated usage event, kept in memory with prompt text reduced to a digest. Invalid body: HTTP 422 |
+| `/api/csat_rating` | `POST` | Validated CSAT rating, kept in memory and in the audit log. Invalid body: HTTP 422 |
+| `/api/prompt_xray` | `POST` | Prompt Cache X-Ray on two pasted snapshots or two logged turns |
+| `/api/prompt_xray/live_turns` | `GET` | Logged turns the X-Ray can compare (opt-in: `VIBELIFT_PROMPT_XRAY_LIVE`) |
+| `/api/what_if_live` | `POST` | Projection from observed model usage (model switch or cache share) |
+| `/api/validate_telemetry` | `GET`, `POST` | Deterministic grounding checks, plus the optional Vertex AI judge (`run_llm_judge`) |
+| `/api/nl2sql` | `POST` | Matches the question to a fixed `SELECT` template. On a real project it runs that query on BigQuery with a 100 MB `maximumBytesBilled` cap |
+| `/api/sme_eval`, `/api/sme_eval/run` | `GET`, `POST` | 30-check scorecard of the dashboard (6 personas x 5 dimensions) plus human ratings |
+| `/api/sme_eval/rate` | `POST` | Records a human SME rating |
+| `/api/tokenomics_cockpit`, `/api/recompute_finops` | `GET`, `POST` | **Simulator**: example-input FinOps cockpit; returns `DISABLED_IN_LIVE_MODE` on a real project |
+| `/api/what_if_simulate` | `POST` | **Simulator**: parametric what-if with example inputs; returns `DISABLED_IN_LIVE_MODE` on a real project |
+| `/api/select_agent` | `POST` | **Simulator**: switches the active demo agent profile (`agent_id`) |
+| `/api/select_optimizer` | `POST` | **Simulator**: switches the simulator mode (`platform_id`: `alpha_evolve`, `opus_critic`, `hybrid_ensemble`) |
+| `/api/add_parameter` | `POST` | **Simulator**: adds a weighted objective to the demo profile |
+| `/api/inject_anomaly` | `POST` | **Simulator**: applies a fixed cache-bust scenario to the demo agent |
+| `/api/step_turn` | `POST` | **Simulator**: appends one synthetic turn (hidden on a real project) |
+| `/api/evolve_generation` | `POST` | **Simulator**: runs one generation on the demo agent; nothing is deployed |
+| `/api/reset` | `POST` | Resets the simulator, parameters and decorator events to the seed state |
 
 ---
 
-## Security & Operational Guardrails
+## Security controls and known gaps
 
-- **Private IAM Authentication**: Cloud Run is deployed with `--no-allow-unauthenticated`. Only principals granted `roles/run.invoker` (including the Discovery Engine service agent) can invoke `/`, `/api/*`, or `/mcp`.
-- **Strict Content Security Policy (CSP)**: Every HTML response sets `Content-Security-Policy` headers permitting framing by `*.cloud.google.com`, `*.corp.google.com`, and `*.pantheon.corp.google.com` while blocking `object-src` and untrusted scripts.
-- **Privacy-Preserving Log Ingestion**: `vibelift/fleet.py` extracts only numeric token counters, model names, and anonymized conversation identifiers from OpenTelemetry `gen_ai` logs; user prompts and model completions are never stored or returned.
-- **Reference-ID Error Sanitization**: Unhandled exceptions in MCP tool calls and JSON-RPC handlers log full stack traces to Cloud Logging with a correlation `ref=<id>` while returning only the sanitized exception class and reference ID to the caller.
+**In place** (details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#security-controls-in-place)):
+- **Private service**: deployed with `--no-allow-unauthenticated`. A request without an identity token gets HTTP 403. Only `roles/run.invoker` holders can call `/`, `/api/*` or `/mcp`: the Discovery Engine service agent and the principals in `VIBELIFT_INVOKERS`.
+- **Dedicated runtime service account** `vibe-lift-runtime-sa` with viewer roles plus the custom role `vibeLiftGeFleetReader`. That role includes two write permissions: `discoveryengine.agents.manage` (so `agents.list` returns agents created by other users) and `discoveryengine.agents.update` (used only by the trace logging switch). It has no create, delete or `setIamPolicy` permission. The service writes to BigQuery only when *Refresh Mart* rebuilds `vibelift_mart.fct_turns`.
+- **No prompt text in VibeLift's own records**: the fleet collector reads only token counters, model names and conversation identifiers from `gen_ai` logs. Ingested events keep prompt text only as a count, a character total and a digest, and rejected bodies keep only key names, size and SHA-256. Prompt text and emails do exist in two places: the mart's `fct_turns` has `prompt_preview`, `response_preview`, `tool_output_preview`, `uploaded_file_names` and `user_email` columns copied from Gemini Enterprise activity logs (the service never reads the preview columns; the plain-English search's session and user templates return `user_email`), and the opt-in Prompt Cache X-Ray live mode (`VIBELIFT_PROMPT_XRAY_LIVE=1`) reads logged prompts from the prompt-log bucket and shows them to invokers.
+- **Dashboard CSP**: `/`, `/ui` and `/app` send `Content-Security-Policy` (scripts and fetches limited to the same origin, `object-src 'none'`, `base-uri 'none'`), `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`.
+- **Read-only plain-English search**: fixed templates, a fail-closed SQL check before every query, a 100 MB billing cap per query, and no query at all when the question contains a write keyword.
+- **Error sanitization**: MCP tool and method failures log the stack trace with a `ref=<id>` and return only the exception class and that reference to the caller.
+- **Human confirmation**: the two MCP tools that change state (`run_alpha_evolve_generation`, `set_agent_trace_logging`) are not marked `readOnlyHint`, so Gemini Enterprise asks the user before running them.
+- **Guardrail logs**: the `sink-model-armor-sdp` sink copies Model Armor and Sensitive Data Protection log entries into `ds_security_guardrails_raw`. VibeLift reads those logs; it does not call Model Armor or DLP itself.
+
+**Known gaps** (not built; see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#known-gaps)):
+
+| Gap | Why | Compensating control today |
+| :--- | :--- | :--- |
+| No VPC Service Controls perimeter | Needs organization-level Access Context Manager rights, which this project's owner does not have | Private Cloud Run IAM; one runtime service account with viewer roles |
+| Cloud Run ingress `all`; no Cloud Armor or API gateway | Gemini Enterprise's custom MCP auth works only on the `*.run.app` URL, so a load balancer cannot sit in front of `/mcp` | IAM invoker check on every request |
+| A2A agent card only | The ADK app is built without A2A, so `/a2a/app` returns 404 | Gemini Enterprise uses the MCP data store |
+| No Cloud Billing export | No access to the billing account's export settings | The Cost tab says "not configured"; costs are labeled list-price estimates |
+| Optimizer is a simulator | Decision: relabel rather than build | Labeled in the UI, MCP tool, ADK tool, agent card and docs; tests pin the labels |
+| Per-instance state | Decorator events, rejected bodies and simulator state live in memory (up to 10 instances) | Treat those panels as per-instance views |
+| Hardcoded list prices | No Cloud Billing Catalog integration | Cards checked against the pricing page say so in a comment; models without a card stay unpriced and are counted; runtime compute is reported as usage, not dollars |
+| Raw logs and the mart can hold prompt text and emails | Gemini Enterprise activity logs contain prompts, responses and user emails, and the curated views copy previews into `vibelift_mart` | Grant read on the `ds_*_raw` datasets and `vibelift_mart` only to people who may read those logs |
+| `'unsafe-inline'` in the dashboard CSP | The page uses an inline script and inline `onclick` handlers | No external origins are allowed; every fetch is same-origin |
+
 ---
 
 ## Troubleshooting
@@ -678,7 +767,7 @@ Operators can filter by Gemini Enterprise app, standalone runtimes and time wind
 | Billed cost shows unknown | `VIBELIFT_BILLING_EXPORT_TABLE` unset or unreadable | See "Cost data" in step 3. |
 | Source build fails with `PERMISSION_DENIED` (for example on `storage.objects.get` or Artifact Registry) | Cloud Build service account has no roles (`iam.automaticIamGrantsForDefaultServiceAccounts`, Argolis) | Re-run `deploy_cloud_run.sh` (grants `roles/run.builder` to `PROJECT_NUMBER-compute@developer.gserviceaccount.com`); wait 2 minutes if the grant was just made. |
 | *Custom MCP Server* is missing or creation is blocked | Managed org constraint *Disable custom MCP server connector for Gemini Enterprise* | Override it for the project (step 0, Argolis table); you need `roles/orgpolicy.policyAdmin`. |
-| MCP server was registered in *Agent Registry / MCP Registry*, or the GE Data Store exists but tools do not appear in Gemini Enterprise chat | VibeLift must be deployed as a **Gemini Enterprise Custom MCP Server Data Store** (`BYO_MCP`, not Agent Registry / MCP Registry) **and** registered (linked via `dataStoreIds`) onto the target Gemini Enterprise App instance (`GE_APP_ID`) | Run `GE_LOCATION=global ./deploy/register_ge_agent.sh GE_APP_ID` (which runs `deploy/setup_mcp_connector.py GE_APP_ID` to create the GE Data Store, enable all 6 actions, and link `vibelift-analytics-mcp_mcp_data` to `engines/GE_APP_ID`). |
+| MCP server was registered in *Agent Registry / MCP Registry*, or the GE Data Store exists but tools do not appear in Gemini Enterprise chat | VibeLift must be deployed as a **Gemini Enterprise Custom MCP Server Data Store** (`BYO_MCP`, not Agent Registry / MCP Registry) **and** registered (linked via `dataStoreIds`) onto the target Gemini Enterprise App instance (`GE_APP_ID`) | Run `GE_LOCATION=global ./deploy/register_ge_agent.sh GE_APP_ID` (which runs `deploy/setup_mcp_connector.py GE_APP_ID` to create the GE Data Store, enable all 9 actions, and link `vibelift-analytics-mcp_mcp_data` to `engines/GE_APP_ID`). |
 | MCP data store stays in error, or actions do not load | Wrong URL (custom domain, missing `/mcp`), the service agent is not an invoker, or egress is restricted | Use `https://vibe-lift-agent-PROJECT_NUMBER.REGION.run.app/mcp`; re-run `register_ge_agent.sh`; if the project is VPC-SC protected, allow `custom_mcp` and the host in the data-connector policies. Then *Actions > Reload custom actions*. |
 | `VIBELIFT_INVOKERS` grant fails with a domain / organization error | Domain restricted sharing | Use principals from your own org domain (in Argolis, `@YOUR_LDAP.altostrat.com`). |
 | Deploy aborts before building | Local tests or `ruff` failed, or dependencies not installed | `pip install -r requirements.txt -c constraints.txt`, then fix the failure shown. |

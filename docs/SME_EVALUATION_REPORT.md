@@ -126,7 +126,7 @@ curl -s -X POST http://localhost:8080/api/sme_eval/rate \
   -H "Content-Type: application/json" \
   -d '{
     "persona_id": "finops_lead",
-    "reviewer": "enriq@google.com",
+    "reviewer": "sme-reviewer@example.com",
     "overall_rating": 5,
     "verdict": "APPROVED",
     "task_completed": true,

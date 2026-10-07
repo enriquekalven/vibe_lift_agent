@@ -17,7 +17,7 @@ Custom MCP Server, followed by Console > Gemini Enterprise > Apps > <App> > Data
      `<service URL>/mcp`. Skipped if the BYO_MCP connector already exists.
   2. Waits for the Gemini Enterprise Data Store connector to become ACTIVE.
   3. Re-imports the tool list from /mcp (`refreshDataConnectorTools`).
-  4. Enables the MCP tools as Gemini Enterprise actions on the Data Store (all 6 by default).
+  4. Enables the MCP tools as Gemini Enterprise actions on the Data Store (all 9 by default).
   5. Renames the Gemini Enterprise Data Store (`vibelift-analytics-mcp_mcp_data`) and **registers
      (links) it to the Gemini Enterprise App instance** (`engines/<GE_APP_ID>`), preserving the app
      instance's existing connected data stores and verifying the registration.
@@ -266,7 +266,7 @@ def main(argv: list[str] | None = None) -> None:
   parser.add_argument('--collection-id', default=DEFAULT_COLLECTION_ID)
   parser.add_argument('--display-name', default=DEFAULT_DISPLAY_NAME)
   parser.add_argument('--tools', default=','.join(ALL_TOOLS),
-                      help='Comma-separated MCP tools to enable as actions (default: all 6).')
+                      help='Comma-separated MCP tools to enable as actions (default: all 9).')
   parser.add_argument('--mcp-url', default='', help='Default: ${VIBELIFT_PUBLIC_URL or Cloud Run URL}/mcp')
   parser.add_argument('--no-attach', action='store_true', help='Create the GE Data Store only; do not link to an app.')
   parser.add_argument('--delete', action='store_true', help='Delete the connector and its data store.')

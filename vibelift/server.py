@@ -22,6 +22,7 @@ except ImportError:
 
 try:
   import fastapi
+  from fastapi.concurrency import run_in_threadpool
   from fastapi.middleware.cors import CORSMiddleware
   from fastapi.responses import HTMLResponse, JSONResponse, Response
 except ImportError:
@@ -46,6 +47,34 @@ PROMPT_XRAY_LIVE_ENV = 'VIBELIFT_PROMPT_XRAY_LIVE'
 # the startup probe budget in deploy/cloud_run_service.yaml (2 s + 6 x 5 s).
 STARTUP_INSIGHTS_TIMEOUT_S = 15.0
 
+# HTTP headers for the dashboard HTML (/, /ui, /app). The page is self-contained: one inline script,
+# inline onclick handlers and inline styles, no external scripts, styles, fonts or images, and every
+# fetch goes to the same origin. 'unsafe-inline' is needed for the inline script and handlers. The
+# Gemini Enterprise side panel gets the HTML through MCP resources/read, so its CSP is the MCP
+# resource's _meta.ui.csp (mcp_server.py), not these headers.
+DASHBOARD_SECURITY_HEADERS: Mapping[str, str] = {
+    'Content-Security-Policy': (
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; "
+        "base-uri 'none'; form-action 'self'; frame-ancestors 'self'"
+    ),
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'no-referrer',
+}
+
+VALID_SURFACES = ('all', 'mcp', 'dashboard')
+
+
+def resolve_surface(configured: str | None = None) -> str:
+  """Returns the active service surface ('all', 'mcp', or 'dashboard') from VIBELIFT_SURFACE."""
+  raw = (configured if configured is not None else os.environ.get('VIBELIFT_SURFACE', 'all')).strip().lower()
+  return raw if raw in VALID_SURFACES else 'all'
+
+
+def dashboard_surface_enabled() -> bool:
+  """True when the browser dashboard and REST API routes are enabled."""
+  return resolve_surface() in ('all', 'dashboard')
+
 
 import threading
 
@@ -56,8 +85,27 @@ def _first_query_value(query: Mapping[str, list[str]], name: str) -> str | None:
   return values[0] if values else None
 
 
+def _label_nl2sql_simulated(res: dict[str, Any]) -> dict[str, Any]:
+  """Marks a demo-mode NL2SQL result as simulator output: nothing ran on BigQuery."""
+  res['execution_mode'] = 'SIMULATOR'
+  summary = str(res.get('executive_summary') or '')
+  if not summary.startswith(('Simulator result', 'Blocked')):
+    res['executive_summary'] = 'Simulator result (example rows; no BigQuery query was run): ' + summary
+  return res
+
+
+def _nl2sql_not_run(res: dict[str, Any]) -> dict[str, Any]:
+  """Live-mode default for the search drawer: shows the SQL, runs nothing until the user asks."""
+  res['rows'] = []
+  res['columns'] = []
+  res['execution_mode'] = 'NOT_RUN'
+  cap_mb = alpha_evolve_optimizer.NL2SQL_MAX_BYTES_BILLED // (1024 * 1024)
+  res['executive_summary'] = f'Not run yet. Press Run Search to run this SQL on BigQuery (cap {cap_mb} MB billed).'
+  return res
+
+
 class VibeLiftRuntimeController:
-  """Coordinates the selectable Gemini Enterprise agents, AlphaEvolve optimizer, GCP telemetry, and GE fleet."""
+  """Coordinates live GCP telemetry and the GE fleet, plus the optimizer simulator's demo agents."""
 
   def __init__(self, fleet_service: ge_fleet.GeminiEnterpriseFleetService | None = None) -> None:
     """Initializes the optimizer, long-running agent, GCP telemetry client, and fleet service."""
@@ -209,8 +257,10 @@ class VibeLiftRuntimeController:
               bq_insights=bq_insights,
           )
 
+    live_gcp = self._is_live_gcp()
     with self._lock:
-      turns = list(self.agent.turns)
+      # Live mode shows logged turns only; the simulator's synthetic turns stay in demo mode.
+      turns = [t for t in self.agent.turns if not (live_gcp and t.simulated)]
       active_agent_dict = self.optimizer.active_agent.to_dict()
       available_agents = self.optimizer.list_agents_summary()
       all_agents = self.optimizer.get_all_agents_dict()
@@ -222,15 +272,16 @@ class VibeLiftRuntimeController:
       persona_playbooks = self.optimizer.get_sme_persona_playbooks()
       what_if_default: dict[str, Any] | None = self.optimizer.simulate_what_if_scenario()
       nl2sql_default = self.optimizer.execute_nl2sql_telemetry_query(
-          'Compare cost per 1k turns and prompt cache savings across agents'
+          'Compare cost per 1k turns and prompt cache savings across agents',
+          project_id=self.gcp_telemetry.project_id,
       )
-      steps = list(self.agent.step_descriptions)
+      nl2sql_default = _nl2sql_not_run(nl2sql_default) if live_gcp else _label_nl2sql_simulated(nl2sql_default)
+      steps = [d for d in self.agent.step_descriptions if not (live_gcp and d.get('simulated'))]
 
     services = self.gcp_telemetry.list_cloud_run_agent_services(non_blocking=fast_mcp)
     support_events = self.gcp_telemetry.fetch_gemini_enterprise_support_telemetry(
         limit=6, non_blocking=fast_mcp
     )
-    live_gcp = self._is_live_gcp()
     live_finops_payload = None
     ge_daily_usage = None
     if live_gcp:
@@ -241,6 +292,8 @@ class VibeLiftRuntimeController:
       # In live mode they are replaced by figures computed from observed telemetry only.
       tokenomics_cockpit = None
       what_if_default = None
+      # The OTel catalog stays as a reference list; its example baseline/current values are simulator data.
+      otel_catalog = alpha_evolve_optimizer.catalog_reference_only(otel_catalog)
       live_finops_payload = self._live_finops(fleet_payload or self.optimizer._live_fleet_payload)
       # Never show demo personas in live mode: if BigQuery principals have not
       # loaded yet, show an empty table with an explicit loading status.
@@ -257,6 +310,13 @@ class VibeLiftRuntimeController:
         user_centric['collection_mode'] = (
             'LIVE GCP: BigQuery principals still loading (no demo data shown)'
         )
+      else:
+        # Estimated model cost per user (tokens x list price). Billed cost stays project-level:
+        # monthly_cost_usd remains None and nothing from the billing export is split per user.
+        priced_users, cost_estimate = live_finops.estimate_user_costs(
+            as_list(live_bq.get('power_users_ldap')), live_bq.get('ge_user_model_tokens'), self._rate_cards())
+        user_centric['power_users_ldap'] = priced_users
+        user_centric['user_cost_estimate'] = {**cost_estimate, 'window_hours': live_bq.get('window_hours')}
     if not support_events and not live_gcp:
       support_events = [
           {
@@ -316,6 +376,7 @@ class VibeLiftRuntimeController:
         'aive_logs': telemetry.get_recent_aive_logs(live_only=live_gcp),
         'nl2sql_default': nl2sql_default,
         'decorator_events': telemetry.get_recent_decorator_events(),
+        'ingest_dead_letters': telemetry.get_ingest_dlq_events(),
         'summary': turn_summary_dict,
         'turn_summary': turn_summary_dict,
         'turns': [t.to_dict() for t in turns],
@@ -394,7 +455,9 @@ class VibeLiftRuntimeController:
         'refresh_cli': f'python3 deploy/bigquery/provision_ge_mart.py --project {proj} --refresh',
         'billing_status': cost.get('status'),
         'billing_message': cost.get('message'),
-        'billing_table': cost.get('table'),
+        'billing_table': cost.get('billing_export_table'),
+        'billing_hint': cost.get('hint'),
+        'billing_error_kind': cost.get('error_kind'),
         'currency': cost.get('currency'),
         'cost_scope': 'Project-level spend on AI services; not allocated to agents or users.',
         'days': billing_export.join_daily_usage_with_cost(list(bq_insights['ge_daily_totals']), cost),
@@ -685,21 +748,59 @@ class VibeLiftRuntimeController:
       return self.optimizer.get_tokenomics_and_cockpit_finops_payload(body)
 
   def query_nl2sql(self, question: str) -> dict[str, Any]:
-    """Executes an interactive NL2SQL telemetry query and returns SQL + rows + executive summary."""
+    """Matches a question to a fixed SELECT template and, on a real project, runs it on BigQuery.
+
+    Demo mode returns the simulator's example rows, labeled as such. On a real
+    project the simulator rows are discarded: the SQL runs on BigQuery with a
+    ``NL2SQL_MAX_BYTES_BILLED`` cap, and the response carries BigQuery's rows
+    or its error. A query is sent only when ``verify_nl2sql_sql`` passed and
+    the question held no write keyword.
+    """
     with self._lock:
       res = self.optimizer.execute_nl2sql_telemetry_query(
           question,
           project_id=self.gcp_telemetry.project_id,
       )
+    if not self._is_live_gcp():
+      return _label_nl2sql_simulated(res)
+    return self._run_nl2sql_live(res)
+
+  def _run_nl2sql_live(self, res: dict[str, Any]) -> dict[str, Any]:
+    """Replaces the simulator rows in an NL2SQL result with the BigQuery result."""
     safety = res.get('sql_safety_audit') or {}
-    if self._is_live_gcp() and res.get('generated_sql') and not safety.get('blocked_dml_attempt'):
-      live_rows = self.gcp_telemetry._query_bigquery_rest(str(res['generated_sql']), timeout_s=6.0)
-      if live_rows:
-        res['live_bigquery_rows'] = live_rows
-        res['execution_mode'] = 'LIVE_BIGQUERY_REST'
-        if not res.get('rows'):
-          res['rows'] = live_rows
-          res['columns'] = list(live_rows[0].keys())
+    cap = alpha_evolve_optimizer.NL2SQL_MAX_BYTES_BILLED
+    res['rows'] = []
+    res['columns'] = []
+    if safety.get('blocked_dml_attempt') or not res.get('generated_sql'):
+      res['execution_mode'] = 'BLOCKED'
+      return res
+    if not safety.get('read_only_enforced'):
+      res['execution_mode'] = 'BLOCKED'
+      errors = '; '.join(str(e) for e in (safety.get('verification_errors') or [])) or 'unknown'
+      res['executive_summary'] = f'Not run: the SQL failed the read-only check ({errors}).'
+      return res
+    rows, info = self.gcp_telemetry.run_bigquery_query(
+        str(res['generated_sql']), timeout_s=6.0, max_bytes_billed=cap,
+    )
+    res['execution_mode'] = 'LIVE_BIGQUERY_REST'
+    res['bigquery_job'] = info
+    res['rows'] = rows
+    res['columns'] = list(rows[0].keys()) if rows else []
+    datasets = ', '.join(safety.get('datasets_queried') or []) or 'BigQuery'
+    if info.get('error'):
+      res['executive_summary'] = f'BigQuery did not return rows. {info["error"]}'
+    else:
+      scanned = info.get('total_bytes_processed')
+      if not isinstance(scanned, int):
+        scanned_txt = 'bytes scanned not reported'
+      elif scanned < 1024 * 1024:
+        scanned_txt = f'{scanned / 1024:.1f} KB scanned'
+      else:
+        scanned_txt = f'{scanned / (1024 * 1024):.1f} MB scanned'
+      res['executive_summary'] = (
+          f'{len(rows)} row(s) from {datasets} on BigQuery ({scanned_txt}; '
+          f'cap {cap // (1024 * 1024)} MB billed).'
+      )
     return res
 
   def simulate_what_if(self, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -732,44 +833,27 @@ class VibeLiftRuntimeController:
           traffic_canary_pct=traffic_canary_pct,
       )
 
-  def submit_csat_rating(self, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """Records a Voice-of-Customer CSAT rating into `aive_logs.ratings_log` and returns updated state."""
-    raw = body or {}
-    try:
-      rating = int(float(str(raw.get('rating') or 5)))
-    except (TypeError, ValueError):
-      rating = 5
-    telemetry.log_csat_rating(
-        session_id=str(raw.get('session_id') or '6446120131357637190'),
-        event_id=str(raw.get('event_id') or 'evt-9f81c204-aive'),
-        user_email=str(raw.get('user_email') or 'sme-demo@example.com'),
-        rating=rating,
-        feedback_text=str(raw.get('feedback_text') or 'Verified SME closed-loop optimization guardrail.'),
-    )
+  def submit_csat_rating(self, body: Any = None) -> dict[str, Any]:
+    """Records a user CSAT rating in memory and in the audit log, and returns updated state.
+
+    Rows use the BigQuery `aive_logs.ratings_log` shape, but this service never writes to BigQuery.
+
+    Raises telemetry.IngestValidationError (HTTP 422) when the rating or what it rates is missing.
+    """
+    fields, errors = telemetry.validate_csat_payload(body)
+    telemetry.raise_if_invalid('/api/csat_rating', body, errors)
+    telemetry.log_csat_rating(**fields)
     return self.get_state_payload(include_fleet=False)
 
-  def ingest_aive_log(self, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """Ingests a @with_analytics_logging event into `aive_logs` and the real-time decorator stream."""
-    raw = body or {}
-    active = self.optimizer.active_agent
-    telemetry.log_agent_generation_event(
-        session_id=str(raw.get('session_id') or '6446120131357637190'),
-        user_email=str(raw.get('user_email') or 'sme-demo@example.com'),
-        company_name=str(raw.get('company_name') or 'Google Cloud'),
-        department=str(raw.get('department') or 'Cloud AI & Agent Platform'),
-        task_type=str(raw.get('task_type') or 'FLEET_OPTIMIZATION_AUDIT'),
-        prompts=[str(raw.get('prompt') or 'Execute @with_analytics_logging telemetry turn')],
-        outputs=[{
-            'gcs_uri': str(raw.get('gcs_uri') or f'gs://vibelift-aive-assets/{active.agent_id}_turn.json'),
-            'media_type': str(raw.get('media_type') or 'APPLICATION_JSON'),
-            'mime_type': str(raw.get('mime_type') or 'application/json'),
-        }],
-        total_tokens=int(float(str(raw.get('total_tokens') or 19400))),
-        model_name=str(raw.get('model_name') or active.model),
-        latency_ms=float(str(raw.get('latency_ms') or 565.0)),
-        status=str(raw.get('status') or 'SUCCESS'),
-        agent_name=active.agent_id,
-    )
+  def ingest_aive_log(self, body: Any = None) -> dict[str, Any]:
+    """Ingests one usage event into the in-memory `aive_logs` view and the decorator stream (not BigQuery).
+
+    Missing optional values stay None and prompt text is fingerprinted. Raises
+    telemetry.IngestValidationError (HTTP 422) for invalid bodies.
+    """
+    fields, errors = telemetry.validate_aive_payload(body)
+    telemetry.raise_if_invalid('/api/aive_log', body, errors)
+    telemetry.log_agent_generation_event(**fields)
     return self.get_state_payload(include_fleet=False)
 
   def sync_gcp_telemetry(self, window_hours: int | None = None) -> dict[str, Any]:
@@ -797,49 +881,15 @@ class VibeLiftRuntimeController:
       self.optimizer.select_optimizer_platform(platform_id)
     return self.get_state_payload(include_fleet=False)
 
-  def ingest_decorator_event(self, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """Records a real-time @vibelift_telemetry decorator event from an agent message-passing hook."""
-    import time
-    raw = body or {}
-    active = self.optimizer.active_agent
+  def ingest_decorator_event(self, body: Any = None) -> dict[str, Any]:
+    """Records one @vibelift_telemetry event posted by an agent's message-passing hook.
 
-    def _safe_float(key: str, default: float) -> float:
-      val = raw.get(key)
-      if val is None or val == '':
-        return default
-      try:
-        return max(0.0, float(val))
-      except (TypeError, ValueError):
-        return default
-
-    def _safe_int(key: str, default: int) -> int:
-      val = raw.get(key)
-      if val is None or val == '':
-        return default
-      try:
-        return max(0, int(val))
-      except (TypeError, ValueError):
-        return default
-
-    prompt_tok = _safe_int('prompt_tokens', 19200)
-    cached_tok = min(prompt_tok, _safe_int('cached_tokens', 17680))
-    event = telemetry.DecoratorTelemetryEvent(
-        timestamp=str(raw.get('timestamp') or time.strftime('%H:%M:%S UTC', time.gmtime()))[:64],
-        agent_name=str(raw.get('agent_name') or active.agent_id)[:64],
-        handler_name=str(raw.get('handler_name') or 'on_message_passing_turn')[:80],
-        protocol=str(raw.get('protocol') or 'ADK / MCP Decorator Stream')[:80],
-        model=str(raw.get('model') or active.model)[:64],
-        latency_ms=_safe_float('latency_ms', 585.0),
-        prompt_tokens=prompt_tok,
-        cached_tokens=cached_tok,
-        output_tokens=_safe_int('output_tokens', 320),
-        context_bloat_pct=min(100.0, _safe_float('context_bloat_pct', 12.4)),
-        idle_ratio_pct=min(100.0, _safe_float('idle_ratio_pct', 6.8)),
-        skill_or_mcp=str(raw.get('skill_or_mcp') or f'mcp://{active.agent_id}/stream')[:96],
-        user_cohort=str(raw.get('user_cohort') or 'Enterprise Active DAU Cohort')[:96],
-        status=str(raw.get('status') or '200 OK (@vibelift_telemetry)')[:64],
-    )
-    telemetry.record_decorator_event(event)
+    Fields the caller leaves out stay None; nothing is filled in. Raises
+    telemetry.IngestValidationError (HTTP 422) for invalid bodies and keeps a dead-letter record.
+    """
+    fields, errors = telemetry.validate_decorator_payload(body)
+    telemetry.raise_if_invalid('/api/decorator_ingest', body, errors)
+    telemetry.record_decorator_event(telemetry.DecoratorTelemetryEvent(**fields))
     return self.get_state_payload(include_fleet=False)
 
   def add_parameter(
@@ -864,19 +914,19 @@ class VibeLiftRuntimeController:
     return self.get_state_payload(include_fleet=False)
 
   def inject_anomaly(self) -> dict[str, Any]:
-    """Simulates a production log anomaly (cache bust + latency/cost spike)."""
+    """Simulator: applies the fixed cache-bust scenario to the active demo agent."""
     with self._lock:
       self.optimizer.inject_anomaly()
     return self.get_state_payload(include_fleet=False)
 
   def step_turn(self) -> dict[str, Any]:
-    """Executes one long-running agent turn and returns updated state."""
+    """Simulator: appends one synthetic turn (hidden in live mode) and returns updated state."""
     with self._lock:
       self.agent.step_turn()
     return self.get_state_payload(include_fleet=False)
 
   def evolve_generation(self) -> dict[str, Any]:
-    """Runs the next AlphaEvolve Pareto generation and steps the agent."""
+    """Simulator: runs one optimizer generation on the demo agent and appends a synthetic turn."""
     with self._lock:
       self.optimizer.run_next_generation()
       self.agent.step_turn()
@@ -939,20 +989,28 @@ class VibeLiftHttpServer(http.server.ThreadingHTTPServer):
 class VibeLiftRequestHandler(http.server.BaseHTTPRequestHandler):
   """Handles HTML UI and JSON API requests for VibeLift Analytics Platform."""
 
-  def _read_json_body(self) -> dict[str, Any]:
-    """Reads and parses optional JSON request body."""
+  def _read_json_payload(self) -> tuple[Any, bool]:
+    """Reads the request body. Returns (parsed JSON value or None when empty, body_was_valid_json)."""
     length_str = self.headers.get('Content-Length', '0')
     length = int(length_str) if length_str.isdigit() else 0
     if length <= 0:
-      return {}
-    raw = self.rfile.read(length).decode('utf-8')
+      return None, True
+    raw = self.rfile.read(length).decode('utf-8', errors='replace')
     if not raw.strip():
-      return {}
+      return None, True
     try:
-      data = json.loads(raw)
-      return data if isinstance(data, dict) else {}
+      return json.loads(raw), True
     except ValueError:
-      return {}
+      return raw, False
+
+  def _send_ingest(self, source: str, handler: Any, payload: Any, valid_json: bool) -> None:
+    """Runs an ingest handler; an invalid body gets HTTP 422 plus its dead-letter record."""
+    try:
+      if not valid_json:
+        telemetry.raise_if_invalid(source, payload, ['body: not valid JSON'])
+      self._send_json(handler(payload))
+    except telemetry.IngestValidationError as exc:
+      self._send_json(exc.to_response(), status=422)
 
   def do_GET(self) -> None:  # pylint: disable=invalid-name
     """Serves the dashboard UI, logo, agent card, /healthz, and the JSON APIs."""
@@ -961,11 +1019,30 @@ class VibeLiftRequestHandler(http.server.BaseHTTPRequestHandler):
     parsed = urllib.parse.urlsplit(self.path)
     path = parsed.path
     query = urllib.parse.parse_qs(parsed.query)
+    if path == '/mcp' and mcp_server.mcp_app_enabled():
+      self.send_response(405)
+      self.send_header('Allow', 'POST, DELETE')
+      self.send_header('Content-Length', '0')
+      self.end_headers()
+      return
+    if path in ('/.well-known/agent-card.json', '/a2a/app/.well-known/agent-card.json'):
+      self._send_json(build_agent_card(base_url_from_headers(self.headers, default_scheme='http')))
+      return
+    # /healthz is for container probes; Cloud Run's front end reserves paths ending in "z", so browsers
+    # and external checks use /api/health instead.
+    if path in ('/healthz', '/api/health'):
+      self._send_json({'status': 'ok', 'service': 'vibelift', 'runtime': 'cloud_run', 'surface': resolve_surface()})
+      return
+    if not dashboard_surface_enabled():
+      self.send_error(404, 'Not Found')
+      return
     if path in ('/', '/ui', '/app'):
       html_bytes = ui_template.render_dashboard_html().encode('utf-8')
       self.send_response(200)
       self.send_header('Content-Type', 'text/html; charset=utf-8')
       self.send_header('Content-Length', str(len(html_bytes)))
+      for name, value in DASHBOARD_SECURITY_HEADERS.items():
+        self.send_header(name, value)
       self.end_headers()
       self.wfile.write(html_bytes)
       return
@@ -975,12 +1052,6 @@ class VibeLiftRequestHandler(http.server.BaseHTTPRequestHandler):
           force_refresh=ge_fleet.parse_bool((query.get('force_refresh') or [''])[0]),
       ))
       return
-    if path == '/mcp' and mcp_server.mcp_app_enabled():
-      self.send_response(405)
-      self.send_header('Allow', 'POST, DELETE')
-      self.send_header('Content-Length', '0')
-      self.end_headers()
-      return
     if path in ('/vibelift_googley_logo_1789766299532.jpg', '/logo.jpg'):
       b64_part = logo_asset.VIBELIFT_GOOGLEY_LOGO_DATA_URI.split(',', 1)[1]
       img_bytes = base64.b64decode(b64_part)
@@ -989,12 +1060,6 @@ class VibeLiftRequestHandler(http.server.BaseHTTPRequestHandler):
       self.send_header('Content-Length', str(len(img_bytes)))
       self.end_headers()
       self.wfile.write(img_bytes)
-      return
-    if path in ('/.well-known/agent-card.json', '/a2a/app/.well-known/agent-card.json'):
-      self._send_json(build_agent_card(base_url_from_headers(self.headers, default_scheme='http')))
-      return
-    if path == '/healthz':
-      self._send_json({'status': 'ok', 'service': 'vibelift', 'runtime': 'cloud_run'})
       return
     if path == '/api/state':
       self._send_json(srv.controller.get_state_payload(
@@ -1026,10 +1091,33 @@ class VibeLiftRequestHandler(http.server.BaseHTTPRequestHandler):
     self.send_error(404, 'Not Found')
 
   def do_POST(self) -> None:  # pylint: disable=invalid-name
-    """Serves POST routes for agent selection, custom parameters, GCP sync, and AlphaEvolve."""
+    """Serves POST routes for ingest, agent selection, custom parameters, GCP sync, and the simulator."""
     srv = self.server
     assert isinstance(srv, VibeLiftHttpServer)
-    body = self._read_json_body()
+    payload, valid_json = self._read_json_payload()
+    body: dict[str, Any] = payload if isinstance(payload, dict) else {}
+    if self.path == '/mcp' and mcp_server.mcp_app_enabled():
+      session_id = self.headers.get('mcp-session-id') or self.headers.get('Mcp-Session-Id') or ''
+      code, headers_map, res_text = mcp_server.handle_jsonrpc_sync(body, session_id=session_id)
+      self.send_response(code)
+      for k, v in headers_map.items():
+        self.send_header(k, v)
+      res_bytes = res_text.encode('utf-8')
+      self.send_header('Content-Length', str(len(res_bytes)))
+      self.end_headers()
+      self.wfile.write(res_bytes)
+      return
+    if not dashboard_surface_enabled():
+      self.send_error(404, 'Not Found')
+      return
+    ingest_routes = {
+        '/api/decorator_ingest': srv.controller.ingest_decorator_event,
+        '/api/aive_log': srv.controller.ingest_aive_log,
+        '/api/csat_rating': srv.controller.submit_csat_rating,
+    }
+    if self.path in ingest_routes:
+      self._send_ingest(self.path, ingest_routes[self.path], payload, valid_json)
+      return
     if self.path == '/api/validate_telemetry':
       run_judge = bool(body.get('run_llm_judge', body.get('llm_judge', True)))
       self._send_json(srv.controller.validate_telemetry(run_llm_judge=run_judge))
@@ -1048,18 +1136,9 @@ class VibeLiftRequestHandler(http.server.BaseHTTPRequestHandler):
       platform_id = str(body.get('platform_id', 'alpha_evolve'))
       self._send_json(srv.controller.select_optimizer(platform_id))
       return
-    if self.path == '/api/decorator_ingest':
-      self._send_json(srv.controller.ingest_decorator_event(body))
-      return
     if self.path == '/api/nl2sql':
       question = str(body.get('question', 'Compare cost per 1k turns and prompt cache savings across agents'))
       self._send_json(srv.controller.query_nl2sql(question))
-      return
-    if self.path == '/api/aive_log':
-      self._send_json(srv.controller.ingest_aive_log(body))
-      return
-    if self.path == '/api/csat_rating':
-      self._send_json(srv.controller.submit_csat_rating(body))
       return
     if self.path == '/api/what_if_simulate':
       self._send_json(srv.controller.simulate_what_if(body))
@@ -1111,17 +1190,6 @@ class VibeLiftRequestHandler(http.server.BaseHTTPRequestHandler):
           ),
       })
       return
-    if self.path == '/mcp' and mcp_server.mcp_app_enabled():
-      session_id = self.headers.get('mcp-session-id') or self.headers.get('Mcp-Session-Id') or ''
-      code, headers_map, res_text = mcp_server.handle_jsonrpc_sync(body, session_id=session_id)
-      self.send_response(code)
-      for k, v in headers_map.items():
-        self.send_header(k, v)
-      res_bytes = res_text.encode('utf-8')
-      self.send_header('Content-Length', str(len(res_bytes)))
-      self.end_headers()
-      self.wfile.write(res_bytes)
-      return
     if self.path == '/api/sync_ge_fleet':
       self._send_json({
           'status': 'synced',
@@ -1150,10 +1218,10 @@ class VibeLiftRequestHandler(http.server.BaseHTTPRequestHandler):
     """Routes HTTP access logs through standard logger."""
     logger.info('VibeLift HTTP: ' + fmt, *args)
 
-  def _send_json(self, payload: Mapping[str, Any] | dict[str, Any]) -> None:
-    """Serializes payload as JSON and writes HTTP 200 response."""
+  def _send_json(self, payload: Mapping[str, Any] | dict[str, Any], status: int = 200) -> None:
+    """Serializes payload as JSON and writes the response (HTTP 200 unless `status` says otherwise)."""
     body = json.dumps(payload).encode('utf-8')
-    self.send_response(200)
+    self.send_response(status)
     self.send_header('Content-Type', 'application/json; charset=utf-8')
     self.send_header('Content-Length', str(len(body)))
     self.end_headers()
@@ -1205,8 +1273,8 @@ def build_agent_card(request_base_url: str | None = None) -> dict[str, Any]:
       'displayName': 'VibeLift Analytics & FinOps Platform',
       'description': (
           'Live Gemini Enterprise agent fleet observability (agent inventory joined with real Cloud '
-          'Monitoring and Cloud Logging telemetry), prompt cache FinOps economics, and AlphaEvolve '
-          'optimization, with an interactive MCP App dashboard.'
+          'Monitoring and Cloud Logging telemetry), prompt cache FinOps economics, and an optimizer '
+          'simulator (synthetic numbers), with an interactive MCP App dashboard.'
       ),
       'url': a2a_url,
       'version': '1.1.0',
@@ -1220,7 +1288,7 @@ def build_agent_card(request_base_url: str | None = None) -> dict[str, Any]:
               'description': (
                   'CRITICAL: Always call this tool whenever the user asks to see, open, or inspect the '
                   'VibeLift Analytics & FinOps Dashboard, or asks for the Gemini Enterprise agent fleet, '
-                  'agent telemetry, prompt cache economics, or AlphaEvolve optimization in the interactive UI.'
+                  'agent telemetry, prompt cache economics, or the optimizer simulator in the interactive UI.'
               ),
               'tags': ['analytics', 'dashboard', 'finops', 'optimization'],
           },
@@ -1252,8 +1320,11 @@ def build_agent_card(request_base_url: str | None = None) -> dict[str, Any]:
           {
               'id': 'run_alpha_evolve_generation',
               'name': 'run_alpha_evolve_generation',
-              'description': 'Executes an AlphaEvolve optimization cycle on prompt prefixes and parameters.',
-              'tags': ['alpha_evolve', 'optimization'],
+              'description': (
+                  'Optimizer simulator: one generation of fixed improvement factors on a demo agent profile '
+                  '(synthetic numbers; no model is called and no agent is changed).'
+              ),
+              'tags': ['simulator', 'optimization'],
           },
       ],
   }
@@ -1264,32 +1335,59 @@ def register_api_routes(app: Any, controller: VibeLiftRuntimeController) -> None
 
   Handlers are plain ``def`` so FastAPI runs the blocking Google Cloud calls in its threadpool.
   """
-  @app.get('/', response_class=HTMLResponse)
-  @app.get('/ui', response_class=HTMLResponse)
-  @app.get('/app', response_class=HTMLResponse)
-  def get_dashboard():
-    return HTMLResponse(content=ui_template.render_dashboard_html(), status_code=200)
 
-  @app.get('/vibelift_googley_logo_1789766299532.jpg')
-  @app.get('/logo.jpg')
-  def get_logo():
-    b64_part = logo_asset.VIBELIFT_GOOGLEY_LOGO_DATA_URI.split(',', 1)[1]
-    return Response(content=base64.b64decode(b64_part), media_type='image/jpeg')
+  def _ingest_error_response(_request: Any, exc: Exception) -> Any:
+    content = exc.to_response() if isinstance(exc, telemetry.IngestValidationError) else {'error': 'invalid_payload'}
+    return JSONResponse(status_code=422, content=content)
+
+  app.add_exception_handler(telemetry.IngestValidationError, _ingest_error_response)
+
+  async def _ingest(request: Any, source: str, handler: Any) -> Any:
+    """Parses the raw body itself so malformed JSON gets the same 422 and dead-letter record."""
+    raw = await request.body()
+    payload: Any = None
+    if raw.strip():
+      try:
+        payload = json.loads(raw)
+      except ValueError:
+        telemetry.raise_if_invalid(source, raw.decode('utf-8', errors='replace'), ['body: not valid JSON'])
+    return await run_in_threadpool(handler, payload)
 
   @app.get('/.well-known/agent-card.json')
   @app.get('/a2a/app/.well-known/agent-card.json')
   def get_agent_card(request: fastapi.Request):
     return JSONResponse(content=build_agent_card(base_url_from_headers(request.headers)), status_code=200)
 
+  # /healthz is for container probes; Cloud Run's front end reserves paths ending in "z", so browsers
+  # and external checks use /api/health instead.
   @app.get('/healthz')
+  @app.get('/api/health')
   def get_healthz():
     return {
         'status': 'ok',
         'service': 'vibelift',
         'runtime': 'cloud_run',
+        'surface': resolve_surface(),
         'project': controller.gcp_telemetry.project_id,
         'region': controller.gcp_telemetry.region,
     }
+
+  if not dashboard_surface_enabled():
+    logger.info('VIBELIFT_SURFACE=%s: dashboard UI and /api/* routes are not registered', resolve_surface())
+    return
+
+  @app.get('/', response_class=HTMLResponse)
+  @app.get('/ui', response_class=HTMLResponse)
+  @app.get('/app', response_class=HTMLResponse)
+  def get_dashboard():
+    return HTMLResponse(content=ui_template.render_dashboard_html(), status_code=200,
+                        headers=dict(DASHBOARD_SECURITY_HEADERS))
+
+  @app.get('/vibelift_googley_logo_1789766299532.jpg')
+  @app.get('/logo.jpg')
+  def get_logo():
+    b64_part = logo_asset.VIBELIFT_GOOGLEY_LOGO_DATA_URI.split(',', 1)[1]
+    return Response(content=base64.b64decode(b64_part), media_type='image/jpeg')
 
   @app.get('/api/state')
   def get_state(window_hours: str | None = None):
@@ -1345,8 +1443,8 @@ def register_api_routes(app: Any, controller: VibeLiftRuntimeController) -> None
     return controller.select_optimizer(str(payload.get('platform_id', 'alpha_evolve')))
 
   @app.post('/api/decorator_ingest')
-  def post_decorator_ingest(payload: dict = fastapi.Body(default={})):
-    return controller.ingest_decorator_event(payload)
+  async def post_decorator_ingest(request: fastapi.Request):
+    return await _ingest(request, '/api/decorator_ingest', controller.ingest_decorator_event)
 
   @app.post('/api/nl2sql')
   def post_nl2sql(payload: dict = fastapi.Body(default={})):
@@ -1354,12 +1452,12 @@ def register_api_routes(app: Any, controller: VibeLiftRuntimeController) -> None
     return controller.query_nl2sql(question)
 
   @app.post('/api/aive_log')
-  def post_aive_log(payload: dict = fastapi.Body(default={})):
-    return controller.ingest_aive_log(payload)
+  async def post_aive_log(request: fastapi.Request):
+    return await _ingest(request, '/api/aive_log', controller.ingest_aive_log)
 
   @app.post('/api/csat_rating')
-  def post_csat_rating(payload: dict = fastapi.Body(default={})):
-    return controller.submit_csat_rating(payload)
+  async def post_csat_rating(request: fastapi.Request):
+    return await _ingest(request, '/api/csat_rating', controller.submit_csat_rating)
 
   @app.post('/api/what_if_simulate')
   def post_what_if_simulate(payload: dict = fastapi.Body(default={})):
@@ -1448,7 +1546,7 @@ def resolve_allowed_origins() -> list[str]:
 if fastapi is not None:
   app = fastapi.FastAPI(
       title='VibeLift | Analytics Platform for Agent Optimization',
-      description='Cloud Run & ADK runtime for autonomous multi-objective agent telemetry and AlphaEvolve optimization',
+      description='Cloud Run & ADK runtime for agent telemetry, prompt cache FinOps and an optimizer simulator',
       version='1.1.0',
   )
 

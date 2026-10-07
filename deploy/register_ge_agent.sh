@@ -11,7 +11,7 @@
 #   1. Authenticated health check of the private Cloud Run service
 #   2. Discovery Engine service agent run.invoker binding (so GE can call /mcp and the A2A card)
 #   3. Deploys Custom MCP Server to the Gemini Enterprise Data Store (vibelift-analytics-mcp, BYO_MCP),
-#      enables all 6 MCP actions, and registers (links) the GE Data Store (vibelift-analytics-mcp_mcp_data)
+#      enables all 9 MCP actions, and registers (links) the GE Data Store (vibelift-analytics-mcp_mcp_data)
 #      to the Gemini Enterprise App instance (<GE_APP_ID>) via deploy/setup_mcp_connector.py
 #   4. Registers the A2A agent on the Gemini Enterprise App instance (if agents-cli is installed)
 #
@@ -86,13 +86,13 @@ if ! gcloud run services add-iam-policy-binding "${SERVICE_NAME}" \
 fi
 
 # 3. Deploy the Custom MCP Server to a Gemini Enterprise Data Store (NOT Agent Registry / MCP Registry),
-#    enable all 6 MCP actions, and register (link) the GE Data Store to the Gemini Enterprise App instance.
+#    enable all 9 MCP actions, and register (link) the GE Data Store to the Gemini Enterprise App instance.
 #    Official docs: https://cloud.google.com/gemini/enterprise/docs/connectors/custom-mcp-server/set-up-custom-mcp-server
 echo ""
 echo "--- Step 3: Deploying to Gemini Enterprise Data Store & Registering to GE App Instance ---"
 echo "IMPORTANT: VibeLift deploys as a Gemini Enterprise Custom MCP Server Data Store (source=BYO_MCP),"
 echo "           NOT in the Agent Registry / MCP Registry."
-echo "           Once the GE Data Store (vibelift-analytics-mcp_mcp_data) is ACTIVE and its 6 actions are enabled,"
+echo "           Once the GE Data Store (vibelift-analytics-mcp_mcp_data) is ACTIVE and its 9 actions are enabled,"
 echo "           it is registered (linked via dataStoreIds) to Gemini Enterprise App instance '${GE_ENGINE_ID}'."
 
 if [[ "${VIBELIFT_SKIP_MCP_CONNECTOR:-0}" == "1" ]]; then
@@ -115,7 +115,7 @@ else
   echo "        * MCP Server URL:  ${MCP_URL}" >&2
   echo "        * Location:        ${GE_LOCATION} (must match your GE App instance location)" >&2
   echo "        * Data store name: vibelift-analytics-mcp" >&2
-  echo "    - Once Active: open the data store > Actions > Reload custom actions > select all 6 actions > Enable actions." >&2
+  echo "    - Once Active: open the data store > Actions > Reload custom actions > select all 9 actions > Enable actions." >&2
   echo "" >&2
   echo "  Stage 3b (Console) — Register the GE Data Store to the Gemini Enterprise App Instance:" >&2
   echo "    - Open: Console > Gemini Enterprise > Apps > ${GE_ENGINE_ID} > Data stores (Connected data stores)" >&2
@@ -130,20 +130,26 @@ echo "Needs the Gemini Enterprise Admin role. No OAuth authorization is attached
 echo "its own runtime service account, not the end user's token (in the console, choose 'Skip & Finish')."
 GE_APP_RESOURCE="projects/${PROJECT_NUMBER}/locations/${GE_LOCATION}/collections/default_collection/engines/${GE_ENGINE_ID}"
 
-if command -v agents-cli &>/dev/null; then
+# The agent card is served, but the A2A JSON-RPC endpoint it names (/a2a/app) is not: app/fast_api_app.py
+# builds the ADK app without A2A. Publishing is therefore opt-in; Gemini Enterprise uses the MCP data store.
+if [[ "${VIBELIFT_PUBLISH_A2A:-0}" != "1" ]]; then
+  echo "Skipped (set VIBELIFT_PUBLISH_A2A=1 to publish). The A2A endpoint named in the agent card (/a2a/app) is not"
+  echo "served by this build, so a published A2A agent could not answer. The MCP data store from Step 3 provides"
+  echo "all 9 MCP tools and the side-panel dashboard in app ${GE_ENGINE_ID}."
+elif command -v agents-cli &>/dev/null; then
   echo "Using agents-cli to publish the A2A agent to ${GE_APP_RESOURCE}..."
   if ! agents-cli publish gemini-enterprise \
       --registration-type a2a \
       --agent-card-url "${CARD_URL}" \
       --gemini-enterprise-app-id "${GE_APP_RESOURCE}" \
       --display-name "VibeLift Analytics & FinOps" \
-      --description "Observability, Prompt Cache FinOps, and Autonomous Multi-Objective Agent Fleet Optimization Studio"; then
+      --description "Gemini Enterprise agent fleet observability, prompt cache FinOps, and an optimizer simulator"; then
     echo "WARNING: agents-cli publish failed. Re-run it by hand to see the error, or register the agent in" >&2
     echo "         Console > Gemini Enterprise > Apps > ${GE_ENGINE_ID} > Agents using the card URL above." >&2
   fi
 else
   echo "agents-cli not found in PATH (optional). The Gemini Enterprise Custom MCP Server Data Store registered in"
-  echo "Step 3 already provides all 6 MCP tools and the side-panel dashboard in app ${GE_ENGINE_ID}."
+  echo "Step 3 already provides all 9 MCP tools and the side-panel dashboard in app ${GE_ENGINE_ID}."
   echo "To also add the standalone A2A agent in the console: Console > Gemini Enterprise > Apps > ${GE_ENGINE_ID} > Agents."
 fi
 
@@ -153,7 +159,7 @@ echo "  - open_dashboard (opens Right Side Panel with Fullscreen toggle)"
 echo "  - query_ge_agent_fleet (live multi-engine agent inventory and telemetry)"
 echo "  - query_project_telemetry (service requests, errors, and Cloud Run stats)"
 echo "  - calculate_prompt_cache_economics (prefix cache hit ratios and savings)"
-echo "  - run_alpha_evolve_generation (closed-loop Pareto optimization)"
+echo "  - run_alpha_evolve_generation (optimizer simulator: synthetic numbers, nothing deployed)"
 echo "  - get_vibelift_state (runtime state, parameters, and turns)"
 echo ""
 echo "Smoke test of the MCP endpoint with your identity token:"

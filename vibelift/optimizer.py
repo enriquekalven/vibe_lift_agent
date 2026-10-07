@@ -9,6 +9,63 @@ from typing import Any
 
 from vibelift.jsonutil import as_list, as_mapping
 
+# BigQuery maximumBytesBilled for each plain-English (NL2SQL) query. server.py
+# sends this with the query; BigQuery rejects, without billing, any query that
+# would scan more.
+NL2SQL_MAX_BYTES_BILLED = 100 * 1024 * 1024
+
+_NL2SQL_FORBIDDEN_KEYWORDS = re.compile(
+    r'\b(INSERT|UPDATE|DELETE|MERGE|DROP|ALTER|CREATE|REPLACE|TRUNCATE|GRANT|REVOKE|'
+    r'CALL|EXECUTE|EXPORT|LOAD|DECLARE|SET|BEGIN|COMMIT|ROLLBACK)\b',
+    re.IGNORECASE,
+)
+
+
+def verify_nl2sql_sql(sql: str, allowed_datasets: Sequence[Any]) -> dict[str, Any]:
+  """Checks that NL2SQL output is one read-only SELECT over allowed datasets.
+
+  Runs on every generated query; server.py does not send a query that fails.
+  The checks fail closed: one statement only (no ';'), starts with SELECT or
+  WITH, no write, DDL or scripting keyword, every FROM/JOIN target is a
+  backticked name (so it can be checked), and every backticked table is in
+  ``allowed_datasets`` (``project.dataset`` strings).
+
+  Returns:
+    ``read_only_enforced`` (True only when every check passes),
+    ``datasets_queried`` and ``verification_errors``.
+  """
+  text = (sql or '').strip()
+  # Blank out backticked names and string literals before the keyword scan, so
+  # a project id such as `my-set-1` or a literal such as 'update' can't match.
+  scan = re.sub(r'`[^`]*`', '``', text)
+  scan = re.sub(r"'(?:[^'\\]|\\.)*'", "''", scan)
+  errors: list[str] = []
+  if not text:
+    errors.append('empty SQL')
+  if ';' in scan:
+    errors.append('more than one statement')
+  if text and not scan.upper().startswith(('SELECT', 'WITH')):
+    errors.append('not a SELECT')
+  bad = sorted({m.group(1).upper() for m in _NL2SQL_FORBIDDEN_KEYWORDS.finditer(scan)})
+  if bad:
+    errors.append('write or scripting keyword: ' + ', '.join(bad))
+  unquoted = sorted(set(re.findall(r'\b(?:FROM|JOIN)\s+(?!`)([A-Za-z_][\w.-]*)', scan, re.IGNORECASE)))
+  if unquoted:
+    errors.append('unquoted table reference: ' + ', '.join(unquoted))
+  refs = re.findall(r'`([^`]+)`', text)
+  if text and not refs:
+    errors.append('no table reference')
+  datasets = sorted({'.'.join(r.split('.')[:2]) for r in refs})
+  allowed = {str(d) for d in allowed_datasets}
+  outside = [d for d in datasets if d not in allowed]
+  if outside:
+    errors.append('dataset not allowed: ' + ', '.join(outside))
+  return {
+      'read_only_enforced': not errors,
+      'datasets_queried': datasets,
+      'verification_errors': errors,
+  }
+
 
 def scan_python_code_for_finops_findings(
     source_code: str,
@@ -150,7 +207,7 @@ class TimeSeriesPoint:
 
 @dataclasses.dataclass(frozen=True)
 class AlphaEvolveActionRecord:
-  """Describes a concrete optimization action taken by AlphaEvolve."""
+  """One optimizer action record. Simulator records describe changes that were never deployed."""
 
   generation: int
   timestamp: str
@@ -179,7 +236,7 @@ class AlphaEvolveActionRecord:
 
 @dataclasses.dataclass
 class DemoAgentProfile:
-  """Holds state, parameters, time-series, and AlphaEvolve actions per agent."""
+  """Holds one profile's parameters, timeline, and (simulated) action records."""
 
   agent_id: str
   display_name: str
@@ -223,13 +280,13 @@ def _slugify_agent_name(display_name: str, fallback_id: str = '') -> str:
 
 
 def _build_default_agents() -> dict[str, DemoAgentProfile]:
-  """Creates the selectable optimization profiles for the agents registered on Gemini Enterprise."""
+  """Creates the simulator's demo profiles. Every value here is a synthetic example, not a measurement."""
   it_service_desk = DemoAgentProfile(
       agent_id='it_service_desk',
       display_name='IT Service Desk',
       domain='ADK Tier-1 & Tier-2 IT Support Triage (Vertex AI Agent Engine)',
       model='gemini-2.5-flash',
-      health_status='OPTIMIZED (Gen 14 Active)',
+      health_status='SIMULATED DEMO PROFILE (example Gen 14)',
       monthly_savings_usd=14820,
       parameters=[
           OptimizationParameter(
@@ -454,7 +511,7 @@ def _build_default_agents() -> dict[str, DemoAgentProfile]:
       display_name='VibeLift Analytics & FinOps',
       domain='Automated Fleet Telemetry, Prompt Cache FinOps & AlphaEvolve (A2A / MCP)',
       model='gemini-2.5-flash',
-      health_status='OPTIMIZED (Gen 11 Active)',
+      health_status='SIMULATED DEMO PROFILE (example Gen 11)',
       monthly_savings_usd=22400,
       parameters=[
           OptimizationParameter(
@@ -607,7 +664,7 @@ def _build_default_agents() -> dict[str, DemoAgentProfile]:
       display_name='Deep Research',
       domain='Google-Managed Multi-Source Research & Report Synthesis',
       model='gemini-2.5-pro',
-      health_status='OPTIMIZED (Gen 12 Active)',
+      health_status='SIMULATED DEMO PROFILE (example Gen 12)',
       monthly_savings_usd=9650,
       parameters=[
           OptimizationParameter(
@@ -788,6 +845,98 @@ OPTIMIZER_PLATFORMS: dict[str, dict[str, str]] = {
         ),
     },
 }
+
+# ---------------------------------------------------------------------------
+# Optimizer simulator
+# Nothing here calls an optimizer, reads logs or changes an agent. "Run optimizer" applies the fixed
+# per-generation factors below to a demo agent's parameters and "Test alert" applies a fixed scenario.
+# Every status string is computed from the value before and after, so the percentages always match
+# the numbers shown.
+# ---------------------------------------------------------------------------
+SIMULATOR_NOTE = (
+    'Simulator: synthetic numbers from fixed factors in vibelift/optimizer.py. No optimizer is called, '
+    'no logs are read, and no agent is changed.'
+)
+# Lower-is-better parameters: (multiplier per generation, floor).
+_SIM_STEP_DOWN: dict[str, tuple[float, float]] = {
+    'latency_ms': (0.86, 380.0),
+    'cost_usd': (0.84, 1.80),
+    'context_bloat_pct': (0.85, 8.5),
+    'idle_ratio_pct': (0.85, 4.2),
+    'error_rate_pct': (0.0, 0.0),
+}
+# Higher-is-better parameters: (points added per generation, ceiling).
+_SIM_STEP_UP: dict[str, tuple[float, float]] = {
+    'accuracy_pct': (0.6, 99.2),
+    'cache_hit_pct': (1.8, 97.5),
+}
+# "Test alert" scenario: parameter -> (value set, label).
+_SIM_ANOMALY: dict[str, tuple[float, str]] = {
+    'latency_ms': (2390.0, 'SLA BREACH'),
+    'cost_usd': (24.80, 'CACHE BUST SPIKE'),
+    'accuracy_pct': (88.2, 'ACCURACY REGRESSION'),
+    'cache_hit_pct': (14.5, 'PREFIX INVALIDATED'),
+    'error_rate_pct': (9.4, '429 QUOTA ERRORS'),
+    'context_bloat_pct': (68.5, 'CONTEXT BLOAT SPIKE'),
+    'idle_ratio_pct': (44.0, 'TOOL WAIT BOTTLENECK'),
+}
+_SIM_POINT_FIELDS = ('latency_ms', 'cost_usd', 'accuracy_pct', 'cache_hit_pct', 'error_rate_pct')
+
+
+def _pct_change_label(before: float, after: float) -> str:
+  """Signed change from `before` to `after`, e.g. '-14.0%'; 'n/a' when `before` is 0."""
+  if not before:
+    return 'n/a'
+  return f'{(after - before) / abs(before) * 100.0:+.1f}%'
+
+
+def _fmt_sim_value(value: float, unit: str) -> str:
+  """'$2.90', '93%', '593.4 ms'."""
+  if unit == '$':
+    return f'${value:,.2f}'
+  if unit == '%':
+    return f'{value:g}%'
+  return f'{value:g} {unit}'.strip()
+
+
+def _sim_step_value(key: str, value: float) -> float | None:
+  """Value after one simulated generation, or None for parameters the simulator does not model."""
+  if key in _SIM_STEP_DOWN:
+    factor, floor = _SIM_STEP_DOWN[key]
+    return round(max(floor, value * factor), 2)
+  if key in _SIM_STEP_UP:
+    step, ceiling = _SIM_STEP_UP[key]
+    return round(min(ceiling, value + step), 1)
+  return None
+
+
+def _sim_point(
+    agent: DemoAgentProfile, label: str, generation: int, marker: str, fallback: Mapping[str, float]
+) -> TimeSeriesPoint:
+  """Timeline point from the agent's current parameter values.
+
+  A field with no matching parameter takes `fallback`, then the previous point's value.
+  """
+  current = {p.key: float(p.current_value) for p in agent.parameters}
+  prev = agent.timeline[-1] if agent.timeline else None
+
+  def value(field: str) -> float:
+    if field in current:
+      return current[field]
+    if field in fallback:
+      return float(fallback[field])
+    return float(getattr(prev, field)) if prev is not None else 0.0
+
+  return TimeSeriesPoint(
+      timestamp_label=label,
+      generation=generation,
+      latency_ms=value('latency_ms'),
+      cost_usd=value('cost_usd'),
+      accuracy_pct=value('accuracy_pct'),
+      cache_hit_pct=value('cache_hit_pct'),
+      error_rate_pct=value('error_rate_pct'),
+      event_marker=marker,
+  )
 
 
 def _get_param_val(profile: DemoAgentProfile | None, key: str, default: float) -> float:
@@ -1230,6 +1379,18 @@ def build_user_centric_analytics(
   }
 
 
+_OTEL_GENAI_ATTRIBUTES = frozenset({'gen_ai.usage.input_tokens', 'gen_ai.usage.output_tokens'})
+
+
+def metric_key_status(name: str) -> str:
+  """Whether a catalog metric key exists today or is a name you would define as a custom metric."""
+  if name.startswith('run.googleapis.com/'):
+    return 'Cloud Monitoring metric'
+  if name in _OTEL_GENAI_ATTRIBUTES:
+    return 'OTel GenAI semantic-convention attribute'
+  return 'Proposed name: define it as a custom metric'
+
+
 def build_otel_5_layer_catalog(
     live_fleet: Mapping[str, Any] | None = None,
     live_bq: Mapping[str, Any] | None = None,
@@ -1565,8 +1726,11 @@ def build_otel_5_layer_catalog(
       },
   ]
 
-  # Alias 'metrics' -> 'parameters' on every layer so ui_template.py renders all 26 OTel metrics
+  # Alias 'metrics' -> 'parameters' on every layer so ui_template.py renders all 26 OTel metrics,
+  # and say which keys exist today versus names you would have to define as custom metrics.
   for layer in layers:
+    for p in layer['parameters']:
+      p['key_status'] = metric_key_status(str(p.get('otel_name') or ''))
     layer['metrics'] = layer['parameters']
 
   watch_out_alarms = [
@@ -1600,19 +1764,18 @@ def build_otel_5_layer_catalog(
   ]
 
   architecture_tco = {
-      'slide_title': 'Architecture, IAM Prerequisites & Monthly Compute TCO',
+      'slide_title': 'Architecture and IAM prerequisites',
       'architecture_flow': (
           'Gemini Enterprise Assistant (US & Global) → Streamable HTTP MCP (/mcp) & A2A Card → '
           'Cloud Run (vibe-lift-agent) → Parallel Discovery Engine v1alpha + Cloud Monitoring v3 + '
           'Cloud Logging v2 + @vibelift_telemetry / @with_analytics_logging (aive_logs)'
       ),
-      'monthly_compute_cost_usd': 28.50,
-      'monthly_compute_breakdown': (
-          '~$28.50/mo total TCO: Cloud Run (1 vCPU, 512 MiB, background warmer) $19.20/mo + '
-          'Cloud Monitoring & Logging API queries $5.80/mo + BigQuery aive_logs streaming $3.50/mo'
+      # No figure is invented: VibeLift's own hosting cost is only known from a Cloud Billing export.
+      'monthly_compute_cost_usd': None,
+      'cost_note': (
+          'The Cloud Run, BigQuery and API cost of running VibeLift appears only in a Cloud Billing export '
+          '(see the billing status on the Cost tab). The runtime size is set in deploy/deploy_cloud_run.sh.'
       ),
-      'monthly_fleet_savings_usd': 46870,
-      'net_roi_multiple': '1,644x Net ROI ($46,870/mo saved vs. $28.50/mo platform TCO)',
       'required_iam_roles': [
           'roles/discoveryengine.viewer (Enumerate GE Engines, Assistants & Agents)',
           'roles/monitoring.viewer (Read ReasoningEngine, Cloud Run & Vertex Token Metrics)',
@@ -1630,8 +1793,37 @@ def build_otel_5_layer_catalog(
   }
 
 
+CATALOG_LIVE_NOTE = (
+    'Reference list of what to measure. Baseline and current values are not measured here; measured '
+    'latency, requests and tokens for your runtimes are on the Fleet and Cost tabs.'
+)
+
+
+def catalog_reference_only(catalog: Mapping[str, Any]) -> dict[str, Any]:
+  """Live-mode copy of the OTel catalog without the simulator's example values.
+
+  Metric names, units, direction, suggested targets and rationale are kept. Baseline and current
+  values become None with status 'NOT MEASURED', and the example watch-out alarms are dropped,
+  because none of them were measured on the live project.
+  """
+  layers = []
+  for layer in as_list(catalog.get('layers')):
+    params = [
+        {**p, 'baseline_value': None, 'current_value': None, 'status': 'NOT MEASURED'}
+        for p in as_list(as_mapping(layer).get('parameters'))
+    ]
+    layers.append({**as_mapping(layer), 'parameters': params, 'metrics': params})
+  return {
+      **catalog,
+      'layers': layers,
+      'watch_out_alarms': [],
+      'values_measured': False,
+      'values_note': CATALOG_LIVE_NOTE,
+  }
+
+
 class VibeLiftAlphaEvolveOptimizer:
-  """Manages selectable Gemini Enterprise agents, user parameters, and optimization loops."""
+  """Optimizer simulator: demo profiles, user parameters, and simulated generations (nothing is deployed)."""
 
   def __init__(self) -> None:
     """Initializes the multi-agent catalog and sets default active agent."""
@@ -1640,6 +1832,8 @@ class VibeLiftAlphaEvolveOptimizer:
     self.selected_optimizer_platform: str = 'alpha_evolve'
     self._live_fleet_payload: dict[str, Any] | None = None
     self._live_bq_insights: dict[str, Any] | None = None
+    # Parameter values from before a simulated anomaly, per agent; the next generation starts from them.
+    self._pre_anomaly: dict[str, dict[str, float]] = {}
 
   @property
   def active_agent(self) -> DemoAgentProfile:
@@ -1666,7 +1860,25 @@ class VibeLiftAlphaEvolveOptimizer:
       question: str,
       project_id: str | None = None,
   ) -> dict[str, Any]:
-    """Translates a natural-language telemetry/FinOps question into BigQuery SQL and live results."""
+    """Matches a plain-English question to a fixed SELECT template over the VibeLift mart.
+
+    Rows returned here are the simulator's example rows; on a real project
+    server.py runs ``generated_sql`` on BigQuery and replaces them. The
+    ``sql_safety_audit`` read-only and dataset fields are computed from the
+    returned SQL by ``verify_nl2sql_sql``.
+    """
+    res = self._match_nl2sql_template(question, project_id=project_id)
+    audit = dict(as_mapping(res.get('sql_safety_audit')))
+    audit.update(verify_nl2sql_sql(str(res.get('generated_sql') or ''), as_list(audit.get('allowed_datasets'))))
+    res['sql_safety_audit'] = audit
+    return res
+
+  def _match_nl2sql_template(
+      self,
+      question: str,
+      project_id: str | None = None,
+  ) -> dict[str, Any]:
+    """Picks the SELECT template for a question by keyword and fills the simulator rows."""
     from vibelift import ge_mart
     q_clean = (question or '').strip()
     q_lower = q_clean.lower()
@@ -1684,23 +1896,18 @@ class VibeLiftAlphaEvolveOptimizer:
     proj = str(cand_proj) if str(cand_proj) != 'UNCONFIGURED-PROJECT' else 'YOUR_PROJECT'
     mart_ds = ge_mart.mart_dataset_name()
     curated_ds = ge_mart.curated_dataset_name()
-    otel_ds = ge_mart.otel_dataset_name()
-    analytics_ds = (os.environ.get('VIBELIFT_ANALYTICS_DATASET') or 'vibelift_analytics').strip() or 'vibelift_analytics'
 
     dml_tokens = ('drop ', 'delete ', 'update ', 'insert ', 'alter ', 'truncate ', 'grant ', ';')
     blocked_dml = any(tok in q_lower for tok in dml_tokens)
+    # read_only_enforced and datasets_queried are added by verify_nl2sql_sql()
+    # in execute_nl2sql_telemetry_query, from the SQL actually returned.
     safety_audit = {
-        'read_only_enforced': True,
         'blocked_dml_attempt': blocked_dml,
-        'max_bytes_billed_cap': 104857600,
-        'allowed_datasets': [
-            f'{proj}.{mart_ds}',
-            f'{proj}.{curated_ds}',
-            f'{proj}.ds_ge_audit_raw',
-            f'{proj}.{otel_ds}',
-            f'{proj}.{analytics_ds}',
-        ],
-        'service_account_mode': 'READ_ONLY_BIGQUERY_DATA_VIEWER',
+        'max_bytes_billed_cap': NL2SQL_MAX_BYTES_BILLED,
+        # Every template reads only the VibeLift mart.
+        'allowed_datasets': [f'{proj}.{mart_ds}'],
+        # The question picks a fixed SELECT template; its text never enters the SQL.
+        'sql_source': 'FIXED_SELECT_TEMPLATES',
     }
 
     if any(w in q_lower for w in ('runaway', 'thinking', 'background', 'burn', 'loop')) and not blocked_dml:
@@ -1920,7 +2127,9 @@ class VibeLiftAlphaEvolveOptimizer:
           'monthly_savings': f"${profile.monthly_savings_usd:,}/mo",
       })
     summary_msg = (
-        'BLOCKED DML/DDL injection attempt; enforced read-only SELECT guardrail with 100 MB maximumBytesBilled cap.'
+        "Blocked: the question contains a write keyword or ';', so no query was sent to BigQuery. "
+        f'Allowed queries are fixed SELECT templates, each capped at '
+        f'{NL2SQL_MAX_BYTES_BILLED // (1024 * 1024)} MB billed.'
         if blocked_dml
         else (
             'Simulator result: rows come from the optimizer model, not BigQuery. '
@@ -3020,155 +3229,126 @@ class VibeLiftAlphaEvolveOptimizer:
     }
 
   def get_sme_persona_playbooks(self) -> dict[str, Any]:
-    """Returns role-tailored SME persona lenses, navigation targets, KPIs, and usability scores."""
+    """Returns a role guide: where each persona starts and what it can answer.
+
+    The guide holds no metric values; the numbers are in the panels it points
+    to. tests/test_vibelift.py checks that every ``target_panel_id`` exists in
+    the dashboard, sits on ``primary_tab``, and is not a simulator panel.
+    """
     personas: list[dict[str, Any]] = [
         {
             'persona_id': 'finops_lead',
             'role_title': 'FinOps Lead / Cloud Economist',
             'short_label': 'FinOps & Billing Lead',
-            'before_score': 36,
-            'after_score': 92,
-            'score_delta': '+56 pts',
             'primary_tab': 3,
-            'target_panel_id': 'tokenomicsCpoDriftPanel',
+            'primary_tab_name': 'Cost',
+            'target_panel_id': 'modelUsageBody',
             'primary_kpis': [
-                'True Cost per Outcome (CpO): $2.27 -> $0.42 (-81.6%)',
-                'Dual-Ledger Billing SKU Variance: -1.67% (Within ±2% SLA)',
-                'Explicit Cache Break-Even: N* = 4.70 calls/hr (Flash)',
-                'GSU + 1-Yr CUD Floor: 2 GSUs ($4,150/mo net savings)',
+                'Estimated cost by model at list price (tokens x rate card)',
+                'Share of input tokens served from cache',
+                'Cloud Billing export status, and billed cost when an export is connected',
             ],
             'key_questions_answered': [
-                'Why does our GCP invoice differ from raw token x list price estimates (D1..D5 drift)?',
-                'When should we switch from Implicit to Explicit Context Caching or commit to Provisioned GSUs?',
-                'How do we join Gemini Enterprise activity, OTel traces, and Cloud Billing Export per user_ldap?',
+                'Which models drive token spend, and how much input is served from cache?',
+                'Is a Cloud Billing export connected, and if not, what is missing?',
+                'Which users account for the most estimated spend?',
             ],
-            'actionable_controls': 'Interactive FinOps Simulator (/api/recompute_finops), 3-Way Attribution SQL, GSU/CUD Advisor',
+            'actionable_controls': 'Cost tab (Model usage & estimated cost, Billing export); Users tab (Top users)',
         },
         {
             'persona_id': 'sre_platform',
             'role_title': 'SRE / Cloud Platform Engineer',
             'short_label': 'SRE & Platform Eng',
-            'before_score': 47,
-            'after_score': 90,
-            'score_delta': '+43 pts',
             'primary_tab': 0,
-            'target_panel_id': 'watchOutAlarmsContainer',
+            'primary_tab_name': 'Agents',
+            'target_panel_id': 'fleetAgentsBody',
             'primary_kpis': [
-                'P95 Turn Latency: 2,480ms -> 690ms (-72.2%)',
-                '400/429 Error Rate: 6.8% -> 0.0% (Tenacity + Apigee Freeze)',
-                'Cloud Run Revision Split: 85% Prod / 15% Canary',
-                '5-Layer OTel Compliance: 26/26 Metrics Within SLO',
+                'Requests, errors and p95 latency per agent (Cloud Monitoring)',
+                'Cloud Run services and revisions behind the agents',
+                'Registered agents whose backend no longer exists',
             ],
             'key_questions_answered': [
-                'Which Cloud Run service revision or Reasoning Engine is causing 429/5xx tail latency spikes?',
-                'Are any agents stuck in recursive A2A sub-agent handoff loops or thinking token runaways?',
-                'What is the exact gcloud run services update-traffic command to promote or roll back a canary?',
+                'Which agent or Cloud Run service is returning errors or slow responses?',
+                'Which registered agents point at a backend that no longer exists?',
+                'Is Discovery Engine trace logging turned on for each agent?',
             ],
-            'actionable_controls': 'Live Fleet Refresh (/api/sync_ge_fleet), 5-Layer OTel Filter, Cloud Run Canary CLI Generator',
+            'actionable_controls': 'Agents tab (Refresh now, trace logging on/off); Overview (Clean up)',
         },
         {
             'persona_id': 'ai_engineer',
             'role_title': 'AI / Agent & Prompt Engineer',
             'short_label': 'AI / Agent Engineer',
-            'before_score': 43,
-            'after_score': 94,
-            'score_delta': '+51 pts',
             'primary_tab': 2,
-            'target_panel_id': 'whatIfSimulatorPanel',
+            'primary_tab_name': 'Optimizer & Testing',
+            'target_panel_id': 'promptXrayPanel',
             'primary_kpis': [
-                'Prompt Cache Hit Ratio: 12.0% -> 91.2% (Line-142 Lock)',
-                'Context Bloating Ratio: 64.0% -> 14.2% (N-2 Window)',
-                'AST Code Audit: 5/5 FIN-01..FIN-05 Rules Remediated',
-                'Schema Footprint: 50,000 tok -> 2,000 tok (7x Reduction)',
+                'First line where two prompts differ (where the cached prefix breaks)',
+                'Usage records sent by the @vibelift_telemetry decorator',
+                'Records rejected at ingest, with the reason',
             ],
             'key_questions_answered': [
-                'Which exact 1-based prompt line mutated and busted the static prefix cache hash?',
-                'Which Python files trigger FIN-01..FIN-05 anti-patterns (loops, uncached prefixes, top_k>20)?',
-                'What happens to latency, accuracy, and cost if I cap thinking_budget_tokens=512 on Flash?',
+                'Where does my prompt change between turns and break the cached prefix?',
+                'Is my agent sending valid usage records to VibeLift?',
             ],
-            'actionable_controls': 'What-If Simulator (/api/what_if_simulate), Step Turn (/api/step_turn), AST Code Auditor (FIN-01..05)',
+            'actionable_controls': 'Optimizer & Testing tab (Prompt Cache X-Ray); SDK & Tools tab (decorator events, rejected records)',
         },
         {
             'persona_id': 'product_quality',
             'role_title': 'Product Manager / Quality & VoC Lead',
             'short_label': 'Product & VoC Lead',
-            'before_score': 30,
-            'after_score': 88,
-            'score_delta': '+58 pts',
-            'primary_tab': 3,
-            'target_panel_id': 'vocRatingsBody',
+            'primary_tab': 4,
+            'primary_tab_name': 'Users',
+            'target_panel_id': 'geSessionsBody',
             'primary_kpis': [
-                'Task Grounding Accuracy: 91.0% -> 96.4% (95% Floor)',
-                'Average User CSAT: 4.10 ★ -> 4.92 ★ (aive_logs.ratings_log)',
-                'First-Contact Resolution: 76.2% -> 96.4% (-80% Escalations)',
-                'Guardrail Rollbacks: Gen 9 Rejected (74.0% < 95.0% SLO)',
+                'Conversation sessions, turns and failed turns (vibelift_mart.fct_sessions)',
+                'Most active users and their estimated cost',
+                'CSAT ratings, where ratings are logged',
             ],
             'key_questions_answered': [
-                'Did our cost optimizations degrade answer grounding accuracy or user CSAT ratings?',
-                'Which specific session_ids and user_ldaps reported 1-2★ feedback or L1->L2 escalations?',
-                'Did the Reviewer Gatekeeper block aggressive token-pruning mutations that hurt quality?',
+                'Who uses the agents, how often, and how many turns fail?',
+                'Which sessions had failed turns?',
             ],
-            'actionable_controls': 'Live CSAT Feedback Submission (/api/csat_rating), L1/L2 Support Triage Stream, Guardrail Audit',
+            'actionable_controls': 'Users tab (Conversation sessions, Top users, Recent activity & feedback)',
         },
         {
             'persona_id': 'security_governance',
-            'role_title': 'Security & API Governance Architect',
-            'short_label': 'Security & Apigee Arch',
-            'before_score': 26,
-            'after_score': 87,
-            'score_delta': '+61 pts',
-            'primary_tab': 3,
-            'target_panel_id': 'apigeeAndExtensionsPanel',
+            'role_title': 'Security & Data Governance',
+            'short_label': 'Security & Governance',
+            'primary_tab': 5,
+            'primary_tab_name': 'SDK & Tools',
+            'target_panel_id': 'ingestDeadLetterBody',
             'primary_kpis': [
-                'Apigee Edge Quotas: 7 Active Policies (APG-01..APG-07)',
-                'Automated Traffic Freeze: <50ms Circuit Breaker Trigger',
-                'NL2SQL Safety Gate: Read-Only SELECT + 100 MB Byte Cap',
-                'OAuth 2.0 & PDD Compliance: Verified for 4k-10k DAU',
+                'Rejected ingest records (field names and reasons only, no values)',
+                'Plain-English search: fixed SELECT templates, checked read-only, '
+                f'{NL2SQL_MAX_BYTES_BILLED // (1024 * 1024)} MB billing cap per query',
             ],
             'key_questions_answered': [
-                'How do we enforce per-LDAP token quotas and hard spend caps before requests hit Vertex AI?',
-                'How do we pause runaway recursive agent traffic in <50ms instead of waiting 48h for billing export?',
-                'Are NL2SQL telemetry queries restricted to read-only SELECTs with DML/DDL blocking?',
+                'Which telemetry records were rejected, and why?',
+                'Can the plain-English search run anything other than a read-only SELECT?',
             ],
-            'actionable_controls': 'Apigee Policy Ledger (APG-01..07), @cost_guard Pre-Flight Enforcer, NL2SQL Read-Only Verifier',
+            'actionable_controls': 'SDK & Tools tab (rejected records); Search Data in Plain English (shows the SQL and its checks)',
         },
         {
             'persona_id': 'cfo_exec',
             'role_title': 'CFO / VP of Engineering (Exec Sponsor)',
             'short_label': 'CFO & VP Engineering',
-            'before_score': 30,
-            'after_score': 91,
-            'score_delta': '+61 pts',
-            'primary_tab': 3,
-            'target_panel_id': 'cockpitFinopsAndTcoPanel',
+            'primary_tab': 6,
+            'primary_tab_name': 'Overview',
+            'target_panel_id': 'execKpis',
             'primary_kpis': [
-                'Cost / CSAT-Positive Session: $0.231 -> $0.011 (-95.2%)',
-                'Enterprise AI TCO Split: 30% Visible Tech / 70% Hidden Ops',
-                'P&L Token Accounting: 14.2% CapEx / 48.5% OpEx / 37.3% COGS',
-                'Seat vs PAYGO Arbitrage: $17,600/mo Pooled Seat Savings',
+                'Requests, active users and estimated model spend',
+                'Model spend by model and tokens by agent',
+                'Billed AI cost by day, when a Cloud Billing export is connected',
             ],
             'key_questions_answered': [
-                'How do our $46.8k/mo realized savings, $132k/mo portfolio waterfall, and $240k/mo HITL savings reconcile?',
-                'How is AI spend classified across CapEx (R&D), OpEx (SG&A), and COGS (Gross Margin protection)?',
-                'Should we license Gemini Enterprise Pooled Seats ($30/mo + FSP) or raw PAYGO API for power users?',
+                'How much are the agents used, and by whom?',
+                'What is the estimated model spend, and which models drive it?',
             ],
-            'actionable_controls': 'Savings Reconciliation Bridge, CFO 30/70 TCO & P&L Ledger, GE Seat vs PAYGO Calculator',
+            'actionable_controls': 'Overview tab; Cost tab (What-if: projection from observed usage)',
         },
     ]
-    avg_before = round(sum(p['before_score'] for p in personas) / len(personas), 1)
-    avg_after = round(sum(p['after_score'] for p in personas) / len(personas), 1)
     return {
-        'rubric_dimensions': [
-            '1. Time-to-Insight (20 pts)',
-            '2. Actionability & Control (20 pts)',
-            '3. Data Trust & Reconciliation (20 pts)',
-            '4. Persona Ergonomics & Navigation (20 pts)',
-            '5. Guardrail & Risk Prevention (20 pts)',
-        ],
-        'fleet_average_before_score': avg_before,
-        'fleet_average_after_score': avg_after,
-        'fleet_average_delta': f'+{round(avg_after - avg_before, 1)} pts',
-        'opus_model_garden_verified': True,
+        'note': 'Role guide only: it holds no measurements. The numbers are in the panels it points to.',
         'personas': personas,
     }
 
@@ -3272,6 +3452,8 @@ class VibeLiftAlphaEvolveOptimizer:
         'active_platform_id': self.selected_optimizer_platform,
         'active_platform': OPTIMIZER_PLATFORMS[self.selected_optimizer_platform],
         'available_platforms': list(OPTIMIZER_PLATFORMS.values()),
+        'simulator': True,
+        'simulator_note': SIMULATOR_NOTE,
     }
 
   def select_agent(self, agent_id: str) -> DemoAgentProfile:
@@ -3327,56 +3509,30 @@ class VibeLiftAlphaEvolveOptimizer:
         if live_model:
           profile.model = live_model
       else:
+        # Simulator starting point for a live agent: example targets, nothing measured, no history.
+        start_values = (
+            ('latency_ms', 'P95 Response Latency', 'ms', 'LOWER', 2100.0, 850.0, 35),
+            ('cost_usd', 'Net Cost per 1k Turns', '$', 'LOWER', 24.00, 5.00, 30),
+            ('accuracy_pct', 'Task Grounding Accuracy', '%', 'HIGHER', 90.0, 95.0, 25),
+            ('cache_hit_pct', 'Prompt Cache Hit Ratio', '%', 'HIGHER', 15.0, 85.0, 10),
+            ('context_bloat_pct', 'Context Bloating Ratio', '%', 'LOWER', 60.0, 20.0, 10),
+            ('idle_ratio_pct', 'Agent Idle Ratio', '%', 'LOWER', 38.0, 15.0, 10),
+        )
         self._agents[slug] = DemoAgentProfile(
             agent_id=slug,
             display_name=display_name or slug,
             domain=f'{type_label} ({desc})' if desc else type_label,
             model=live_model or 'gemini-2.5-flash',
-            health_status='OPTIMIZED (Gen 10 Active)',
-            monthly_savings_usd=8400,
+            health_status='SIMULATED START (example values, not measured)',
+            monthly_savings_usd=0,
             parameters=[
-                OptimizationParameter(
-                    'latency_ms', 'P95 Response Latency', 'ms', 'LOWER',
-                    2100.0, 720.0, 850.0, 35, 'MEETING TARGET (-66%)',
-                ),
-                OptimizationParameter(
-                    'cost_usd', 'Net Cost per 1k Turns', '$', 'LOWER',
-                    24.00, 3.80, 5.00, 30, 'MEETING TARGET (-84%)',
-                ),
-                OptimizationParameter(
-                    'accuracy_pct', 'Task Grounding Accuracy', '%', 'HIGHER',
-                    90.0, 96.2, 95.0, 25, 'EXCEEDING TARGET (+6.2%)',
-                ),
-                OptimizationParameter(
-                    'cache_hit_pct', 'Prompt Cache Hit Ratio', '%', 'HIGHER',
-                    15.0, 88.5, 85.0, 10, 'EXCEEDING TARGET (+73.5%)',
-                ),
-                OptimizationParameter(
-                    'context_bloat_pct', 'Context Bloating Ratio', '%', 'LOWER',
-                    60.0, 15.0, 20.0, 10, 'PRUNED (-75%)',
-                ),
-                OptimizationParameter(
-                    'idle_ratio_pct', 'Agent Idle Ratio', '%', 'LOWER',
-                    38.0, 9.5, 15.0, 10, 'MEETING TARGET (-75%)',
-                ),
+                OptimizationParameter(key, label, unit, direction, base, base, target, weight, 'SIMULATED START')
+                for key, label, unit, direction, base, target, weight in start_values
             ],
             timeline=[
-                TimeSeriesPoint('Day 1 (Baseline)', 0, 2100, 24.00, 90.0, 15.0, 4.5, 'Baseline Audit'),
-                TimeSeriesPoint('Day 5 (Gen 10)', 10, 720, 3.80, 96.2, 88.5, 0.0, 'Prefix Cache Locked'),
+                TimeSeriesPoint('Simulated start', 0, 2100.0, 24.00, 90.0, 15.0, 4.5, 'Simulated start (example values)'),
             ],
-            actions=[
-                AlphaEvolveActionRecord(
-                    generation=10,
-                    timestamp='Live Sync • Gen 10',
-                    action_title='Static Prompt Prefix Lock & Schema Compression',
-                    parameter_targeted='Latency (ms), Cost ($) & Cache Hit Ratio (%)',
-                    root_cause_from_logs='Detected dynamic context prefix invalidating static instruction cache.',
-                    action_taken='Pinned static instructions and tool schemas to prefix block.',
-                    impact_summary='Latency: 2,100ms -> 720ms | Cache Hit: 15% -> 88.5%',
-                    diff_snippet='+ STATIC_SYSTEM_PREFIX_CACHE = True',
-                    status='ACTIVE PRODUCTION ELITE',
-                ),
-            ],
+            actions=[],
         )
 
   def get_all_agents_dict(self) -> dict[str, dict[str, Any]]:
@@ -3444,130 +3600,84 @@ class VibeLiftAlphaEvolveOptimizer:
     return agent
 
   def inject_anomaly(self) -> DemoAgentProfile:
-    """Simulates a live production log anomaly (Cache Bust + Latency Spike)."""
+    """Simulator: applies the fixed cache-bust + 429 scenario (_SIM_ANOMALY) to the active demo agent."""
     agent = self.active_agent
-    last_gen = agent.timeline[-1].generation if agent.timeline else 14
-    agent.health_status = '⚠️ CRITICAL LOG ANOMALY (Cache Bust + 429 Spike)'
+    saved = self._pre_anomaly.setdefault(agent.agent_id, {})
     for param in agent.parameters:
-      if param.key == 'latency_ms':
-        param.current_value = 2390.0
-        param.status = '⚠️ SLA BREACH (+246%)'
-      elif param.key == 'cost_usd':
-        param.current_value = 24.80
-        param.status = '⚠️ CACHE BUST SPIKE'
-      elif param.key == 'accuracy_pct':
-        param.current_value = 88.2
-        param.status = '⚠️ ACCURACY REGRESSION (88.2%)'
-      elif param.key == 'cache_hit_pct':
-        param.current_value = 14.5
-        param.status = '⚠️ PREFIX INVALIDATED'
-      elif param.key == 'error_rate_pct':
-        param.current_value = 9.4
-        param.status = '⚠️ 429 QUOTA ERRORS'
-      elif param.key == 'context_bloat_pct':
-        param.current_value = 68.5
-        param.status = '⚠️ CONTEXT BLOAT SPIKE'
-      elif param.key == 'idle_ratio_pct':
-        param.current_value = 44.0
-        param.status = '⚠️ TOOL WAIT BOTTLENECK'
-
+      scenario = _SIM_ANOMALY.get(param.key)
+      if scenario is None:
+        continue
+      value, label = scenario
+      saved.setdefault(param.key, param.current_value)
+      before = param.current_value
+      param.current_value = value
+      param.status = f'SIMULATED {label} ({_pct_change_label(before, value)})'
+    agent.health_status = 'SIMULATED CRITICAL ANOMALY (cache bust + 429 scenario)'
+    generation = agent.timeline[-1].generation if agent.timeline else 0
     agent.timeline.append(
-        TimeSeriesPoint(
-            timestamp_label='Live Anomaly!',
-            generation=last_gen,
-            latency_ms=2390.0,
-            cost_usd=24.80,
-            accuracy_pct=88.2,
-            cache_hit_pct=14.5,
-            error_rate_pct=9.4,
-            event_marker='⚠️ Dynamic Prompt Regression Injected',
+        _sim_point(
+            agent, 'Simulated anomaly', generation, 'Simulated cache-bust scenario',
+            {k: v for k, (v, _) in _SIM_ANOMALY.items()},
         )
     )
     return agent
 
   def run_next_generation(self) -> DemoAgentProfile:
-    """Runs the selected optimization platform to heal anomalies and improve all agent parameters."""
+    """Simulator: one generation of the fixed factors in _SIM_STEP_DOWN / _SIM_STEP_UP.
+
+    A generation after a simulated anomaly starts from the pre-anomaly values. Status and impact text
+    are computed from each parameter's value before and after; nothing is deployed.
+    """
     agent = self.active_agent
     platform = OPTIMIZER_PLATFORMS.get(
         self.selected_optimizer_platform, OPTIMIZER_PLATFORMS['alpha_evolve']
     )
     platform_short = platform['name'].split(' (')[0]
-    next_gen = (agent.timeline[-1].generation if agent.timeline else 14) + 1
-    new_lat = 590.0
-    new_cost = 2.85
-    new_acc = 97.6
-    new_hit = 94.6
-
+    next_gen = (agent.timeline[-1].generation if agent.timeline else 0) + 1
+    restore = self._pre_anomaly.pop(agent.agent_id, {})
+    changes: list[str] = []
+    targeted: list[str] = []
     for param in agent.parameters:
-      if param.key == 'latency_ms':
-        new_lat = max(380.0, round(min(param.current_value, 690.0) * 0.86, 1))
-        param.current_value = new_lat
-        param.status = f'OPTIMIZED BY GEN {next_gen} (-76%)'
-      elif param.key == 'cost_usd':
-        new_cost = max(1.80, round(min(param.current_value, 3.45) * 0.84, 2))
-        param.current_value = new_cost
-        param.status = f'OPTIMIZED BY GEN {next_gen} (-90%)'
-      elif param.key == 'accuracy_pct':
-        new_acc = min(99.2, round(max(param.current_value, 96.4) + 0.6, 1))
-        param.current_value = new_acc
-        param.status = f'EXCEEDING TARGET ({new_acc}%)'
-      elif param.key == 'cache_hit_pct':
-        new_hit = min(97.5, round(max(param.current_value, 91.2) + 1.8, 1))
-        param.current_value = new_hit
-        param.status = f'LOCKED ({new_hit}% Hit)'
-      elif param.key == 'error_rate_pct':
-        param.current_value = 0.0
-        param.status = 'REMEDIATED (0.0%)'
-      elif param.key == 'context_bloat_pct':
-        param.current_value = max(8.5, round(min(param.current_value, 14.2) * 0.85, 1))
-        param.status = f'PRUNED ({param.current_value}% Bloat)'
-      elif param.key == 'idle_ratio_pct':
-        param.current_value = max(4.2, round(min(param.current_value, 8.4) * 0.85, 1))
-        param.status = f'OPTIMIZED ({param.current_value}% Idle)'
+      before = param.current_value
+      after = _sim_step_value(param.key, restore.get(param.key, before))
+      if after is None:
+        continue
+      param.current_value = after
+      change = _pct_change_label(before, after)
+      param.status = f'SIMULATED GEN {next_gen} ({change})'
+      targeted.append(param.label)
+      if after != before:
+        changes.append(
+            f'{param.label}: {_fmt_sim_value(before, param.unit)} -> {_fmt_sim_value(after, param.unit)} ({change})'
+        )
 
-    agent.health_status = f'OPTIMIZED & REMEDIATED ({platform_short} • Gen {next_gen} Active)'
-    agent.monthly_savings_usd += 1850
+    agent.health_status = f'OPTIMIZED IN SIMULATION ({platform_short} • Gen {next_gen})'
     agent.timeline.append(
-        TimeSeriesPoint(
-            timestamp_label=f'Gen {next_gen} (Live)',
-            generation=next_gen,
-            latency_ms=new_lat,
-            cost_usd=new_cost,
-            accuracy_pct=new_acc,
-            cache_hit_pct=new_hit,
-            error_rate_pct=0.0,
-            event_marker=f'🧬 {platform_short} Gen {next_gen} Remediated',
+        _sim_point(
+            agent, f'Gen {next_gen} (simulated)', next_gen, f'{platform_short} Gen {next_gen} (simulated)',
+            {'error_rate_pct': 0.0},
         )
     )
     agent.actions.insert(
         0,
         AlphaEvolveActionRecord(
             generation=next_gen,
-            timestamp=f'Live Run • Gen {next_gen} ({platform_short})',
-            action_title=(
-                f'Gen {next_gen} [{platform_short}]: Cross-Turn Context Deduplication & '
-                'Speculative Prefix Warming'
-            ),
-            parameter_targeted='Latency (ms), Cost ($), Context Bloat (%), Idle Ratio (%) & Cache %',
-            root_cause_from_logs=(
-                'Decorator telemetry (@vibelift_telemetry) detected uncached context bloating '
-                'and subagent serialization idle wait in recent message-passing window.'
-            ),
+            timestamp=f'Simulated • Gen {next_gen} ({platform_short})',
+            action_title=f'Gen {next_gen} [{platform_short}]: simulated generation',
+            parameter_targeted=', '.join(targeted) or 'No simulated parameters on this agent',
+            root_cause_from_logs='Simulated: no logs were read.',
             action_taken=(
-                f'{platform_short} locked static prompt prefix hash, tuned sliding-window '
-                'context pruning, and shared cross-subagent KV cache keys.'
+                'Applied the simulator factors per generation: latency x0.86, cost x0.84, context bloat and '
+                'idle ratio x0.85, error rate to 0, accuracy +0.6 pts, cache hit +1.8 pts (with floors and '
+                'ceilings). Nothing was deployed.'
             ),
-            impact_summary=(
-                f'Latency: -> {new_lat}ms | Cost: -> ${new_cost} | '
-                f'Accuracy: -> {new_acc}% | Cache Hit: -> {new_hit}%'
-            ),
+            impact_summary=' | '.join(changes) or 'No simulated parameter changed.',
             diff_snippet=(
+                '# Illustrative config change; not applied anywhere\n'
                 f'+ OPTIMIZER_BACKEND = "{self.selected_optimizer_platform}"\n'
-                f'+ GENERATION_ID = {next_gen}\n'
-                '+ SPECULATIVE_PREFIX_WARMING = True\n'
-                '+ CROSS_SUBAGENT_CACHE_KEY = "vibelift_global_v4"'
+                f'+ GENERATION_ID = {next_gen}'
             ),
-            status=f'REMEDIATED & DEPLOYED (PR #{100 + next_gen})',
+            status='SIMULATED (nothing deployed)',
         ),
     )
     return agent

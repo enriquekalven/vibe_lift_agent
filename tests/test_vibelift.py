@@ -166,7 +166,9 @@ class VibeLiftFrameworkTest(unittest.TestCase):
     # Test trigger_alpha_evolve_cycle tool
     evolve_res = json.loads(adk_agent_module.trigger_alpha_evolve_cycle('it_service_desk'))
     self.assertEqual(evolve_res['agent_id'], 'it_service_desk')
-    self.assertIn('active_generation', evolve_res)
+    self.assertTrue(evolve_res['simulator'])
+    self.assertIn('simulated_generation', evolve_res)
+    self.assertEqual(evolve_res['latest_action']['status'], 'SIMULATED (nothing deployed)')
 
     # validate_telemetry_grounding must run the real validator (deterministic, no LLM judge by default)
     with mock.patch.object(
@@ -597,6 +599,7 @@ class ProductionAppTest(unittest.TestCase):
 
   def test_fleet_rest_routes(self) -> None:
     self.assertEqual(self.client.get('/healthz').json()['status'], 'ok')
+    self.assertEqual(self.client.get('/api/health').json()['status'], 'ok')
     fleet = self.client.get('/api/ge_fleet', params={'window_hours': 'abc'}).json()
     self.assertEqual(fleet['window_hours'], 24)  # Invalid input falls back to the default window.
     self.assertEqual(sorted(a['display_name'] for a in fleet['agents']), _FLEET_AGENT_NAMES)
@@ -664,6 +667,39 @@ def _pins(text: str) -> dict[str, str]:
     name, version = line.split('==', 1)
     pins[re.sub(r'\[.*\]', '', name).strip().lower().replace('_', '-')] = version.strip()
   return pins
+
+
+def _element_ancestry(html: str) -> dict[str, tuple[set[str], set[str]]]:
+  """Maps every element id to (ids of it and its ancestors, classes of it and its ancestors)."""
+  from html.parser import HTMLParser
+
+  void = {'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr'}
+
+  class _Walker(HTMLParser):
+
+    def __init__(self) -> None:
+      super().__init__()
+      self.stack: list[tuple[str, str | None, list[str]]] = []
+      self.found: dict[str, tuple[set[str], set[str]]] = {}
+
+    def handle_starttag(self, tag, attrs):
+      a = dict(attrs)
+      entry = (tag, a.get('id'), (a.get('class') or '').split())
+      chain = [*self.stack, entry]
+      if entry[1]:
+        self.found[entry[1]] = ({i for _, i, _ in chain if i}, {c for _, _, cs in chain for c in cs})
+      if tag not in void:
+        self.stack.append(entry)
+
+    def handle_endtag(self, tag):
+      for i in range(len(self.stack) - 1, -1, -1):
+        if self.stack[i][0] == tag:
+          del self.stack[i:]
+          break
+
+  walker = _Walker()
+  walker.feed(html.split('<script', 1)[0])  # markup only; the inline script builds no static ids
+  return walker.found
 
 
 class DeploymentHardeningTest(unittest.TestCase):
@@ -1328,11 +1364,19 @@ def handle_request(client, filings, retriever):
           persona_ids,
           ['finops_lead', 'sre_platform', 'ai_engineer', 'product_quality', 'security_governance', 'cfo_exec'],
       )
+      html = client.get('/ui').text
+      ancestry = _element_ancestry(html)
       for p in playbooks['personas']:
-        self.assertGreater(p['after_score'], p['before_score'])
-        self.assertGreaterEqual(p['after_score'], 80)
+        # A role guide, not a scorecard: no invented before/after scores.
+        self.assertNotIn('after_score', p)
+        self.assertNotIn('before_score', p)
         self.assertTrue(p['key_questions_answered'])
         self.assertTrue(p['primary_kpis'])
+        target = p['target_panel_id']
+        self.assertIn(target, ancestry, f'{p["persona_id"]}: #{target} is not in the dashboard')
+        ids, classes = ancestry[target]
+        self.assertIn(f'tabPanel{p["primary_tab"]}', ids, f'{p["persona_id"]}: #{target} is not on its start tab')
+        self.assertNotIn('sim-panel', classes, f'{p["persona_id"]}: #{target} is a simulator panel')
 
       # Verify NL2SQL read-only guardrail blocks DML/DDL injection attempts (Opus AF-08)
       nl_dml = client.post('/api/nl2sql', json={'question': 'DROP TABLE aive_logs.ratings_log; DELETE FROM billing'})

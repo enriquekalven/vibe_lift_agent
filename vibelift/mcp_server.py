@@ -4,7 +4,9 @@ Enables Gemini Enterprise and AI clients to connect to VibeLift as a BYO MCP App
 - Serves the streamable HTTP JSON-RPC 2.0 endpoint at `/mcp`
 - Publishes interactive MCP UI resource `ui://vibelift-analytics/dashboard`
 - Implements MCP Tools: `open_dashboard`, `query_ge_agent_fleet`, `query_project_telemetry`,
-  `calculate_prompt_cache_economics`, `run_alpha_evolve_generation`, and `get_vibelift_state`.
+  `calculate_prompt_cache_economics`, `run_alpha_evolve_generation` (an optimizer simulator with synthetic
+  numbers; the name is kept so existing connectors keep working), `get_vibelift_state`, `xray_prompt_cache`,
+  `list_prompt_snapshot_turns` and `set_agent_trace_logging`.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from typing import Any
 from starlette.responses import JSONResponse, Response
 
 from vibelift import fleet as ge_fleet
+from vibelift import optimizer as alpha_evolve_optimizer
 from vibelift import telemetry
 from vibelift.ui import template as ui_template
 
@@ -45,7 +48,9 @@ MCP_PROTOCOL_VERSION = resolve_default_protocol_version(os.environ.get('MCP_PROT
 
 
 def mcp_app_enabled() -> bool:
-  """ENABLE_MCP_APP=0/false/no/off disables the /mcp endpoint; it is enabled by default."""
+  """ENABLE_MCP_APP=0/false/no/off or VIBELIFT_SURFACE=dashboard disables the /mcp endpoint."""
+  if os.environ.get('VIBELIFT_SURFACE', 'all').strip().lower() == 'dashboard':
+    return False
   return os.environ.get('ENABLE_MCP_APP', '1').strip().lower() not in ('0', 'false', 'no', 'off')
 
 
@@ -255,45 +260,56 @@ async def _tool_query_project_telemetry(session_key: str, args: dict[str, Any]) 
 
 
 async def _tool_calculate_cache_economics(session_key: str, args: dict[str, Any]) -> dict[str, Any]:
-  """Calculates prompt cache hit ratio and dollar savings against Google Cloud rate cards."""
-  model = str(args.get('model') or 'gemini-2.5-flash')
-  prompt_tok = int(args.get('prompt_token_count') or 10000)
-  cached_tok = int(args.get('cached_content_token_count') or 0)
-  output_tok = int(args.get('output_token_count') or 500)
+  """Prices the token counts the caller passed against the model's own list-price rate card.
 
-  telemetry.RATE_CARDS.get(model, telemetry.RATE_CARDS['gemini-2.5-flash'])
-  uncached_tok = max(0, prompt_tok - cached_tok)
+  Nothing is assumed: omitted output or thought counts are 0, and a model without a rate card is
+  reported as unpriced instead of being priced with another model's card.
+  """
+  model = str(args.get('model') or 'gemini-2.5-flash')
+  prompt_tok = max(0, int(args.get('prompt_token_count') or 0))
+  cached_tok = min(prompt_tok, max(0, int(args.get('cached_content_token_count') or 0)))
+  output_tok = max(0, int(args.get('output_token_count') or 0))
+  thoughts_tok = max(0, int(args.get('thoughts_token_count') or 0))
+  uncached_tok = prompt_tok - cached_tok
 
   log_entry = telemetry.TurnUsageLog(
-      timestamp='2026-09-25T15:00:00Z',
+      timestamp=telemetry._utc_now_iso(),
       agent_name='mcp-eval-client',
       model=model,
       turn_index=1,
       prompt_prefix_hash='eval_calc',
-      cache_breakpoint_line=None if cached_tok > 0 else 1,
-      cache_breakpoint_reason='Evaluated via MCP tool',
+      cache_breakpoint_line=None,
+      cache_breakpoint_reason='Calculator input (no prompt text)',
       prompt_token_count=prompt_tok,
       cached_content_token_count=cached_tok,
       cache_creation_input_tokens=0,
       uncached_input_tokens=uncached_tok,
       candidates_token_count=output_tok,
-      thoughts_token_count=100,
+      thoughts_token_count=thoughts_tok,
       status_code=200,
       tool_called='mcp.calculate_cache_economics',
-      evolution_generation=14,
+      evolution_generation=0,
   )
   naive_usd, actual_usd, saved_usd = log_entry.compute_costs()
-  result_payload = {
+  result_payload: dict[str, Any] = {
       'model': model,
+      'priced': log_entry.priced,
       'prompt_tokens': prompt_tok,
       'cached_tokens': cached_tok,
       'uncached_tokens': uncached_tok,
       'output_tokens': output_tok,
+      'thoughts_tokens': thoughts_tok,
       'cache_hit_ratio_pct': log_entry.cache_hit_ratio,
       'naive_cost_usd': naive_usd,
       'actual_cost_usd': actual_usd,
       'net_savings_usd': saved_usd,
+      'pricing_basis': 'Vertex AI list price from the hardcoded rate card; an estimate, not billed cost.',
   }
+  if not log_entry.priced:
+    result_payload['note'] = (
+        f'No rate card for {model!r}, so nothing was priced. Models with a rate card: '
+        + ', '.join(sorted(telemetry.RATE_CARDS)) + '.'
+    )
   return {
       'content': [{'type': 'text', 'text': json.dumps(result_payload, indent=2)}],
       'structuredContent': result_payload,
@@ -301,7 +317,7 @@ async def _tool_calculate_cache_economics(session_key: str, args: dict[str, Any]
 
 
 async def _tool_run_alpha_evolve_generation(session_key: str, args: dict[str, Any]) -> dict[str, Any]:
-  """Executes an optimization cycle on the active agent."""
+  """Runs one generation of the optimizer simulator (synthetic numbers) on a demo agent profile."""
   ctrl = _get_controller()
   agent_id = args.get('agent_id')
   if agent_id:
@@ -318,11 +334,11 @@ async def _tool_run_alpha_evolve_generation(session_key: str, args: dict[str, An
   latest_action = actions[0] if actions else {}
 
   text_summary = (
-      f"Optimization Generation {latest_gen.get('generation', 13)} complete for `{active.get('display_name') or active.get('agent_id')}`.\n"
+      f"SIMULATED generation {latest_gen.get('generation')} for demo profile "
+      f"`{active.get('display_name') or active.get('agent_id')}`.\n"
       f"- Status: {active.get('health_status')}\n"
-      f"- Action: {latest_action.get('action_title')}\n"
-      f"- Impact: {latest_action.get('impact_summary')}\n"
-      f"- Monthly Savings: ${active.get('monthly_savings_usd', 0):,}/mo"
+      f"- Simulated change: {latest_action.get('impact_summary')}\n"
+      f"- {alpha_evolve_optimizer.SIMULATOR_NOTE}"
   )
   return {
       'content': [{'type': 'text', 'text': text_summary}],
@@ -418,7 +434,7 @@ _TOOLS: list[dict[str, Any]] = [
             'or inspect the VibeLift Analytics & FinOps Dashboard, or asks for the Gemini Enterprise '
             'agent fleet, standalone/unregistered agents (Vertex AI Agent Engine, Cloud Run, GKE), '
             'MCP servers, Skills/tools, agent telemetry, prompt cache economics, user-centric FinOps, '
-            'or AlphaEvolve optimization in the interactive UI. Opens the interactive dashboard in the '
+            'or the optimizer simulator in the interactive UI. Opens the interactive dashboard in the '
             'right side panel (with a Fullscreen button): every agent registered in Gemini Enterprise '
             'PLUS standalone/unregistered Agent Engines, Cloud Run services, GKE workloads, Skills, and MCP servers.'
         ),
@@ -498,8 +514,10 @@ _TOOLS: list[dict[str, Any]] = [
         'name': 'calculate_prompt_cache_economics',
         'title': 'Calculate Prompt Cache Economics',
         'description': (
-            'Calculates prompt cache hit ratio and net dollar savings vs naive rate cards for Google Cloud Gemini models '
-            '(gemini-2.5-flash, gemini-2.5-pro, gemini-1.5-flash, gemini-1.5-pro, gemini-3.1-flash).'
+            'Prices the token counts you pass at Vertex AI list price (an estimate, not billed cost) and returns the '
+            'cache hit ratio and the saving versus no caching. Omitted output or thought counts are 0. A model '
+            'without a rate card is returned unpriced. Models with a rate card: '
+            + ', '.join(sorted(telemetry.RATE_CARDS)) + '.'
         ),
         'visibility': ['model', 'app'],
         'inputSchema': {
@@ -507,19 +525,23 @@ _TOOLS: list[dict[str, Any]] = [
             'properties': {
                 'prompt_token_count': {
                     'type': 'integer',
-                    'description': 'Total prompt token count.',
+                    'description': 'Total prompt (input) token count, including cached tokens.',
                 },
                 'cached_content_token_count': {
                     'type': 'integer',
-                    'description': 'Number of tokens read from Gemini prompt cache.',
+                    'description': 'Number of input tokens read from the prompt cache.',
                 },
                 'output_token_count': {
                     'type': 'integer',
-                    'description': 'Number of generated candidate tokens (defaults to 500).',
+                    'description': 'Generated output tokens (0 if omitted).',
+                },
+                'thoughts_token_count': {
+                    'type': 'integer',
+                    'description': 'Thinking tokens billed as output (0 if omitted).',
                 },
                 'model': {
                     'type': 'string',
-                    'description': "Gemini model identifier (e.g. 'gemini-2.5-flash').",
+                    'description': "Model id with a rate card (default 'gemini-2.5-flash').",
                 },
             },
             'required': ['prompt_token_count', 'cached_content_token_count'],
@@ -529,10 +551,11 @@ _TOOLS: list[dict[str, Any]] = [
     },
     {
         'name': 'run_alpha_evolve_generation',
-        'title': 'Run AlphaEvolve Optimization Cycle',
+        'title': 'Run Optimizer Simulator (one generation)',
         'description': (
-            'Executes the next AlphaEvolve evolutionary optimization cycle on prompt prefixes, '
-            'schema pruning, and multi-objective performance parameters for the active agent.'
+            'SIMULATOR: runs one generation of the built-in optimizer simulator on a demo agent profile. '
+            'It applies fixed improvement factors to synthetic parameters; it does not call AlphaEvolve or any '
+            'model, read logs, or change any agent. Always tell the user the numbers are simulated.'
         ),
         'visibility': ['model', 'app'],
         'inputSchema': {
@@ -540,7 +563,11 @@ _TOOLS: list[dict[str, Any]] = [
             'properties': {
                 'agent_id': {
                     'type': 'string',
-                    'description': "Optional Gemini Enterprise agent identifier: 'it_service_desk', 'vibelift_analytics', or 'deep_research'.",
+                    'description': "Optional demo agent profile: 'it_service_desk', 'vibelift_analytics', or 'deep_research'.",
+                },
+                'platform_id': {
+                    'type': 'string',
+                    'description': "Optional simulated method: 'alpha_evolve', 'opus_critic', or 'hybrid_ensemble'.",
                 },
             },
         },
@@ -692,10 +719,11 @@ def _tool_descriptor(tool: dict[str, Any]) -> dict[str, Any]:
 _SYSTEM_INSTRUCTION = """\
 CRITICAL: Always call `open_dashboard` FIRST whenever the user asks to open, \
 view, or inspect the VibeLift Analytics Platform, or asks for the Gemini Enterprise agent fleet, \
-agent telemetry, FinOps prompt cache economics, or AlphaEvolve optimization for their Google Cloud \
+agent telemetry, FinOps prompt cache economics, or the optimizer simulator for their Google Cloud \
 project. Do NOT skip `open_dashboard`. Calling `open_dashboard` opens the interactive dashboard \
-(live agent fleet telemetry and AlphaEvolve studio) directly in Gemini Enterprise's side panel. \
-Tell the user the VibeLift dashboard is open and summarize the fleet numbers it returns.
+(live agent fleet telemetry plus an optimizer simulator) directly in Gemini Enterprise's side panel. \
+Tell the user the VibeLift dashboard is open and summarize the fleet numbers it returns. \
+`run_alpha_evolve_generation` is a simulator: say its numbers are simulated whenever you report them.
 """
 
 
@@ -754,7 +782,7 @@ async def _dispatch(session_key: str, method: str, params: dict[str, Any]) -> An
                 'name': 'VibeLift Analytics Dashboard',
                 'description': (
                     'Live Gemini Enterprise agent fleet telemetry, prompt cache economics, '
-                    'and the AlphaEvolve optimization studio.'
+                    'and an optimizer simulator (synthetic numbers).'
                 ),
                 'mimeType': WIDGET_MIME,
                 '_meta': RESOURCE_META,

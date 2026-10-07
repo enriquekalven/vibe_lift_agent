@@ -1,4 +1,8 @@
-"""Long-running ADK + Google Cloud agent runner emitting structured turn logs."""
+"""Turn simulator for the optimizer demo, plus a buffer for real turns read from Cloud Logging.
+
+Turns made by reset_with_seed_turns() and step_turn() are synthetic and carry simulated=True; the
+dashboard drops them in live mode. Turns passed to ingest_gcp_cloud_turns() are real logged turns.
+"""
 
 import datetime
 from collections.abc import Sequence
@@ -35,7 +39,7 @@ ORCAS_TOOL_SEQUENCE = GCP_ADK_TOOL_SEQUENCE
 
 
 class LongRunningVibeLiftAgent:
-  """Simulates and executes a long-running ADK multi-turn agent with live telemetry."""
+  """Simulated multi-turn agent (synthetic turns) that can also hold real turns from Cloud Logging."""
 
   def __init__(
       self,
@@ -71,7 +75,7 @@ class LongRunningVibeLiftAgent:
     return 14
 
   def reset_with_seed_turns(self) -> None:
-    """Populates realistic initial turns showing Gen 0 spike -> Gen 14 fix."""
+    """Populates synthetic seed turns (a cache bust, then cached turns) for the simulator."""
     self._turns.clear()
     self._step_descriptions.clear()
     self._append_turn(
@@ -115,7 +119,7 @@ class LongRunningVibeLiftAgent:
       )
 
   def step_turn(self) -> telemetry.TurnUsageLog:
-    """Executes the next turn of the long-running agent and logs telemetry."""
+    """Appends one synthetic turn (simulated=True); no model or agent is called."""
     gen = self._current_generation()
     next_idx = len(self._turns) + 1
     cached_tok = int(16400 + (next_idx * 140))
@@ -173,6 +177,7 @@ class LongRunningVibeLiftAgent:
               'saved_usd': saved_usd,
               'generation': turn.evolution_generation,
               'breakpoint_reason': turn.cache_breakpoint_reason,
+              'simulated': False,
           },
       )
     self._trim_to_max_turns()
@@ -220,6 +225,7 @@ class LongRunningVibeLiftAgent:
         status_code=status_code,
         tool_called=tool_name,
         evolution_generation=gen,
+        simulated=True,
     )
     self._turns.append(log_entry)
     naive_usd, actual_usd, saved_usd = log_entry.compute_costs()
@@ -235,6 +241,7 @@ class LongRunningVibeLiftAgent:
             'saved_usd': saved_usd,
             'generation': gen,
             'breakpoint_reason': breakpoint_reason,
+            'simulated': True,
         },
     )
     self._trim_to_max_turns()

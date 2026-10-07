@@ -4,9 +4,11 @@ import dataclasses
 import datetime
 import functools
 import hashlib
+import hmac
 import inspect
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -14,16 +16,17 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
+_LOG = logging.getLogger(__name__)
 _AUDIT_LOGGER = logging.getLogger('vibelift.audit_sink')
 _STATE_FILE_LOCK = threading.Lock()
 
 
-def emit_structured_audit_record(kind: str, record: Mapping[str, Any]) -> None:
+def emit_structured_audit_record(kind: str, record: Mapping[str, Any], level: int = logging.INFO) -> None:
   """Emits a structured JSON audit record to Cloud Logging and optional VIBELIFT_STATE_DIR JSONL."""
   payload = {'vibelift_event_kind': kind, **dict(record)}
   try:
     line = json.dumps(payload, sort_keys=True)
-    _AUDIT_LOGGER.info(line)
+    _AUDIT_LOGGER.log(level, line)
   except Exception:
     return
   state_dir = (os.environ.get('VIBELIFT_STATE_DIR') or '').strip()
@@ -89,13 +92,14 @@ RATE_CARDS: dict[str, ModelRateCard] = {
         cache_write_per_million_usd=1.50,
         output_per_million_usd=9.00,
     ),
-    # Gemini 3.6 / 3.7 / 3.8 Flash: introductory $0.75 input / $3.75 output through 2026-12-31
-    # (standard $1.50 / $7.50 from 2027-01-01). Cached input uses the published $0.15 rate.
+    # Gemini 3.6 / 3.7 / 3.8 Flash, global endpoint: introductory $0.75 input / $0.075 cached input /
+    # $3.75 output through 2026-12-31 (standard $1.50 / $0.15 / $7.50 from 2027-01-01). Checked
+    # 2026-10-06 against cloud.google.com/vertex-ai/generative-ai/pricing.
     **{
         name: ModelRateCard(
             model_name=name,
             input_per_million_usd=0.75,
-            cached_read_per_million_usd=0.15,
+            cached_read_per_million_usd=0.075,
             cache_write_per_million_usd=0.75,
             output_per_million_usd=3.75,
         )
@@ -163,6 +167,8 @@ class TurnUsageLog:
   status_code: int
   tool_called: str
   evolution_generation: int
+  # True for turns made up by the built-in simulator (vibelift/long_running_agent.py), never for logged turns.
+  simulated: bool = False
 
   @property
   def cache_hit_ratio(self) -> float:
@@ -174,14 +180,26 @@ class TurnUsageLog:
         2,
     )
 
-  def compute_costs(self) -> tuple[float, float, float]:
-    """Computes (naive_raw_usd, actual_log_cached_usd, net_savings_usd)."""
-    card = (
-        RATE_CARDS.get(self.model)
-        or RATE_CARDS.get('gemini-3.1-flash')
-        or RATE_CARDS.get('gemini-2.5-flash')
-        or next(iter(RATE_CARDS.values()))
-    )
+  @property
+  def rate_card(self) -> ModelRateCard | None:
+    """The model's own rate card ('publishers/google/models/x' uses card 'x'), or None. No fallback card."""
+    name = str(self.model or '').strip().rsplit('/', 1)[-1]
+    return RATE_CARDS.get(name) if name else None
+
+  @property
+  def priced(self) -> bool:
+    """True when the turn's model has a rate card, so its tokens can be priced."""
+    return self.rate_card is not None
+
+  def compute_costs(self) -> tuple[float | None, float | None, float | None]:
+    """Computes (naive_raw_usd, actual_log_cached_usd, net_savings_usd) at list price.
+
+    A model without a rate card is left unpriced: all three values are None. It is never
+    priced with another model's card.
+    """
+    card = self.rate_card
+    if card is None:
+      return None, None, None
     total_out = self.candidates_token_count + self.thoughts_token_count
     naive_in_usd = (self.prompt_token_count / 1_000_000.0) * (
         card.input_per_million_usd
@@ -221,6 +239,7 @@ class TurnUsageLog:
         'tool_called': self.tool_called,
         'evolution_generation': self.evolution_generation,
         'status_code': self.status_code,
+        'simulated': self.simulated,
         'usage_metadata': {
             'prompt_token_count': self.prompt_token_count,
             'cached_content_token_count': self.cached_content_token_count,
@@ -230,6 +249,8 @@ class TurnUsageLog:
             'thoughts_token_count': self.thoughts_token_count,
         },
         'billing_attribution': {
+            'priced': naive_usd is not None,
+            'rate_card': self.rate_card.model_name if self.rate_card else None,
             'naive_count_tokens_usd': naive_usd,
             'actual_log_cached_usd': actual_usd,
             'net_savings_usd': saved_usd,
@@ -277,11 +298,21 @@ def detect_prefix_breakpoint(
 def summarize_log_stream(
     turns: Sequence[TurnUsageLog],
 ) -> Mapping[str, float | int]:
-  """Aggregates log stream metrics for the VibeLift Telemetry tab."""
+  """Aggregates log stream metrics for the VibeLift Telemetry tab.
+
+  Dollar totals cover priced turns only. Turns whose model has no rate card are counted in
+  unpriced_turns and add nothing to the dollar totals.
+  """
   if not turns:
     return {
         'total_turns': 0,
+        'priced_turns': 0,
+        'unpriced_turns': 0,
         'avg_cache_hit_ratio': 0.0,
+        'total_prompt_tokens': 0,
+        'total_cached_read_tokens': 0,
+        'total_uncached_input_tokens': 0,
+        'total_thoughts_tokens': 0,
         'total_naive_usd': 0.0,
         'total_actual_usd': 0.0,
         'total_saved_usd': 0.0,
@@ -293,12 +324,15 @@ def summarize_log_stream(
   naive_sum = 0.0
   actual_sum = 0.0
   saved_sum = 0.0
+  priced = 0
   errors = 0
   for turn in turns:
     n_cost, a_cost, s_cost = turn.compute_costs()
-    naive_sum += n_cost
-    actual_sum += a_cost
-    saved_sum += s_cost
+    if n_cost is not None and a_cost is not None and s_cost is not None:
+      priced += 1
+      naive_sum += n_cost
+      actual_sum += a_cost
+      saved_sum += s_cost
     if turn.status_code >= 400:
       errors += 1
 
@@ -308,7 +342,13 @@ def summarize_log_stream(
   err_pct = round((errors / len(turns)) * 100.0, 2)
   return {
       'total_turns': len(turns),
+      'priced_turns': priced,
+      'unpriced_turns': len(turns) - priced,
       'avg_cache_hit_ratio': hit_ratio,
+      'total_prompt_tokens': total_prompt,
+      'total_cached_read_tokens': total_cached,
+      'total_uncached_input_tokens': sum(t.uncached_input_tokens for t in turns),
+      'total_thoughts_tokens': sum(t.thoughts_token_count for t in turns),
       'total_naive_usd': round(naive_sum, 4),
       'total_actual_usd': round(actual_sum, 4),
       'total_saved_usd': round(saved_sum, 4),
@@ -325,31 +365,37 @@ def summarize_log_stream(
 
 @dataclasses.dataclass(frozen=True)
 class DecoratorTelemetryEvent:
-  """Real-time event captured by the @vibelift_telemetry decorator."""
+  """One event from the @vibelift_telemetry decorator or POST /api/decorator_ingest.
+
+  Anything the caller did not report stays None; nothing is imputed.
+  """
 
   timestamp: str
-  agent_name: str
-  handler_name: str
-  protocol: str
-  model: str
-  latency_ms: float
-  prompt_tokens: int
-  cached_tokens: int
-  output_tokens: int
-  context_bloat_pct: float
-  idle_ratio_pct: float
-  skill_or_mcp: str
-  user_cohort: str
-  status: str
+  agent_name: str | None
+  handler_name: str | None
+  protocol: str | None
+  model: str | None
+  latency_ms: float | None
+  prompt_tokens: int | None
+  cached_tokens: int | None
+  output_tokens: int | None
+  context_bloat_pct: float | None
+  idle_ratio_pct: float | None
+  skill_or_mcp: str | None
+  user_cohort: str | None
+  status: str | None
 
   def to_dict(self) -> dict[str, Any]:
-    """Serializes the decorator telemetry event for the dashboard."""
-    prompt_tok = max(0, int(self.prompt_tokens))
-    cached_tok = max(0, min(prompt_tok, int(self.cached_tokens)))
+    """Serializes the event for the dashboard. Unknown measurements are None."""
+    prompt_tok = _opt_count(self.prompt_tokens)
+    cached_tok = _opt_count(self.cached_tokens)
+    if prompt_tok is not None and cached_tok is not None:
+      cached_tok = min(prompt_tok, cached_tok)
+    # Undefined (None) when prompt tokens are unknown or zero.
     cache_hit_pct = (
         round(min(100.0, (cached_tok / prompt_tok) * 100.0), 1)
-        if prompt_tok > 0
-        else 0.0
+        if prompt_tok and cached_tok is not None
+        else None
     )
     return {
         'timestamp': self.timestamp,
@@ -357,22 +403,37 @@ class DecoratorTelemetryEvent:
         'handler_name': self.handler_name,
         'protocol': self.protocol,
         'model': self.model,
-        'latency_ms': round(max(0.0, float(self.latency_ms)), 1),
+        'latency_ms': None if self.latency_ms is None else round(max(0.0, float(self.latency_ms)), 1),
         'prompt_tokens': prompt_tok,
         'cached_tokens': cached_tok,
-        'output_tokens': max(0, int(self.output_tokens)),
+        'output_tokens': _opt_count(self.output_tokens),
         'cache_hit_pct': cache_hit_pct,
-        'context_bloat_pct': round(max(0.0, min(100.0, float(self.context_bloat_pct))), 1),
-        'idle_ratio_pct': round(max(0.0, min(100.0, float(self.idle_ratio_pct))), 1),
+        'context_bloat_pct': _opt_pct(self.context_bloat_pct),
+        'idle_ratio_pct': _opt_pct(self.idle_ratio_pct),
         'skill_or_mcp': self.skill_or_mcp,
         'user_cohort': self.user_cohort,
         'status': self.status,
     }
 
 
+def _opt_count(value: Any) -> int | None:
+  """Non-negative int, or None when unknown."""
+  return None if value is None else max(0, int(value))
+
+
+def _opt_pct(value: Any) -> float | None:
+  """Percentage clamped to 0-100 and rounded to 0.1, or None when unknown."""
+  return None if value is None else round(max(0.0, min(100.0, float(value))), 1)
+
+
+def _utc_now_iso() -> str:
+  """Current UTC time as an ISO-8601 string with a Z suffix."""
+  return datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+
+
 _SEED_DECORATOR_EVENTS: tuple[DecoratorTelemetryEvent, ...] = (
     DecoratorTelemetryEvent(
-        timestamp='Live • <10ms stream',
+        timestamp='demo seed',
         agent_name='it_service_desk',
         handler_name='handle_tier2_escalation',
         protocol='ADK / A2A Message Passing',
@@ -388,7 +449,7 @@ _SEED_DECORATOR_EVENTS: tuple[DecoratorTelemetryEvent, ...] = (
         status='200 OK (Prefix Cached)',
     ),
     DecoratorTelemetryEvent(
-        timestamp='Live • <10ms stream',
+        timestamp='demo seed',
         agent_name='vibelift_analytics',
         handler_name='open_dashboard',
         protocol='Streamable HTTP MCP',
@@ -404,7 +465,7 @@ _SEED_DECORATOR_EVENTS: tuple[DecoratorTelemetryEvent, ...] = (
         status='200 OK (Warm Snapshot)',
     ),
     DecoratorTelemetryEvent(
-        timestamp='Live • <10ms stream',
+        timestamp='demo seed',
         agent_name='deep_research',
         handler_name='synthesize_cited_brief',
         protocol='A2A Subagent Mesh',
@@ -425,6 +486,8 @@ _DECORATOR_LOCK = threading.Lock()
 _DECORATOR_EVENTS: list[DecoratorTelemetryEvent] = list(_SEED_DECORATOR_EVENTS)
 _RUNTIME_DECORATOR_EVENTS: list[DecoratorTelemetryEvent] = []
 _LIVE_GCP_DECORATOR_EVENTS: list[dict[str, Any]] | None = None
+_INGEST_DLQ: list[dict[str, Any]] = []
+_INGEST_DLQ_MAX = 50
 
 
 def set_live_decorator_events(events: Sequence[Mapping[str, Any]] | None) -> None:
@@ -432,6 +495,265 @@ def set_live_decorator_events(events: Sequence[Mapping[str, Any]] | None) -> Non
   global _LIVE_GCP_DECORATOR_EVENTS
   with _DECORATOR_LOCK:
     _LIVE_GCP_DECORATOR_EVENTS = [dict(e) for e in events] if events is not None else None
+
+
+# ---------------------------------------------------------------------------
+# Ingest validation and dead-letter list
+# POST /api/decorator_ingest, /api/aive_log and /api/csat_rating validate their
+# bodies here. Invalid bodies are rejected (HTTP 422) and recorded in a bounded
+# dead-letter list; fields a caller leaves out stay None (no defaults).
+# ---------------------------------------------------------------------------
+
+_MAX_TOKENS_PER_EVENT = 100_000_000
+_MAX_LATENCY_MS = 86_400_000.0  # 24 h
+_MAX_PROMPT_CHARS = 1_000_000
+_DECORATOR_MEASUREMENTS = (
+    'latency_ms', 'prompt_tokens', 'cached_tokens', 'output_tokens', 'context_bloat_pct', 'idle_ratio_pct',
+)
+_AIVE_MEASUREMENTS = ('total_tokens', 'prompt_tokens', 'output_tokens', 'latency_ms')
+
+
+class IngestValidationError(ValueError):
+  """An ingest body failed validation. Carries the errors and the dead-letter record."""
+
+  def __init__(self, errors: Sequence[str], dead_letter: Mapping[str, Any]) -> None:
+    super().__init__('; '.join(errors))
+    self.errors = list(errors)
+    self.dead_letter = dict(dead_letter)
+
+  def to_response(self) -> dict[str, Any]:
+    """Body of the HTTP 422 response."""
+    return {'error': 'invalid_payload', 'errors': self.errors, 'dead_letter': self.dead_letter}
+
+
+def record_ingest_dlq(source: str, payload: Any, errors: Sequence[str]) -> dict[str, Any]:
+  """Records a rejected ingest body in the bounded dead-letter list and as a WARNING log line.
+
+  Only the body's key names, size and SHA-256 are kept, never its values, because rejected bodies
+  can carry prompt text or e-mail addresses. Nothing is retried or replayed automatically.
+  """
+  try:
+    canonical = json.dumps(payload, sort_keys=True, default=str)
+  except (TypeError, ValueError):
+    canonical = repr(payload)
+  encoded = canonical.encode('utf-8', errors='replace')
+  entry: dict[str, Any] = {
+      'timestamp': _utc_now_iso(),
+      'source': str(source)[:80],
+      'errors': [str(e)[:200] for e in errors][:20],
+      'payload_type': type(payload).__name__,
+      'payload_keys': sorted(str(k)[:64] for k in payload)[:40] if isinstance(payload, Mapping) else [],
+      'payload_bytes': len(encoded),
+      'payload_sha256': hashlib.sha256(encoded).hexdigest(),
+  }
+  with _DECORATOR_LOCK:
+    _INGEST_DLQ.insert(0, entry)
+    del _INGEST_DLQ[_INGEST_DLQ_MAX:]
+  emit_structured_audit_record('ingest_dead_letter', entry, level=logging.WARNING)
+  return entry
+
+
+def get_ingest_dlq_events() -> list[dict[str, Any]]:
+  """Returns recently rejected ingest bodies, newest first."""
+  with _DECORATOR_LOCK:
+    return [dict(x) for x in _INGEST_DLQ]
+
+
+def raise_if_invalid(source: str, payload: Any, errors: Sequence[str]) -> None:
+  """Records a dead-letter entry and raises IngestValidationError when `errors` is not empty."""
+  if errors:
+    raise IngestValidationError(errors, record_ingest_dlq(source, payload, errors))
+
+
+def _has_value(raw: Mapping[str, Any], key: str) -> bool:
+  return raw.get(key) not in (None, '')
+
+
+def _field_str(
+    raw: Mapping[str, Any], key: str, errors: list[str], *, max_len: int, required: bool = False
+) -> str | None:
+  """Optional (or required) trimmed string field; type and length are checked, never truncated."""
+  value = raw.get(key)
+  if value is None or (isinstance(value, str) and not value.strip()):
+    if required:
+      errors.append(f'{key}: required')
+    return None
+  if not isinstance(value, str):
+    errors.append(f'{key}: must be a string')
+    return None
+  value = value.strip()
+  if len(value) > max_len:
+    errors.append(f'{key}: longer than {max_len} characters')
+    return None
+  return value
+
+
+def _field_num(
+    raw: Mapping[str, Any], key: str, errors: list[str], *, integer: bool = False, max_value: float | None = None
+) -> Any:
+  """Optional non-negative number (numeric strings accepted). Returns None when absent or invalid."""
+  value = raw.get(key)
+  if value is None or (isinstance(value, str) and not value.strip()):
+    return None
+  if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+    errors.append(f'{key}: must be a number')
+    return None
+  try:
+    num = float(value)
+  except ValueError:
+    errors.append(f'{key}: must be a number')
+    return None
+  if not math.isfinite(num) or num < 0:
+    errors.append(f'{key}: must be a finite number >= 0')
+    return None
+  if max_value is not None and num > max_value:
+    errors.append(f'{key}: must be <= {max_value:,.0f}')
+    return None
+  if integer:
+    if not num.is_integer():
+      errors.append(f'{key}: must be a whole number')
+      return None
+    return int(num)
+  return num
+
+
+def _field_tokens(raw: Mapping[str, Any], key: str, errors: list[str]) -> int | None:
+  return _field_num(raw, key, errors, integer=True, max_value=_MAX_TOKENS_PER_EVENT)
+
+
+def _check_cached_le_prompt(fields: Mapping[str, Any], errors: list[str]) -> None:
+  prompt_tok, cached_tok = fields.get('prompt_tokens'), fields.get('cached_tokens')
+  if prompt_tok is not None and cached_tok is not None and cached_tok > prompt_tok:
+    errors.append('cached_tokens: cannot exceed prompt_tokens')
+
+
+def _require_measurement(raw: Mapping[str, Any], keys: Sequence[str], errors: list[str]) -> None:
+  if not any(_has_value(raw, k) for k in keys):
+    errors.append('no measurements: send at least one of ' + ', '.join(keys))
+
+
+def validate_decorator_payload(raw: Any) -> tuple[dict[str, Any], list[str]]:
+  """Validates a POST /api/decorator_ingest body. Returns (DecoratorTelemetryEvent fields, errors)."""
+  if not isinstance(raw, Mapping):
+    return {}, ['body: must be a JSON object']
+  errors: list[str] = []
+  fields: dict[str, Any] = {
+      'timestamp': _field_str(raw, 'timestamp', errors, max_len=64) or time.strftime('%H:%M:%S UTC', time.gmtime()),
+      'agent_name': _field_str(raw, 'agent_name', errors, max_len=128, required=True),
+      'handler_name': _field_str(raw, 'handler_name', errors, max_len=128),
+      'protocol': _field_str(raw, 'protocol', errors, max_len=80),
+      'model': _field_str(raw, 'model', errors, max_len=128),
+      'latency_ms': _field_num(raw, 'latency_ms', errors, max_value=_MAX_LATENCY_MS),
+      'prompt_tokens': _field_tokens(raw, 'prompt_tokens', errors),
+      'cached_tokens': _field_tokens(raw, 'cached_tokens', errors),
+      'output_tokens': _field_tokens(raw, 'output_tokens', errors),
+      'context_bloat_pct': _field_num(raw, 'context_bloat_pct', errors, max_value=100.0),
+      'idle_ratio_pct': _field_num(raw, 'idle_ratio_pct', errors, max_value=100.0),
+      'skill_or_mcp': _field_str(raw, 'skill_or_mcp', errors, max_len=256),
+      'user_cohort': _field_str(raw, 'user_cohort', errors, max_len=128),
+      'status': _field_str(raw, 'status', errors, max_len=64),
+  }
+  _check_cached_le_prompt(fields, errors)
+  _require_measurement(raw, _DECORATOR_MEASUREMENTS, errors)
+  return fields, errors
+
+
+def _field_prompts(raw: Mapping[str, Any], errors: list[str]) -> list[str]:
+  """Collects `prompt` (string) and `prompts` (list of strings). Used only for fingerprints."""
+  items: list[str] = []
+  single = raw.get('prompt')
+  if single not in (None, ''):
+    if isinstance(single, str):
+      items.append(single)
+    else:
+      errors.append('prompt: must be a string')
+  many = raw.get('prompts')
+  if many not in (None, []):
+    if isinstance(many, list) and len(many) <= 100 and all(isinstance(p, str) for p in many):
+      items.extend(many)
+    else:
+      errors.append('prompts: must be a list of at most 100 strings')
+  if sum(len(p) for p in items) > _MAX_PROMPT_CHARS:
+    errors.append(f'prompt: longer than {_MAX_PROMPT_CHARS:,} characters in total')
+    return []
+  return items
+
+
+def _field_outputs(raw: Mapping[str, Any], errors: list[str]) -> list[dict[str, Any]]:
+  """Collects `outputs` (list of {gcs_uri, media_type, mime_type}) or a top-level `gcs_uri`."""
+  entries: list[Mapping[str, Any]] = []
+  outs = raw.get('outputs')
+  if outs not in (None, []):
+    if isinstance(outs, list) and len(outs) <= 20 and all(isinstance(o, Mapping) for o in outs):
+      entries.extend(outs)
+    else:
+      errors.append('outputs: must be a list of at most 20 objects')
+  if _has_value(raw, 'gcs_uri'):
+    entries.append({k: raw.get(k) for k in ('gcs_uri', 'media_type', 'mime_type')})
+  cleaned: list[dict[str, Any]] = []
+  for i, out in enumerate(entries):
+    sub: list[str] = []
+    uri = _field_str(out, 'gcs_uri', sub, max_len=1024, required=True)
+    media = _field_str(out, 'media_type', sub, max_len=64)
+    mime = _field_str(out, 'mime_type', sub, max_len=128)
+    if uri is not None and not uri.startswith('gs://'):
+      sub.append('gcs_uri: must start with gs://')
+    errors.extend(f'outputs[{i}].{e}' for e in sub)
+    if not sub:
+      cleaned.append({'gcs_uri': uri, 'media_type': media, 'mime_type': mime})
+  return cleaned
+
+
+def validate_aive_payload(raw: Any) -> tuple[dict[str, Any], list[str]]:
+  """Validates a POST /api/aive_log body. Returns (log_agent_generation_event kwargs, errors)."""
+  if not isinstance(raw, Mapping):
+    return {}, ['body: must be a JSON object']
+  errors: list[str] = []
+  fields: dict[str, Any] = {
+      'user_email': _field_str(raw, 'user_email', errors, max_len=254, required=True),
+      'task_type': _field_str(raw, 'task_type', errors, max_len=64, required=True),
+      'session_id': _field_str(raw, 'session_id', errors, max_len=128),
+      'company_name': _field_str(raw, 'company_name', errors, max_len=128),
+      'department': _field_str(raw, 'department', errors, max_len=128),
+      'model_name': _field_str(raw, 'model_name', errors, max_len=128),
+      'agent_name': _field_str(raw, 'agent_name', errors, max_len=128),
+      'status': _field_str(raw, 'status', errors, max_len=32),
+      'error_message': _field_str(raw, 'error_message', errors, max_len=500),
+      'total_tokens': _field_tokens(raw, 'total_tokens', errors),
+      'prompt_tokens': _field_tokens(raw, 'prompt_tokens', errors),
+      'cached_tokens': _field_tokens(raw, 'cached_tokens', errors),
+      'output_tokens': _field_tokens(raw, 'output_tokens', errors),
+      'thinking_tokens': _field_tokens(raw, 'thinking_tokens', errors),
+      'background_tokens': _field_tokens(raw, 'background_tokens', errors),
+      'latency_ms': _field_num(raw, 'latency_ms', errors, max_value=_MAX_LATENCY_MS),
+      'prompts': _field_prompts(raw, errors),
+      'outputs': _field_outputs(raw, errors),
+  }
+  _check_cached_le_prompt(fields, errors)
+  _require_measurement(raw, _AIVE_MEASUREMENTS, errors)
+  return fields, errors
+
+
+def validate_csat_payload(raw: Any) -> tuple[dict[str, Any], list[str]]:
+  """Validates a POST /api/csat_rating body. Returns (log_csat_rating kwargs, errors)."""
+  if not isinstance(raw, Mapping):
+    return {}, ['body: must be a JSON object']
+  errors: list[str] = []
+  rating_errors: list[str] = []
+  rating = _field_num(raw, 'rating', rating_errors, integer=True)
+  if rating is None or not 1 <= rating <= 5:
+    errors.append('rating: required, a whole number from 1 to 5')
+    rating = None
+  fields: dict[str, Any] = {
+      'rating': rating,
+      'session_id': _field_str(raw, 'session_id', errors, max_len=128),
+      'event_id': _field_str(raw, 'event_id', errors, max_len=128),
+      'user_email': _field_str(raw, 'user_email', errors, max_len=254),
+      'feedback_text': _field_str(raw, 'feedback_text', errors, max_len=2000),
+  }
+  if not _has_value(raw, 'session_id') and not _has_value(raw, 'event_id'):
+    errors.append('session_id or event_id: required (the session or event being rated)')
+  return fields, errors
 
 
 def record_decorator_event(event: DecoratorTelemetryEvent) -> dict[str, Any]:
@@ -456,136 +778,163 @@ def get_recent_decorator_events() -> list[dict[str, Any]]:
 
 
 def reset_decorator_events() -> None:
-  """Resets the in-memory decorator event stream back to seed state."""
+  """Resets the in-memory decorator event stream and dead-letter list back to seed state."""
   global _LIVE_GCP_DECORATOR_EVENTS
   with _DECORATOR_LOCK:
     _RUNTIME_DECORATOR_EVENTS.clear()
+    _INGEST_DLQ.clear()
     _LIVE_GCP_DECORATOR_EVENTS = None
     _DECORATOR_EVENTS[:] = list(_SEED_DECORATOR_EVENTS)
 
 
-def _extract_result_metrics(result: Any) -> tuple[int, int, int, float, float]:
-  """Extracts token and bloat/idle metrics from a handler return value if present."""
-  prompt_tok, cached_tok, out_tok = 16400, 14920, 280
-  bloat_pct, idle_pct = 14.0, 7.5
-  if isinstance(result, Mapping):
-    metadata = result.get('usage_metadata')
-    usage = metadata if isinstance(metadata, Mapping) else result
-    if 'prompt_tokens' in usage or 'prompt_token_count' in usage:
-      try:
-        prompt_tok = max(0, int(usage.get('prompt_tokens', usage.get('prompt_token_count', prompt_tok))))
-      except (TypeError, ValueError):
-        pass
-    if 'cached_tokens' in usage or 'cached_content_token_count' in usage:
-      try:
-        cached_tok = max(0, min(prompt_tok, int(usage.get('cached_tokens', usage.get('cached_content_token_count', cached_tok)))))
-      except (TypeError, ValueError):
-        pass
-    if 'output_tokens' in usage or 'candidates_token_count' in usage:
-      try:
-        out_tok = max(0, int(usage.get('output_tokens', usage.get('candidates_token_count', out_tok))))
-      except (TypeError, ValueError):
-        pass
-    if 'context_bloat_pct' in usage:
-      try:
-        bloat_pct = float(usage['context_bloat_pct'])
-      except (TypeError, ValueError):
-        pass
-    if 'idle_ratio_pct' in usage:
-      try:
-        idle_pct = float(usage['idle_ratio_pct'])
-      except (TypeError, ValueError):
-        pass
-  return prompt_tok, min(prompt_tok, cached_tok), out_tok, bloat_pct, idle_pct
+# Token-usage field names: VibeLift / OpenTelemetry-style keys first, then google-genai
+# `usage_metadata` names (prompt_token_count already includes cached tokens).
+_USAGE_FIELDS: dict[str, tuple[str, ...]] = {
+    'prompt_tokens': ('prompt_tokens', 'prompt_token_count'),
+    'cached_tokens': ('cached_tokens', 'cached_content_token_count'),
+    'output_tokens': ('output_tokens', 'candidates_token_count'),
+    'thinking_tokens': ('thinking_tokens', 'thoughts_token_count'),
+    'total_tokens': ('total_tokens', 'total_token_count'),
+}
+
+
+def _get_field(obj: Any, key: str) -> Any:
+  """Reads `key` from a mapping or an object attribute (e.g. a google-genai response)."""
+  if obj is None:
+    return None
+  if isinstance(obj, Mapping):
+    return obj.get(key)
+  return getattr(obj, key, None)
+
+
+def _usage_source(result: Any) -> Any:
+  meta = _get_field(result, 'usage_metadata')
+  return meta if meta is not None else result
+
+
+def _count_from(source: Any, names: Sequence[str]) -> int | None:
+  """First present count among `names`; None if absent, negative or not a number."""
+  for name in names:
+    value = _get_field(source, name)
+    if value is None:
+      continue
+    if isinstance(value, bool):
+      return None
+    try:
+      num = int(value)
+    except (TypeError, ValueError):
+      return None
+    return num if num >= 0 else None
+  return None
+
+
+def _pct_from(source: Any, key: str) -> float | None:
+  value = _get_field(source, key)
+  if value is None or isinstance(value, bool):
+    return None
+  try:
+    num = float(value)
+  except (TypeError, ValueError):
+    return None
+  return num if math.isfinite(num) and 0.0 <= num <= 100.0 else None
+
+
+def _usage_from_result(result: Any) -> dict[str, Any]:
+  """Token usage reported by a handler result; anything missing or malformed is None."""
+  source = _usage_source(result)
+  usage: dict[str, Any] = {key: _count_from(source, names) for key, names in _USAGE_FIELDS.items()}
+  if usage['prompt_tokens'] is not None and usage['cached_tokens'] is not None:
+    usage['cached_tokens'] = min(usage['cached_tokens'], usage['prompt_tokens'])
+  model = _get_field(result, 'model_version') or _get_field(result, 'model')
+  usage['model'] = model[:128] if isinstance(model, str) and model else None
+  return usage
+
+
+def _extract_result_metrics(result: Any) -> tuple[int | None, int | None, int | None, float | None, float | None]:
+  """Token, context-bloat and idle metrics reported by a handler result; missing values are None."""
+  usage = _usage_from_result(result)
+  source = _usage_source(result)
+  return (
+      usage['prompt_tokens'],
+      usage['cached_tokens'],
+      usage['output_tokens'],
+      _pct_from(source, 'context_bloat_pct'),
+      _pct_from(source, 'idle_ratio_pct'),
+  )
 
 
 def vibelift_telemetry(
-    agent_name: str = 'it_service_desk',
-    model: str = 'gemini-2.5-flash',
-    protocol: str = 'MCP / A2A Message Passing',
-    skill_or_mcp: str = 'mcp://vibelift-analytics',
-    user_cohort: str = 'Enterprise Users',
+    agent_name: str,
+    model: str | None = None,
+    protocol: str | None = None,
+    skill_or_mcp: str | None = None,
+    user_cohort: str | None = None,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-  """Decorator that captures real-time agent message-passing telemetry without BigQuery router lag."""
+  """Decorator that records each call of an agent handler as an in-process telemetry event.
+
+  Latency is measured around the call. Token counts, context bloat and idle ratio are read from the
+  handler's return value when it reports them (a Gemini response's `usage_metadata`, or dict keys
+  such as `prompt_tokens`); otherwise they are recorded as None. `model` defaults to the response's
+  `model_version` when present.
+  """
 
   def _decorator(func: Callable[..., Any]) -> Callable[..., Any]:
     handler_name = getattr(func, '__name__', 'agent_handler')
+
+    def _record(result: Any, status: str, t0: float) -> None:
+      try:
+        p_tok, c_tok, o_tok, bloat, idle = _extract_result_metrics(result)
+        record_decorator_event(
+            DecoratorTelemetryEvent(
+                timestamp=time.strftime('%H:%M:%S UTC', time.gmtime()),
+                agent_name=agent_name,
+                handler_name=handler_name,
+                protocol=protocol,
+                model=model or _usage_from_result(result)['model'],
+                latency_ms=(time.perf_counter() - t0) * 1000.0,
+                prompt_tokens=p_tok,
+                cached_tokens=c_tok,
+                output_tokens=o_tok,
+                context_bloat_pct=bloat,
+                idle_ratio_pct=idle,
+                skill_or_mcp=skill_or_mcp,
+                user_cohort=user_cohort,
+                status=status,
+            )
+        )
+      except Exception:  # pylint: disable=broad-except
+        # Telemetry must never break the wrapped handler.
+        _LOG.warning('vibelift_telemetry could not record %s', handler_name, exc_info=True)
 
     if inspect.iscoroutinefunction(func):
 
       @functools.wraps(func)
       async def _async_wrapper(*args: Any, **kwargs: Any) -> Any:
         t0 = time.perf_counter()
-        status = '200 OK'
-        result = None
+        status, result = 'OK', None
         try:
           result = await func(*args, **kwargs)
           return result
         except Exception as exc:
-          status = f'500 ERROR ({type(exc).__name__})'
+          status = f'ERROR ({type(exc).__name__})'
           raise
         finally:
-          try:
-            elapsed_ms = (time.perf_counter() - t0) * 1000.0
-            p_tok, c_tok, o_tok, bloat, idle = _extract_result_metrics(result)
-            record_decorator_event(
-                DecoratorTelemetryEvent(
-                    timestamp=time.strftime('%H:%M:%S UTC', time.gmtime()),
-                    agent_name=agent_name,
-                    handler_name=handler_name,
-                    protocol=protocol,
-                    model=model,
-                    latency_ms=elapsed_ms,
-                    prompt_tokens=p_tok,
-                    cached_tokens=c_tok,
-                    output_tokens=o_tok,
-                    context_bloat_pct=bloat,
-                    idle_ratio_pct=idle,
-                    skill_or_mcp=skill_or_mcp,
-                    user_cohort=user_cohort,
-                    status=status,
-                )
-            )
-          except Exception:
-            pass
+          _record(result, status, t0)
 
       return _async_wrapper
 
     @functools.wraps(func)
     def _sync_wrapper(*args: Any, **kwargs: Any) -> Any:
       t0 = time.perf_counter()
-      status = '200 OK'
-      result = None
+      status, result = 'OK', None
       try:
         result = func(*args, **kwargs)
         return result
       except Exception as exc:
-        status = f'500 ERROR ({type(exc).__name__})'
+        status = f'ERROR ({type(exc).__name__})'
         raise
       finally:
-        try:
-          elapsed_ms = (time.perf_counter() - t0) * 1000.0
-          p_tok, c_tok, o_tok, bloat, idle = _extract_result_metrics(result)
-          record_decorator_event(
-              DecoratorTelemetryEvent(
-                  timestamp=time.strftime('%H:%M:%S UTC', time.gmtime()),
-                  agent_name=agent_name,
-                  handler_name=handler_name,
-                  protocol=protocol,
-                  model=model,
-                  latency_ms=elapsed_ms,
-                  prompt_tokens=p_tok,
-                  cached_tokens=c_tok,
-                  output_tokens=o_tok,
-                  context_bloat_pct=bloat,
-                  idle_ratio_pct=idle,
-                  skill_or_mcp=skill_or_mcp,
-                  user_cohort=user_cohort,
-                  status=status,
-              )
-          )
-        except Exception:
-          pass
+        _record(result, status, t0)
 
     return _sync_wrapper
 
@@ -600,6 +949,35 @@ def vibelift_telemetry(
 # ---------------------------------------------------------------------------
 
 _AIVE_LOGS_LOCK = threading.Lock()
+
+
+def _fingerprint_prompts(prompts: Sequence[str] | None) -> dict[str, Any]:
+  """Summarizes prompts without keeping their text: count, characters and one digest per prompt.
+
+  With VIBELIFT_PROMPT_HASH_KEY set the digest is HMAC-SHA256 keyed with it, so short or common
+  prompts can't be recovered by hashing guesses. Plain SHA-256 (no key) still supports dedup and
+  prefix-stability checks but is not anonymization.
+  """
+  texts = [str(p) for p in (prompts or [])]
+  key = (os.environ.get('VIBELIFT_PROMPT_HASH_KEY') or '').encode('utf-8')
+  if key:
+    digests = [hmac.new(key, t.encode('utf-8'), hashlib.sha256).hexdigest() for t in texts]
+  else:
+    digests = [hashlib.sha256(t.encode('utf-8')).hexdigest() for t in texts]
+  return {
+      'prompt_count': len(texts),
+      'prompt_chars': sum(len(t) for t in texts),
+      'prompt_sha256': digests,
+      'prompt_hash': 'hmac-sha256' if key else 'sha256',
+  }
+
+
+def _without_prompt_text(row: Mapping[str, Any]) -> dict[str, Any]:
+  """Copy of a usage row with `prompts` replaced by its fingerprint."""
+  out = {k: v for k, v in row.items() if k != 'prompts'}
+  out.update(_fingerprint_prompts(row.get('prompts')))
+  return out
+
 
 _SEED_AIVE_USAGE_LOGS: list[dict[str, Any]] = [
     {
@@ -660,7 +1038,7 @@ _SEED_AIVE_USAGE_LOGS: list[dict[str, Any]] = [
         'background_tokens': 1450,
         'status': 'SUCCESS',
         'error_message': None,
-        'csat_rating': 5,
+        'csat_rating': None,
     },
     {
         'event_id': 'evt-5a90f312-aive',
@@ -680,7 +1058,7 @@ _SEED_AIVE_USAGE_LOGS: list[dict[str, Any]] = [
         'background_tokens': 1820,
         'status': 'SUCCESS',
         'error_message': None,
-        'csat_rating': 5,
+        'csat_rating': None,
     },
     {
         'event_id': 'evt-6d12a877-aive',
@@ -700,10 +1078,12 @@ _SEED_AIVE_USAGE_LOGS: list[dict[str, Any]] = [
         'background_tokens': 3600,
         'status': 'SUCCESS',
         'error_message': None,
-        'csat_rating': 5,
+        'csat_rating': 4,
     },
 ]
 
+# Demo seed prompts are reduced to fingerprints like runtime rows, so no prompt text is ever served.
+_SEED_AIVE_USAGE_LOGS = [_without_prompt_text(row) for row in _SEED_AIVE_USAGE_LOGS]
 _AIVE_USAGE_LOGS: list[dict[str, Any]] = [dict(x) for x in _SEED_AIVE_USAGE_LOGS]
 _SEED_AIVE_RATINGS_LOGS: list[dict[str, Any]] = [
     {
@@ -756,57 +1136,66 @@ def set_live_aive_logs(
 
 
 def log_agent_generation_event(
-    session_id: str,
-    user_email: str,
-    company_name: str,
-    department: str,
-    task_type: str,
-    prompts: list[str] | Sequence[str],
-    outputs: list[dict[str, Any]] | Sequence[Mapping[str, Any]],
-    total_tokens: int = 0,
-    model_name: str = 'gemini-2.5-pro',
-    latency_ms: float = 0.0,
-    status: str = 'SUCCESS',
+    session_id: str | None,
+    user_email: str | None,
+    company_name: str | None,
+    department: str | None,
+    task_type: str | None,
+    prompts: Sequence[str] | None,
+    outputs: Sequence[Mapping[str, Any]] | None,
+    total_tokens: int | None = None,
+    model_name: str | None = None,
+    latency_ms: float | None = None,
+    status: str | None = None,
     error_message: str | None = None,
-    thinking_tokens: int = 0,
-    background_tokens: int = 0,
-    agent_name: str = 'it_service_desk',
+    thinking_tokens: int | None = None,
+    background_tokens: int | None = None,
+    agent_name: str | None = None,
+    prompt_tokens: int | None = None,
+    cached_tokens: int | None = None,
+    output_tokens: int | None = None,
 ) -> dict[str, Any]:
-  """Streams an agent generation event to `aive_logs.agent_usage_log` and real-time decorator stream."""
-  clean_email = (user_email or 'unknown').strip()
-  user_ldap = clean_email.split('@')[0] if '@' in clean_email else (clean_email or 'unknown')
-  now_iso = datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
-  tok_total = max(0, int(total_tokens or 18400))
-  think_tok = max(0, int(thinking_tokens or round(tok_total * 0.08)))
-  bg_tok = max(0, int(background_tokens or round(tok_total * 0.11)))
+  """Records an agent generation event in memory, in the decorator stream and in the audit log.
 
+  Rows use the BigQuery `aive_logs.agent_usage_log` shape, but nothing here writes to BigQuery; live
+  mode reads that table instead.
+
+  Values the caller did not supply stay None: no imputed token splits, ratings or labels. Prompt
+  text is reduced to a fingerprint (`_fingerprint_prompts`) before anything is stored or logged.
+  """
+  clean_email = (user_email or '').strip() or None
+  user_ldap = (clean_email.split('@')[0] if '@' in clean_email else clean_email) if clean_email else None
   row: dict[str, Any] = {
       'event_id': f'evt-{uuid.uuid4().hex[:8]}-aive',
-      'timestamp': now_iso,
-      'session_id': str(session_id or 'unknown_session'),
+      'timestamp': _utc_now_iso(),
+      'session_id': session_id or None,
       'user_email': clean_email,
       'user_ldap': user_ldap,
-      'company_name': str(company_name or 'unknown'),
-      'department': str(department or 'Enterprise AI'),
-      'task_type': str(task_type or 'TEXT_GENERATION'),
-      'model_name': str(model_name or 'gemini-2.5-pro'),
-      'prompts': [str(p) for p in (prompts or [])],
+      'company_name': company_name or None,
+      'department': department or None,
+      'task_type': task_type or None,
+      'model_name': model_name or None,
+      **_fingerprint_prompts(prompts),
       'outputs': [
           {
-              'gcs_uri': str(o.get('gcs_uri') or ''),
-              'media_type': str(o.get('media_type') or 'TEXT'),
-              'mime_type': str(o.get('mime_type') or 'text/plain'),
+              'gcs_uri': str(o['gcs_uri']) if o.get('gcs_uri') else None,
+              'media_type': str(o['media_type']) if o.get('media_type') else None,
+              'mime_type': str(o['mime_type']) if o.get('mime_type') else None,
           }
           for o in (outputs or [])
           if isinstance(o, Mapping)
       ],
-      'latency_ms': round(max(0.0, float(latency_ms)), 1),
-      'total_tokens': tok_total,
-      'thinking_tokens': think_tok,
-      'background_tokens': bg_tok,
-      'status': str(status or 'SUCCESS'),
-      'error_message': error_message,
-      'csat_rating': 5 if status == 'SUCCESS' else 3,
+      'latency_ms': None if latency_ms is None else round(max(0.0, float(latency_ms)), 1),
+      'total_tokens': _opt_count(total_tokens),
+      'prompt_tokens': _opt_count(prompt_tokens),
+      'cached_tokens': _opt_count(cached_tokens),
+      'output_tokens': _opt_count(output_tokens),
+      'thinking_tokens': _opt_count(thinking_tokens),
+      'background_tokens': _opt_count(background_tokens),
+      'status': status or None,
+      'error_message': str(error_message)[:500] if error_message else None,
+      # Ratings only come from POST /api/csat_rating; nothing is assumed here.
+      'csat_rating': None,
   }
   with _AIVE_LOGS_LOCK:
     _RUNTIME_AIVE_USAGE_LOGS.insert(0, row)
@@ -814,24 +1203,24 @@ def log_agent_generation_event(
     _AIVE_USAGE_LOGS.insert(0, row)
     del _AIVE_USAGE_LOGS[30:]
 
-  # Dual-write to @vibelift_telemetry real-time stream so dashboard updates in <10ms
-  cached_tok = round(tok_total * 0.89)
+  # Dual-write to the in-process decorator stream with the same (possibly missing) measurements.
+  cohort = ' '.join(x for x in (user_ldap, f'({department})' if department else None) if x) or None
   record_decorator_event(
       DecoratorTelemetryEvent(
           timestamp=time.strftime('%H:%M:%S UTC', time.gmtime()),
-          agent_name=agent_name,
-          handler_name=f'with_analytics_logging[{task_type}]',
-          protocol='ADK / BigQuery aive_logs Dual-Stream',
-          model=str(model_name or 'gemini-2.5-pro'),
-          latency_ms=float(latency_ms or 580.0),
-          prompt_tokens=tok_total,
-          cached_tokens=cached_tok,
-          output_tokens=max(240, tok_total - cached_tok),
-          context_bloat_pct=12.4,
-          idle_ratio_pct=6.8,
-          skill_or_mcp=f'aive_logs://{task_type.lower()}',
-          user_cohort=f'{user_ldap} ({department})',
-          status=f'200 OK ({status})',
+          agent_name=agent_name or None,
+          handler_name=f'with_analytics_logging[{task_type}]' if task_type else 'with_analytics_logging',
+          protocol='aive_logs dual-write',
+          model=model_name or None,
+          latency_ms=row['latency_ms'],
+          prompt_tokens=row['prompt_tokens'],
+          cached_tokens=row['cached_tokens'],
+          output_tokens=row['output_tokens'],
+          context_bloat_pct=None,
+          idle_ratio_pct=None,
+          skill_or_mcp=f'aive_logs://{task_type.lower()}' if task_type else None,
+          user_cohort=cohort,
+          status=row['status'],
       )
   )
   emit_structured_audit_record('aive_usage_log', row)
@@ -839,38 +1228,43 @@ def log_agent_generation_event(
 
 
 def log_csat_rating(
-    session_id: str,
-    event_id: str,
-    user_email: str,
+    session_id: str | None,
+    event_id: str | None,
+    user_email: str | None,
     rating: int,
-    feedback_text: str = '',
+    feedback_text: str | None = None,
 ) -> dict[str, Any]:
-  """Records a user CSAT rating into `aive_logs.ratings_log`."""
-  clean_email = (user_email or 'unknown').strip()
-  user_ldap = clean_email.split('@')[0] if '@' in clean_email else clean_email
-  clamped_rating = max(1, min(5, int(rating)))
+  """Records a user CSAT rating (a whole number from 1 to 5) in memory and in the audit log.
+
+  Rows use the BigQuery `aive_logs.ratings_log` shape; nothing here writes to BigQuery.
+  """
+  value = int(rating)
+  if isinstance(rating, bool) or value != rating or not 1 <= value <= 5:
+    raise ValueError('rating must be a whole number from 1 to 5')
+  clean_email = (user_email or '').strip() or None
+  user_ldap = (clean_email.split('@')[0] if '@' in clean_email else clean_email) if clean_email else None
   entry: dict[str, Any] = {
       'rating_id': f'rat-{uuid.uuid4().hex[:6]}',
-      'timestamp': datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
-      'session_id': str(session_id or 'unknown_session'),
-      'event_id': str(event_id or ''),
+      'timestamp': _utc_now_iso(),
+      'session_id': session_id or None,
+      'event_id': event_id or None,
       'user_email': clean_email,
       'user_ldap': user_ldap,
-      'rating': clamped_rating,
-      'feedback_text': str(feedback_text or ''),
+      'rating': value,
+      'feedback_text': feedback_text or None,
   }
   with _AIVE_LOGS_LOCK:
     _RUNTIME_AIVE_RATINGS_LOGS.insert(0, entry)
     del _RUNTIME_AIVE_RATINGS_LOGS[30:]
     _AIVE_RATINGS_LOGS.insert(0, entry)
     del _AIVE_RATINGS_LOGS[30:]
-    for row in _AIVE_USAGE_LOGS:
-      if row.get('event_id') == event_id:
-        row['csat_rating'] = clamped_rating
-    if _LIVE_GCP_AIVE_USAGE_LOGS is not None:
-      for row in _LIVE_GCP_AIVE_USAGE_LOGS:
+    if event_id:
+      for row in _AIVE_USAGE_LOGS:
         if row.get('event_id') == event_id:
-          row['csat_rating'] = clamped_rating
+          row['csat_rating'] = value
+      for row in _LIVE_GCP_AIVE_USAGE_LOGS or []:
+        if row.get('event_id') == event_id:
+          row['csat_rating'] = value
   emit_structured_audit_record('csat_rating', entry)
   return entry
 
@@ -908,10 +1302,55 @@ def reset_aive_logs() -> None:
 
 def with_analytics_logging(
     task_type: str = 'TEXT_GENERATION',
-    model_name: str = 'gemini-2.5-pro',
-    agent_name: str = 'it_service_desk',
+    model_name: str | None = None,
+    agent_name: str | None = None,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-  """Standardized decorator for ADK tool/generation logging to `aive_logs`."""
+  """Decorator for ADK tool / generation calls that writes one `aive_logs` usage row per call.
+
+  Token counts come from the handler's return value (a Gemini response's `usage_metadata`, or
+  `total_tokens` / `prompt_tokens` / ... keys); when it reports none they stay None. Prompt text
+  (the `prompt=` keyword or a leading string argument) is fingerprinted, never stored. Logging
+  failures are reported as warnings and never break the wrapped call.
+  """
+
+  def _context(args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> dict[str, Any]:
+    prompt_val = kwargs.get('prompt') or (args[0] if args and isinstance(args[0], str) else None)
+
+    def _kw(key: str) -> str | None:
+      value = kwargs.get(key)
+      return str(value) if value not in (None, '') else None
+
+    return {
+        'session_id': _kw('session_id'),
+        'user_email': _kw('user_email'),
+        'company_name': _kw('company_name'),
+        'department': _kw('department'),
+        'prompts': [str(prompt_val)] if prompt_val else [],
+    }
+
+  def _log(ctx: Mapping[str, Any], result: Any, status: str, error_message: str | None, t0: float) -> None:
+    try:
+      usage = _usage_from_result(result)
+      outputs: list[dict[str, Any]] = []
+      if isinstance(result, Mapping) and result.get('gcs_uri'):
+        outputs.append({k: result.get(k) for k in ('gcs_uri', 'media_type', 'mime_type')})
+      log_agent_generation_event(
+          task_type=task_type,
+          outputs=outputs,
+          total_tokens=usage['total_tokens'],
+          prompt_tokens=usage['prompt_tokens'],
+          cached_tokens=usage['cached_tokens'],
+          output_tokens=usage['output_tokens'],
+          thinking_tokens=usage['thinking_tokens'],
+          model_name=model_name or usage['model'],
+          latency_ms=(time.perf_counter() - t0) * 1000.0,
+          status=status,
+          error_message=error_message,
+          agent_name=agent_name,
+          **ctx,
+      )
+    except Exception:  # pylint: disable=broad-except
+      _LOG.warning('with_analytics_logging could not record a usage row', exc_info=True)
 
   def _decorator(func: Callable[..., Any]) -> Callable[..., Any]:
     if inspect.iscoroutinefunction(func):
@@ -919,98 +1358,34 @@ def with_analytics_logging(
       @functools.wraps(func)
       async def _async_wrapper(*args: Any, **kwargs: Any) -> Any:
         t0 = time.perf_counter()
-        session_id = str(kwargs.get('session_id', 'unknown_session'))
-        user_email = str(kwargs.get('user_email', 'unknown'))
-        company_name = str(kwargs.get('company_name', 'unknown'))
-        department = str(kwargs.get('department', 'unknown'))
-        prompt_val = kwargs.get('prompt') or (args[0] if args and isinstance(args[0], str) else '')
-        prompts = [str(prompt_val)] if prompt_val else []
-        status = 'SUCCESS'
-        error_message = None
-        outputs: list[dict[str, Any]] = []
-        total_tokens = 18400
+        ctx = _context(args, kwargs)
+        result: Any = None
+        status, error_message = 'SUCCESS', None
         try:
           result = await func(*args, **kwargs)
-          if isinstance(result, Mapping):
-            if 'gcs_uri' in result:
-              outputs.append({
-                  'gcs_uri': result.get('gcs_uri'),
-                  'media_type': result.get('media_type', task_type.split('_')[0]),
-                  'mime_type': result.get('mime_type', 'application/octet-stream'),
-              })
-            if 'total_tokens' in result:
-              total_tokens = int(result['total_tokens'])
           return result
         except Exception as exc:
-          status = 'FAILED'
-          error_message = str(exc)
+          status, error_message = 'FAILED', str(exc)
           raise
         finally:
-          latency_ms = (time.perf_counter() - t0) * 1000.0
-          log_agent_generation_event(
-              session_id=session_id,
-              user_email=user_email,
-              company_name=company_name,
-              department=department,
-              task_type=task_type,
-              prompts=prompts,
-              outputs=outputs,
-              total_tokens=total_tokens,
-              model_name=model_name,
-              latency_ms=latency_ms,
-              status=status,
-              error_message=error_message,
-              agent_name=agent_name,
-          )
+          _log(ctx, result, status, error_message, t0)
 
       return _async_wrapper
 
     @functools.wraps(func)
     def _sync_wrapper(*args: Any, **kwargs: Any) -> Any:
       t0 = time.perf_counter()
-      session_id = str(kwargs.get('session_id', 'unknown_session'))
-      user_email = str(kwargs.get('user_email', 'unknown'))
-      company_name = str(kwargs.get('company_name', 'unknown'))
-      department = str(kwargs.get('department', 'unknown'))
-      prompt_val = kwargs.get('prompt') or (args[0] if args and isinstance(args[0], str) else '')
-      prompts = [str(prompt_val)] if prompt_val else []
-      status = 'SUCCESS'
-      error_message = None
-      outputs: list[dict[str, Any]] = []
-      total_tokens = 18400
+      ctx = _context(args, kwargs)
+      result: Any = None
+      status, error_message = 'SUCCESS', None
       try:
         result = func(*args, **kwargs)
-        if isinstance(result, Mapping):
-          if 'gcs_uri' in result:
-            outputs.append({
-                'gcs_uri': result.get('gcs_uri'),
-                'media_type': result.get('media_type', task_type.split('_')[0]),
-                'mime_type': result.get('mime_type', 'application/octet-stream'),
-            })
-          if 'total_tokens' in result:
-            total_tokens = int(result['total_tokens'])
         return result
       except Exception as exc:
-        status = 'FAILED'
-        error_message = str(exc)
+        status, error_message = 'FAILED', str(exc)
         raise
       finally:
-        latency_ms = (time.perf_counter() - t0) * 1000.0
-        log_agent_generation_event(
-            session_id=session_id,
-            user_email=user_email,
-            company_name=company_name,
-            department=department,
-            task_type=task_type,
-            prompts=prompts,
-            outputs=outputs,
-            total_tokens=total_tokens,
-            model_name=model_name,
-            latency_ms=latency_ms,
-            status=status,
-            error_message=error_message,
-            agent_name=agent_name,
-        )
+        _log(ctx, result, status, error_message, t0)
 
     return _sync_wrapper
 

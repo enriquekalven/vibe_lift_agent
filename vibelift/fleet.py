@@ -40,6 +40,7 @@ except ImportError:  # pragma: no cover - google-auth ships with the Cloud clien
   google_auth = None  # type: ignore[assignment]
   GoogleAuthRequest = None  # type: ignore[assignment,misc]
 
+from vibelift import finops as live_finops
 from vibelift import gcp_telemetry, telemetry
 
 logger = logging.getLogger(__name__)
@@ -522,29 +523,21 @@ def _estimate_token_cost_usd(
     models: list[str] | None,
     rate_cards: dict[str, dict[str, float]],
 ) -> float | None:
+  """List-price cost of a runtime's measured tokens; None when none of its models has a rate card.
+
+  Uses the first of ``models`` with a card ('publishers/google/models/x' uses card 'x') and the same
+  pricing as the per-user estimate (finops.tokens_cost_usd). There is no fallback price: a model
+  without a card stays unpriced instead of being priced as some other model.
+  """
   # OTel gen_ai.usage.input_tokens INCLUDES cache-read tokens, so the cached share is billed once at
   # the cached rate and only the remainder at the full input rate (never input + cached on top).
-  in_tok = int(input_tokens or 0)
-  out_tok = int(output_tokens or 0)
-  cache_tok = int(cached_tokens or 0)
-  if not (in_tok or out_tok or cache_tok):
+  if not (int(input_tokens or 0) or int(output_tokens or 0) or int(cached_tokens or 0)):
     return 0.0
-  if in_tok:
-    cache_tok = min(cache_tok, in_tok)
-  uncached_in = max(in_tok - cache_tok, 0)
-  card = None
   for m in models or []:
-    if m in rate_cards:
-      card = rate_cards[m]
-      break
-  if card is None:
-    card = rate_cards.get('gemini-2.5-flash') or {'input': 0.30, 'output': 2.50, 'cached_read': 0.075}
-  return round(
-      uncached_in / 1e6 * card.get('input', 0.30)
-      + out_tok / 1e6 * card.get('output', 2.50)
-      + cache_tok / 1e6 * card.get('cached_read', 0.075),
-      4,
-  )
+    _, card = live_finops.rate_card_for(m, rate_cards)
+    if card is not None:
+      return round(live_finops.tokens_cost_usd(input_tokens, output_tokens, cached_tokens, card), 4)
+  return None
 
 
 _GE_RESOURCE_RE = re.compile(r'locations/([^/]+)/collections/[^/]+/engines/([^/]+)(?:/assistants/[^/]+/agents/([^/]+))?')
@@ -1411,6 +1404,7 @@ class GeminiEnterpriseFleetService:
             'unregistered_reasoning_engines': 0,
             'active_unregistered_reasoning_engines': 0,
             'zombie_reasoning_engines': 0,
+            'zombie_runtimes_count': 0,
             'unregistered_cloud_run_services': 0,
             'mcp_cloud_run_services': 0,
             'always_on_cloud_run_services': 0,
@@ -1423,6 +1417,7 @@ class GeminiEnterpriseFleetService:
             'unregistered_output_tokens': 0,
             'unregistered_cached_tokens': 0,
             'unregistered_est_token_cost_usd': 0.0,
+            'unregistered_unpriced_runtimes': 0,
             'zombie_vcpu_hours': 0.0,
             'zombie_memory_gib_hours': 0.0,
             'unregistered_vcpu_hours': 0.0,
@@ -2518,7 +2513,6 @@ class GeminiEnterpriseFleetService:
         )
         finops_cmd = f'gcloud ai reasoning-engines delete {rid} --project={project} --region={loc} --quiet'
 
-      est_infra = round(vcpu_h * 0.0445 + mem_h * 0.0049, 4)
       unregistered_runtimes.append({
           'agent_id': f're-{rid}',
           'resource_name': info['resource'],
@@ -2564,7 +2558,8 @@ class GeminiEnterpriseFleetService:
               'memory_gib_hours': mem_h,
               'billable_instance_hours': None,
               'est_token_cost_usd': est_cost,
-              'est_infra_cost_usd': est_infra,
+              # Compute is reported as measured usage (vCPU-h, GiB-h), not dollars: no price is assumed.
+              'est_infra_cost_usd': None,
           },
           'registration': {
               'status': 'UNREGISTERED_STANDALONE',
@@ -2674,7 +2669,7 @@ class GeminiEnterpriseFleetService:
               'memory_gib_hours': None,
               'billable_instance_hours': bill_h,
               'est_token_cost_usd': None,
-              'est_infra_cost_usd': round(bill_h * 0.024, 4),
+              'est_infra_cost_usd': None,  # usage only: billable_instance_hours above
           },
           'registration': {
               'status': 'UNREGISTERED_STANDALONE',
@@ -2775,10 +2770,11 @@ class GeminiEnterpriseFleetService:
               'conversations': None,
               'last_activity': checked_at,
               'vcpu_hours': core_h,
-              'memory_gib_hours': mem_g,
+              'memory_gib_hours': None,
+              'avg_memory_gib': mem_g,
               'billable_instance_hours': None,
               'est_token_cost_usd': None,
-              'est_infra_cost_usd': round(core_h * 0.0445 + mem_g * 0.0049, 4),
+              'est_infra_cost_usd': None,  # usage only: CPU core-hours and average GiB above
           },
           'registration': {
               'status': 'UNREGISTERED_STANDALONE',
@@ -2818,6 +2814,13 @@ class GeminiEnterpriseFleetService:
     total_unreg_out_tok = sum(int(r['metrics'].get('output_tokens') or 0) for r in unregistered_runtimes)
     total_unreg_cache_tok = sum(int(r['metrics'].get('cached_tokens') or 0) for r in unregistered_runtimes)
     total_unreg_cost = sum(float(r['metrics'].get('est_token_cost_usd') or 0.0) for r in unregistered_runtimes)
+    zombie_runtimes = sum(1 for r in unregistered_runtimes if str(r.get('finops_status') or '').startswith('ZOMBIE'))
+    # Runtimes with token usage but no rate card for their model(s): left out of the total, not guessed.
+    unpriced_unreg = sum(
+        1 for r in unregistered_runtimes
+        if r['metrics'].get('est_token_cost_usd') is None
+        and (int(r['metrics'].get('input_tokens') or 0) or int(r['metrics'].get('output_tokens') or 0))
+    )
     total_unreg_vcpu = sum(
         float(r['metrics'].get('vcpu_hours') or 0.0)
         for r in unregistered_runtimes
@@ -2840,6 +2843,7 @@ class GeminiEnterpriseFleetService:
         'unregistered_reasoning_engines': count_re,
         'active_unregistered_reasoning_engines': count_active_re,
         'zombie_reasoning_engines': count_zombie_re,
+        'zombie_runtimes_count': zombie_runtimes,
         'unregistered_cloud_run_services': count_run,
         'mcp_cloud_run_services': count_mcp_run,
         'always_on_cloud_run_services': count_always_on_run,
@@ -2852,6 +2856,7 @@ class GeminiEnterpriseFleetService:
         'unregistered_output_tokens': total_unreg_out_tok,
         'unregistered_cached_tokens': total_unreg_cache_tok,
         'unregistered_est_token_cost_usd': round(total_unreg_cost, 4),
+        'unregistered_unpriced_runtimes': unpriced_unreg,
         'zombie_vcpu_hours': round(zombie_vcpu_hours, 2),
         'zombie_memory_gib_hours': round(zombie_mem_gib_hours, 2),
         'unregistered_vcpu_hours': round(total_unreg_vcpu, 2),

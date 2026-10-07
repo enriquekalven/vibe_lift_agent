@@ -1,9 +1,10 @@
-"""VibeLift Autonomous Agent definition for Google Agent Development Kit (ADK).
+"""VibeLift agent definition for Google Agent Development Kit (ADK).
 
 Analyzes live Google Cloud Project telemetry, monitors Gemini Enterprise logs,
-diagnoses prompt cache breakpoints, and runs closed-loop AlphaEvolve optimization.
+diagnoses prompt cache breakpoints, and includes an optimizer simulator (synthetic numbers).
 """
 
+import datetime
 import json
 import os
 import sys
@@ -20,6 +21,7 @@ from google.adk.models import Gemini
 from google.genai import types
 
 from vibelift import fleet as ge_fleet
+from vibelift import optimizer as alpha_evolve_optimizer
 from vibelift import telemetry
 
 MODEL_NAME = "gemini-2.5-flash"
@@ -72,53 +74,60 @@ def calculate_cache_economics(
     prompt_token_count: int,
     cached_content_token_count: int,
     model: str = MODEL_NAME,
-    candidates_token_count: int = 500,
-    thoughts_token_count: int = 100,
+    candidates_token_count: int = 0,
+    thoughts_token_count: int = 0,
 ) -> str:
-  """Calculates prompt cache hit ratio and dollar savings vs naive pricing.
+  """Prices the given token counts at list price and reports the prompt-cache saving.
 
   Args:
-      prompt_token_count: Total prompt token count.
-      cached_content_token_count: Tokens read from prompt cache.
-      model: Gemini model identifier (defaults to gemini-2.5-flash).
-      candidates_token_count: Output candidate token count (defaults to 500).
-      thoughts_token_count: Reasoning/thought token count (defaults to 100).
+      prompt_token_count: Total prompt (input) token count, including cached tokens.
+      cached_content_token_count: Input tokens read from the prompt cache.
+      model: Model id with a rate card (defaults to gemini-2.5-flash).
+      candidates_token_count: Output tokens (0 if omitted).
+      thoughts_token_count: Thinking tokens billed as output (0 if omitted).
 
   Returns:
-      JSON string with cache hit ratio, naive cost, actual cost, and net savings in USD.
+      JSON string with the cache hit ratio and, when the model has a rate card, the cost
+      without caching, the cost with caching and the saving in USD (list price, not billed cost).
+      A model without a rate card is returned with priced=false and null costs.
   """
-  uncached = max(0, prompt_token_count - cached_content_token_count)
+  prompt = max(0, int(prompt_token_count))
+  cached = min(prompt, max(0, int(cached_content_token_count)))
   log = telemetry.TurnUsageLog(
-      timestamp="2026-09-25T15:00:00Z",
+      timestamp=datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
       agent_name="vibelift-agent",
       model=model,
       turn_index=1,
       prompt_prefix_hash="eval_hash",
-      cache_breakpoint_line=None if cached_content_token_count > 0 else 1,
-      cache_breakpoint_reason="Static prefix match",
-      prompt_token_count=prompt_token_count,
-      cached_content_token_count=cached_content_token_count,
+      cache_breakpoint_line=None,
+      cache_breakpoint_reason="Calculator input (no prompt text)",
+      prompt_token_count=prompt,
+      cached_content_token_count=cached,
       cache_creation_input_tokens=0,
-      uncached_input_tokens=uncached,
+      uncached_input_tokens=prompt - cached,
       candidates_token_count=max(0, int(candidates_token_count)),
       thoughts_token_count=max(0, int(thoughts_token_count)),
       status_code=200,
       tool_called="eval.calc",
-      evolution_generation=14,
+      evolution_generation=0,
   )
   naive_usd, actual_usd, saved_usd = log.compute_costs()
-  return json.dumps(
-      {
-          "model": model,
-          "prompt_tokens": prompt_token_count,
-          "cached_tokens": cached_content_token_count,
-          "cache_hit_ratio_pct": log.cache_hit_ratio,
-          "naive_cost_usd": naive_usd,
-          "actual_cost_usd": actual_usd,
-          "saved_usd": saved_usd,
-      },
-      indent=2,
-  )
+  result = {
+      "model": model,
+      "priced": log.priced,
+      "prompt_tokens": prompt,
+      "cached_tokens": cached,
+      "cache_hit_ratio_pct": log.cache_hit_ratio,
+      "naive_cost_usd": naive_usd,
+      "actual_cost_usd": actual_usd,
+      "saved_usd": saved_usd,
+  }
+  if not log.priced:
+    result["note"] = (
+        f"No rate card for {model!r}, so nothing was priced. Models with a rate card: "
+        + ", ".join(sorted(telemetry.RATE_CARDS)) + "."
+    )
+  return json.dumps(result, indent=2)
 
 
 def detect_prompt_breakpoint(previous_prompt: str, current_prompt: str) -> str:
@@ -174,13 +183,17 @@ def xray_prompt_cache(
 
 
 def trigger_alpha_evolve_cycle(agent_id: str = "it_service_desk") -> str:
-  """Executes an AlphaEvolve optimization iteration to maximize prompt cache hit ratio.
+  """Runs one generation of the built-in optimizer SIMULATOR on a demo agent profile.
+
+  The simulator applies fixed improvement factors to synthetic parameters (vibelift/optimizer.py). It does
+  not call AlphaEvolve or any model, read logs, or change any agent. Always tell the user the result is
+  simulated.
 
   Args:
-      agent_id: Target Gemini Enterprise agent profile identifier ('it_service_desk', 'vibelift_analytics', 'deep_research').
+      agent_id: Demo agent profile ('it_service_desk', 'vibelift_analytics', 'deep_research').
 
   Returns:
-      JSON string with mutated genome parameters and Pareto action description.
+      JSON string with the simulated generation, the simulated action record, and simulator=true.
   """
   from vibelift import server as vibelift_server
   ctrl = vibelift_server._global_controller
@@ -191,10 +204,11 @@ def trigger_alpha_evolve_cycle(agent_id: str = "it_service_desk") -> str:
     active = ctrl.optimizer.active_agent
     last_action = active.actions[0] if active.actions else None
     result = {
+        "simulator": True,
+        "simulator_note": alpha_evolve_optimizer.SIMULATOR_NOTE,
         "agent_id": active.agent_id,
-        "active_generation": active.timeline[-1].generation if active.timeline else 14,
+        "simulated_generation": active.timeline[-1].generation if active.timeline else None,
         "latest_action": last_action.to_dict() if last_action else {},
-        "monthly_savings_usd": active.monthly_savings_usd,
     }
   return json.dumps(result, indent=2)
 
@@ -267,7 +281,7 @@ def open_dashboard(focus_tab: int = 6, initial_agent: str = "it_service_desk") -
 
   CRITICAL: Always call this tool FIRST whenever the user asks to see, open, or
   inspect the VibeLift dashboard, or asks for agent telemetry, prompt cache
-  economics, or AlphaEvolve optimization in the UI.
+  economics, or the optimizer simulator in the UI.
 
   Args:
       focus_tab: Tab to open (6 = Overview, the default; 0 = Agents; 3 = Cost; 4 = Users. Advanced tabs: 1 = Goals & Metrics, 2 = Optimizer & Testing, 5 = Tools & SDK).
@@ -303,14 +317,14 @@ root_agent = Agent(
         model=MODEL_NAME,
         retry_options=types.HttpRetryOptions(attempts=3),
     ),
-    instruction="""You are VibeLift Agent, an autonomous Google Cloud Optimization and Telemetry Agent.
+    instruction="""You are VibeLift Agent, a Google Cloud agent-fleet telemetry and cost analysis agent.
 Your mission is to:
-1. Always call `open_dashboard` FIRST whenever the user asks to open, view, or inspect the VibeLift Analytics Platform, or asks for agent telemetry, FinOps prompt cache economics, or AlphaEvolve optimization. Calling `open_dashboard` opens the interactive glassmorphic dashboard.
+1. Always call `open_dashboard` FIRST whenever the user asks to open, view, or inspect the VibeLift Analytics Platform, or asks for agent telemetry, FinOps prompt cache economics, or the optimizer simulator. Calling `open_dashboard` opens the interactive glassmorphic dashboard.
 2. Report on every agent deployed on the Gemini Enterprise app AND standalone/unregistered runtimes (Vertex AI Agent Engine, Cloud Run agents/MCP servers, GKE workloads, and Cloud Trace Skills/MCP tools) with `query_ge_agent_fleet`: live requests, errors, latency, tokens, conversations, zombie/idle allocation, and project-wide model usage and estimated cost. Only quote numbers returned by the tools.
 3. Query the BigQuery reporting mart (`vibelift_mart`) and Cloud Billing export reconciliation with `query_live_finops_and_mart`, and verify live telemetry grounding with `validate_telemetry_grounding`.
 4. Calculate token cache economics (Cache Read vs Write vs Uncached) and dollar savings vs naive pricing.
 5. Diagnose prompt cache breakpoints where dynamic timestamps or non-static prefixes invalidate caches; use `xray_prompt_cache` to locate the exact break, its cost per 1,000 requests, and a re-measured cache-friendly rewrite.
-6. Execute AlphaEvolve closed-loop Pareto mutations to optimize prompt prefixes and prune verbose tool outputs.
+6. `trigger_alpha_evolve_cycle` runs the optimizer SIMULATOR on demo profiles: its numbers are synthetic, nothing is deployed, and you must say so whenever you report them.
 Provide clear, authoritative, and actionable answers with specific token metrics and dollar cost savings. Never invent or extrapolate unmeasured values.
 """,
     tools=[

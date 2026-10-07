@@ -1,6 +1,6 @@
 ---
 name: vibelift-analytics
-description: Google Cloud Agent Optimization, Prompt Cache Economics, Gemini Enterprise agent fleet observability, and AlphaEvolve Studio. Use this skill to query project telemetry, inspect fleet prompt cache token economics, interact with the VibeLift MCP App in Gemini Enterprise, or drive closed-loop evolutionary optimization for long-running ADK agents.
+description: Gemini Enterprise agent fleet observability, prompt cache economics, and an optimizer simulator. Use this skill to query project telemetry, inspect fleet prompt cache token economics, interact with the VibeLift MCP App in Gemini Enterprise, or run the optimizer simulator (synthetic numbers; nothing is deployed).
 allowed-tools:
   - open_dashboard
   - query_project_telemetry
@@ -19,9 +19,9 @@ allowed-tools:
 | **Interactive UI** | `open_dashboard` | **CRITICAL: Call FIRST** whenever the user asks to see, open, or inspect the VibeLift Analytics Platform, or asks for interactive agent telemetry in Gemini Enterprise. |
 | **GCP Observability** | `query_project_telemetry` | Ingests live Cloud Run agent microservices, BigQuery support logs, and Google Cloud Logging usage metrics. |
 | **GE Agent Fleet** | `query_ge_agent_fleet` | Lists every agent deployed on the Gemini Enterprise app with live requests, errors, latency, LLM calls, tokens, conversations, and last activity, plus project-wide model spend. |
-| **Cost & Token Economics** | `calculate_prompt_cache_economics` | Computes prompt cache hit ratio (%) and net dollar savings ($) against official Gemini 2.5/3.1 rate cards. |
+| **Cost & Token Economics** | `calculate_prompt_cache_economics` | Computes prompt cache hit ratio (%) and net dollar savings ($) at list prices from the rate cards in `vibelift/telemetry.py` (`RATE_CARDS`). |
 | **Prompt Engineering** | `get_vibelift_state` | Each turn carries `cache_breakpoint_line` and `cache_breakpoint_reason`, the line and mutation cause breaking prompt cache prefix matching between agent turns. (`detect_prompt_breakpoint` exists only on the ADK agent API, not on the MCP server.) |
-| **Evolutionary Tuning** | `run_alpha_evolve_generation` | Runs multi-objective Pareto evolutionary search (reordering static prefixes, pruning tool schemas, guardrail rollbacks). |
+| **Optimizer Simulator** | `run_alpha_evolve_generation` | **Simulator only.** Applies fixed improvement factors from `vibelift/optimizer.py` to a demo profile and returns synthetic numbers. It runs no search, reads no logs, and changes no agent. |
 | **Runtime State** | `get_vibelift_state` | Retrieves the complete runtime state, turn trajectories, and multi-objective optimization parameters. |
 
 ---
@@ -42,9 +42,7 @@ allowed-tools:
 3. Report project-wide Vertex AI model usage and estimated list-price spend, naming any models without a rate card.
 4. Flag agents with 5xx errors or high p95 latency and recommend prompt-cache optimizations where cache reads are low.
 
-### 3. AlphaEvolve Multi-Objective Optimization Loop
-1. Call `get_vibelift_state` to inspect baseline composite score and Pareto parameters.
-2. If an anomaly or low cache hit ratio is detected:
-   - Read the per-turn `cache_breakpoint_line` / `cache_breakpoint_reason` from `get_vibelift_state` to locate non-deterministic prefixes.
-   - Trigger `run_alpha_evolve_generation` to evolve the prompt prefix and schema layout.
-   - Verify that safety and accuracy guardrails remain above threshold targets.
+### 3. Prompt cache fixes and the optimizer simulator
+1. For real findings, call `get_vibelift_state` and read each turn's `cache_breakpoint_line` / `cache_breakpoint_reason` to find the prompt prefix that changes between turns.
+2. Recommend the fix yourself (for example, move the changing text after the static prefix). VibeLift does not change agents.
+3. Call `run_alpha_evolve_generation` only to show what an optimization loop would look like. Tell the user the numbers are simulated and nothing was deployed.

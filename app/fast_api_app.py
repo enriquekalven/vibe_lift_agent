@@ -33,7 +33,7 @@ except Exception:  # pylint: disable=broad-except
   logger.exception('ADK FastAPI app failed to load; serving VibeLift routes without the ADK API server')
   app = FastAPI(
       title='VibeLift | Analytics Platform for Agent Optimization',
-      description='Cloud Run & ADK runtime for autonomous multi-objective agent telemetry and AlphaEvolve optimization',
+      description='Cloud Run & ADK runtime for Gemini Enterprise agent telemetry, FinOps, and an optimizer simulator',
       version='1.0.0',
   )
   app.add_middleware(

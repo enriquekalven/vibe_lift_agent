@@ -228,13 +228,51 @@ class GoogleCloudTelemetryService:
       self,
       sql: str,
       timeout_s: float = 8.0,
+      max_bytes_billed: int | None = None,
   ) -> list[dict[str, Any]]:
-    """Executes a read-only BigQuery SQL query via the BigQuery REST API using ADC."""
+    """Executes a read-only BigQuery SQL query via the BigQuery REST API using ADC.
+
+    Returns only the rows ([] on any failure). Use ``run_bigquery_query`` when
+    the caller needs to tell an empty result apart from an error.
+    """
+    rows, _ = self.run_bigquery_query(sql, timeout_s=timeout_s, max_bytes_billed=max_bytes_billed)
+    return rows
+
+  def run_bigquery_query(
+      self,
+      sql: str,
+      timeout_s: float = 8.0,
+      max_bytes_billed: int | None = None,
+  ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Runs one query through the BigQuery REST ``jobs.query`` API using ADC.
+
+    Args:
+      sql: Standard SQL text.
+      timeout_s: Server-side ``timeoutMs`` (and client socket timeout minus 1 s).
+      max_bytes_billed: Per-query ``maximumBytesBilled`` cap. When unset (or
+        not positive) the ``VIBELIFT_BQ_MAX_BYTES_BILLED`` default (10 GB) is
+        used. BigQuery fails the job, and bills nothing, when the query would
+        scan more than the cap.
+
+    Returns:
+      ``(rows, info)``. ``info`` holds ``error`` (None on success),
+      ``maximum_bytes_billed`` (the cap sent, as a string, or None),
+      ``total_bytes_processed`` and ``cache_hit`` (None when BigQuery did not
+      report them).
+    """
+    info: dict[str, Any] = {
+        'error': None,
+        'maximum_bytes_billed': None,
+        'total_bytes_processed': None,
+        'cache_hit': None,
+    }
     if not self.project_id or self.project_id in (UNCONFIGURED_PROJECT_ID, 'test-project'):
-      return []
+      info['error'] = 'No Google Cloud project is configured.'
+      return [], info
     token = self._get_access_token()
     if not token:
-      return []
+      info['error'] = 'No Google Cloud access token (Application Default Credentials) is available.'
+      return [], info
     url = f'https://bigquery.googleapis.com/bigquery/v2/projects/{self.project_id}/queries'
     payload: dict[str, Any] = {
         'query': sql,
@@ -243,9 +281,13 @@ class GoogleCloudTelemetryService:
         'labels': {'datacloud': 'jetski'},
     }
     if not sql.lstrip().upper().startswith(('CREATE ', 'DROP ', 'ALTER ')):
-      max_bytes = os.environ.get('VIBELIFT_BQ_MAX_BYTES_BILLED', str(10 * 1024 * 1024 * 1024)).strip()
-      if max_bytes.isdigit() and int(max_bytes) > 0:
-        payload['maximumBytesBilled'] = max_bytes
+      if max_bytes_billed is not None and max_bytes_billed > 0:
+        payload['maximumBytesBilled'] = str(int(max_bytes_billed))
+      else:
+        max_bytes = os.environ.get('VIBELIFT_BQ_MAX_BYTES_BILLED', str(10 * 1024 * 1024 * 1024)).strip()
+        if max_bytes.isdigit() and int(max_bytes) > 0:
+          payload['maximumBytesBilled'] = max_bytes
+    info['maximum_bytes_billed'] = payload.get('maximumBytesBilled')
     try:
       req = urllib.request.Request(
           url,
@@ -259,19 +301,43 @@ class GoogleCloudTelemetryService:
       )
       with urllib.request.urlopen(req, timeout=timeout_s + 1.0) as resp:
         res = json.loads(resp.read().decode('utf-8'))
-      if not res or res.get('jobComplete') is False or 'rows' not in res:
-        if res and res.get('jobComplete') is False:
-          logger.debug('BigQuery REST query timed out before jobComplete (%s)', sql[:60])
-        return []
+    except urllib.error.HTTPError as exc:
+      detail = ''
+      try:
+        detail = str(json.loads(exc.read().decode('utf-8')).get('error', {}).get('message') or '')
+      except Exception:  # pylint: disable=broad-except
+        detail = ''
+      info['error'] = f'BigQuery HTTP {exc.code}: {(detail or str(exc.reason))[:300]}'
+      logger.debug('BigQuery REST query failed (%s): %s', sql[:60], info['error'])
+      return [], info
+    except Exception as exc:  # pylint: disable=broad-except
+      info['error'] = f'BigQuery request failed: {type(exc).__name__}'
+      logger.debug('BigQuery REST query skipped (%s): %s', sql[:60], exc)
+      return [], info
+    if not isinstance(res, dict):
+      info['error'] = 'BigQuery returned an unexpected response.'
+      return [], info
+    if str(res.get('totalBytesProcessed') or '').isdigit():
+      info['total_bytes_processed'] = int(res['totalBytesProcessed'])
+    if isinstance(res.get('cacheHit'), bool):
+      info['cache_hit'] = res['cacheHit']
+    if res.get('jobComplete') is False:
+      info['error'] = f'BigQuery did not finish within {timeout_s:g} s.'
+      logger.debug('BigQuery REST query timed out before jobComplete (%s)', sql[:60])
+      return [], info
+    fields: list[str] = []
+    out: list[dict[str, Any]] = []
+    try:
       fields = [f.get('name', f'col_{i}') for i, f in enumerate(res.get('schema', {}).get('fields', []))]
-      out: list[dict[str, Any]] = []
-      for row in res.get('rows', []):
+      # BigQuery omits 'rows' when the result is empty.
+      for row in res.get('rows', []) or []:
         vals = [cell.get('v') for cell in row.get('f', [])]
         out.append(dict(zip(fields, vals, strict=False)))
-      return out
-    except Exception as exc:
-      logger.debug('BigQuery REST query skipped (%s): %s', sql[:60], exc)
-      return []
+    except (AttributeError, TypeError) as exc:
+      info['error'] = 'BigQuery returned a malformed result.'
+      logger.debug('BigQuery REST result parse failed (%s): %s', sql[:60], exc)
+      return [], info
+    return out, info
 
   def list_cloud_run_agent_services(
       self,
@@ -601,7 +667,7 @@ class GoogleCloudTelemetryService:
               thoughts_token_count=0,
               status_code=200,
               tool_called='otel.gen_ai_inference',
-              evolution_generation=14,
+              evolution_generation=0,
           )
       )
     if turns:
@@ -649,7 +715,7 @@ class GoogleCloudTelemetryService:
         uncached_tokens = 0
         candidate_tokens = 0
         thought_tokens = 0
-        model = 'gemini-3.1-flash'
+        model = 'unknown'  # priced only when the log names a model with a rate card
 
         if isinstance(payload, dict):
           usage = payload.get('usage_metadata') or payload.get('usageMetadata') or {}
@@ -659,7 +725,7 @@ class GoogleCloudTelemetryService:
             candidate_tokens = int(usage.get('candidates_token_count') or usage.get('candidatesTokenCount') or 0)
             thought_tokens = int(usage.get('thoughts_token_count') or usage.get('thoughtsTokenCount') or 0)
             uncached_tokens = max(0, prompt_tokens - cached_tokens)
-            model = payload.get('model', model)
+            model = str(payload.get('model') or model)
 
         # Only entries that carry real usage metadata become turns; nothing is synthesized.
         if prompt_tokens <= 0:
@@ -673,12 +739,8 @@ class GoogleCloudTelemetryService:
             model=model,
             turn_index=turn_idx,
             prompt_prefix_hash=f'gcp_{prefix_hash}',
-            cache_breakpoint_line=None if cached_tokens > 0 else 1,
-            cache_breakpoint_reason=(
-                '100% Google Cloud prompt cache hit'
-                if cached_tokens > 0
-                else 'Cold start cache initialization'
-            ),
+            cache_breakpoint_line=None,
+            cache_breakpoint_reason='Not checked: the log has token counts but no prompt text',
             prompt_token_count=prompt_tokens,
             cached_content_token_count=cached_tokens,
             cache_creation_input_tokens=write_tokens,
@@ -687,7 +749,7 @@ class GoogleCloudTelemetryService:
             thoughts_token_count=thought_tokens,
             status_code=200,
             tool_called=f'{service_name}.inference',
-            evolution_generation=14,
+            evolution_generation=0,
         )
         turns.append(turn_log)
         turn_idx += 1
@@ -940,6 +1002,8 @@ class GoogleCloudTelemetryService:
         # Gemini Enterprise: VibeLift's curated views and mart (provision_ge_mart.py).
         'ge_audit_principals': ge_mart.build_audit_principals_sql(p, hours=eff_hours),
         'ge_user_rollup': ge_mart.build_user_engine_rollup_sql(p, hours=eff_hours),
+        # Per user x model x app token sums (same window) for per-user list-price estimates.
+        'ge_user_model_tokens': ge_mart.build_user_model_tokens_sql(p, hours=eff_hours),
         'ge_recent_turns': ge_mart.build_recent_turns_sql(p, hours=eff_hours, limit=20),
         'ge_daily_totals': ge_mart.build_daily_totals_sql(p, days=eff_days),
         'ge_daily_by_app': ge_mart.build_daily_usage_sql(p, days=eff_days),
@@ -1012,7 +1076,7 @@ class GoogleCloudTelemetryService:
     }
 
     raw_results: dict[str, list[dict[str, Any]]] = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=11) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(queries)) as pool:
       futs = {k: pool.submit(self._query_bigquery_rest, sql, 7.0) for k, sql in queries.items()}
       for k, fut in futs.items():
         try:
@@ -1022,6 +1086,7 @@ class GoogleCloudTelemetryService:
 
     ge_audit = raw_results.get('ge_audit_principals', [])
     ge_rollup = raw_results.get('ge_user_rollup', [])
+    ge_user_model_tokens = [ge_mart.user_model_tokens_from_row(r) for r in raw_results.get('ge_user_model_tokens', [])]
     ge_recent = raw_results.get('ge_recent_turns', [])
     ge_daily = [ge_mart.daily_usage_from_row(r) for r in raw_results.get('ge_daily_totals', [])]
     ge_daily_by_app = [ge_mart.daily_usage_from_row(r) for r in raw_results.get('ge_daily_by_app', [])]
@@ -1423,7 +1488,11 @@ class GoogleCloudTelemetryService:
         ],
         'ge_mart_dataset': mart,
         'ge_curated_dataset': curated,
+        # Window of the per-user queries (ge_user_rollup, ge_user_model_tokens), in hours.
+        'window_hours': eff_hours,
         'ge_audit_principals': ge_audit,
+        # Per user x model x app token sums; server.py prices them for the Top users table.
+        'ge_user_model_tokens': ge_user_model_tokens,
         # Per-day GE usage for the last 30 days (fct_turns); joined with billed cost in server.py.
         'ge_daily_totals': ge_daily,
         # Per-day usage broken down by (engine_key, agent_name, model_name) from agg_daily_usage.

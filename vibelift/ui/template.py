@@ -479,6 +479,11 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .fleet-error { background: #fef2f2; color: #991b1b; padding: 6px 10px; border-radius: 6px; margin-bottom: 6px; word-break: break-word; }
     .fleet-notes { font-size: 11px; color: var(--text-secondary); margin: 12px 0 0 16px; padding: 0; }
     .hidden { display: none !important; }
+    .api-notice { position: fixed; right: 16px; bottom: 16px; max-width: 440px; z-index: 9999; background: #fff;
+      border: 1px solid #fca5a5; color: #991b1b; padding: 10px 12px; border-radius: 8px; font-size: 12.5px;
+      line-height: 1.5; box-shadow: 0 4px 14px rgba(0,0,0,.12); }
+    .sim-notice { font-size: 12px; line-height: 1.55; color: #854d0e; background: #fefce8; border: 1px solid #fef08a;
+      border-radius: 8px; padding: 8px 10px; }
     body.simple-mode .adv-only { display: none !important; }
     .exec-headline { font-size: 15px; line-height: 1.5; color: var(--text-primary); background: var(--surface);
       border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; margin-bottom: 14px; }
@@ -695,11 +700,11 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <button class="btn" id="syncGcpBtn" onclick="syncGcpTelemetry()" title="Sync GCP Telemetry (Cloud Monitoring, BigQuery, Gemini Enterprise)">
         Refresh
       </button>
-      <button class="btn btn-danger adv-only" onclick="triggerApi('/api/inject_anomaly')" title="Sandbox: injects a simulated anomaly">
-        Test Alert
+      <button class="btn btn-danger adv-only" onclick="triggerApi('/api/inject_anomaly')" title="Simulator: applies a fixed cache-bust scenario to the demo agent (synthetic numbers)">
+        Simulate Alert
       </button>
-      <button class="btn btn-primary adv-only" onclick="triggerApi('/api/evolve_generation')" title="Sandbox: runs one optimizer generation">
-        Run Optimizer
+      <button class="btn btn-primary adv-only" onclick="triggerApi('/api/evolve_generation')" title="Simulator: one generation of fixed improvement factors on the demo agent; nothing is deployed">
+        Run Optimizer (simulated)
       </button>
       <button class="btn adv-only" onclick="triggerApi('/api/reset')">
         Reset
@@ -756,7 +761,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         <summary>Role Guide, 7-Step Workflow &amp; SME Persona Evaluation Scorecard (FinOps, SRE, AI Engineer, Product, Security, Executive)</summary>
         <div style="margin-top:10px;">
           <div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;margin-bottom:6px;">
-            Choose Your Role (Shows key metrics and daily actions for your team):
+            Choose Your Role (where to start and what to check):
           </div>
           <div id="smePersonaLensBar" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;"></div>
           <div id="smePersonaPlaybookCard" class="action-box" style="margin-bottom:10px;"></div>
@@ -916,8 +921,13 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     <!-- Persistent Agent & Optimizer Selector Banner -->
     <section id="demoSelectorBanner" class="selector-banner hidden adv-only">
       <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="sim-notice" role="note">
+          <span class="badge badge-yellow">SIMULATOR</span>
+          <span id="simulatorNoteText">Simulator: synthetic numbers from fixed factors in vibelift/optimizer.py. No optimizer is called, no logs are read, and no agent is changed.</span>
+          The agent profiles, goal metrics and optimizer generations in this picker are demo data.
+        </div>
         <div>
-          <div class="selector-label">1. Choose Agent to Inspect</div>
+          <div class="selector-label">1. Choose Agent to Inspect (demo profiles)</div>
           <select id="agentDropdown" class="agent-select" onchange="onSelectAgent(this.value)">
             <option value="it_service_desk">IT Service Desk (gemini-2.5-flash &bull; Vertex AI Agent Engine)</option>
             <option value="vibelift_analytics">VibeLift Analytics &amp; FinOps (gemini-2.5-flash &bull; Cloud Run A2A + MCP)</option>
@@ -925,7 +935,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           </select>
         </div>
         <div>
-          <div class="selector-label">2. Choose Optimization Method</div>
+          <div class="selector-label">2. Choose Simulated Optimization Method</div>
           <select id="optimizerDropdown" class="agent-select" onchange="onSelectOptimizer(this.value)">
             <option value="alpha_evolve">AlphaEvolve (Balanced Cost, Speed &amp; Accuracy &bull; Default)</option>
             <option value="opus_critic">Opus Critic (Prompt &amp; Tool Cleanup)</option>
@@ -945,7 +955,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         <div style="font-size:12px;color:var(--text-secondary);display:flex;gap:16px;flex-wrap:wrap;">
           <span><strong>Model:</strong> <span id="agentModelText" class="mono"></span></span>
           <span><strong>Active Method:</strong> <span id="activeOptimizerText" class="mono" style="color:var(--text-primary);font-weight:700;">AlphaEvolve (Balanced Cost, Speed &amp; Accuracy)</span></span>
-          <span><strong>Tracking:</strong> <span style="color:var(--g-green);font-weight:600;">@vibelift_telemetry (&lt;10ms)</span></span>
+          <span><strong>Data:</strong> <span style="color:#854d0e;font-weight:600;">simulated</span></span>
         </div>
       </div>
     </section>
@@ -1315,7 +1325,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="panel">
         <div class="panel-header">
           <div class="panel-title">
-            <span>Full 5-Layer Metric Catalog (26 Production Metrics)</span>
+            <span>5-Layer Metric Catalog (26 metrics to track)</span>
             <span class="badge badge-blue">L1 Infra &bull; L2 LLM &bull; L3 ADK &bull; L4 A2A &bull; L5 A2UI</span>
           </div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;">
@@ -1521,8 +1531,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
             <span>Turn-by-Turn Prompt Cache Check (<span class="mono">detect_prefix_breakpoint</span>)</span>
             <div style="display:flex;gap:8px;align-items:center;">
               <span class="badge badge-blue">Line-by-Line Prompt Cache Check</span>
-              <button class="btn btn-primary" id="stepTurnBtn" onclick="triggerApi('/api/step_turn')" style="padding:4px 10px;font-size:11.5px;">
-                + Step Live Agent Turn
+              <button class="btn btn-primary sim-panel" id="stepTurnBtn" onclick="triggerApi('/api/step_turn')" style="padding:4px 10px;font-size:11.5px;" title="Simulator: appends one synthetic turn (hidden in live mode)">
+                + Step Simulated Turn
               </button>
             </div>
           </div>
@@ -1573,6 +1583,22 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- TAB 3: COST & BILLING (WITH FOCUSED SUB-VIEW SELECTOR SO IT IS NEVER BUSY) -->
     <section id="tabPanel3" class="hidden">
+      <div class="panel live-only" id="billingStatusPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Cloud Billing export (billed cost)</span>
+            <span id="billingStatusBadge" class="badge badge-blue">Billing export: checking&hellip;</span>
+          </div>
+          <div id="billingStatusTable" class="mono" style="font-size:12px;color:var(--text-secondary);"></div>
+        </div>
+        <div id="billingStatusSummary" style="font-size:13px;"></div>
+        <div id="billingStatusHint" class="kpi-sub" style="margin-top:6px;"></div>
+        <div id="billingStatusDetail" class="mono" style="margin-top:6px;font-size:12px;color:var(--text-secondary);word-break:break-word;"></div>
+        <div class="kpi-sub" style="margin-top:8px;">
+          Billed cost is project-level: the export has no per-user split. Estimated cost per user (tokens &times; list price) is on the <strong>Users</strong> tab, in <strong>Top users</strong>.
+        </div>
+      </div>
+
       <div class="panel">
         <div class="panel-header">
           <div class="panel-title">
@@ -2236,12 +2262,14 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="panel-header">
           <div class="panel-title">
             <span>Top users</span>
-            <span class="badge badge-blue">Per-User Spend &amp; Loop Check</span>
+            <span class="badge badge-blue">Tokens &amp; estimated cost per user</span>
           </div>
           <div style="font-size:12px;color:var(--text-secondary);">
-            Breaks down prompt, thinking, and background tokens across top users along with satisfaction ratings and monthly department cost.
+            Sessions, turns and tokens per user, with an estimated model cost (each user's tokens &times; list price per model).
+            Estimates only: billed cost is project-level and is never split per user. Click a user to see their sessions above.
           </div>
         </div>
+        <div id="powerUsersCostNote" class="kpi-sub" style="margin-bottom:6px;"></div>
         <div class="table-scroll">
           <table>
             <thead>
@@ -2249,13 +2277,13 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
                 <th>User LDAP</th>
                 <th>Department</th>
                 <th>Primary Agent</th>
-                <th>7d Sessions</th>
+                <th>Sessions</th>
                 <th>Total Tokens</th>
                 <th>Thinking Tok</th>
                 <th>Background Tok</th>
                 <th>Cache Hit %</th>
                 <th>Avg CSAT</th>
-                <th>Monthly Spend</th>
+                <th>Est. Cost (list price)</th>
                 <th>Status</th>
               </tr>
             </thead>
@@ -2268,10 +2296,11 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="panel-header">
           <div class="panel-title">
             <span>Recent activity &amp; feedback</span>
-            <span class="badge badge-green">BigQuery <span class="mono">aive_logs.ratings_log</span> &amp; <span class="mono">agent_usage_log</span></span>
+            <span class="badge badge-green live-only">BigQuery <span class="mono">aive_logs.ratings_log</span> &amp; <span class="mono">agent_usage_log</span> (read only)</span>
+            <span class="badge badge-yellow sim-panel">Demo rows held in this instance's memory</span>
           </div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <button class="btn adv-only" onclick="emitLiveAiveUsageEvent()">+ Log Sample Usage Event</button>
+            <button class="btn adv-only sim-panel" onclick="emitLiveAiveUsageEvent()" title="Posts one synthetic event with fixed example values to /api/aive_log (hidden in live mode)">+ Log Synthetic Sample Event</button>
           </div>
         </div>
         <div class="add-param-form adv-only" style="margin-top:0;margin-bottom:12px;">
@@ -2376,26 +2405,26 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="panel">
         <div class="panel-header">
           <div class="panel-title">
-            <span>Live <span class="mono">@vibelift_telemetry</span> Event Stream (&lt;10ms Capture)</span>
-            <span class="badge badge-green">Direct Capture (No BigQuery Log Delay)</span>
+            <span><span class="mono">@vibelift_telemetry</span> Event Stream (in memory, last 25 events)</span>
+            <span class="badge badge-green">Validated ingest (HTTP 422 on bad bodies)</span>
           </div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <button class="btn btn-primary" onclick="emitLiveDecoratorEvent()">
-              Send Test @vibelift_telemetry Event
+            <button class="btn btn-primary" onclick="emitLiveDecoratorEvent()" title="Times a GET /api/health from this browser and posts the measured latency to /api/decorator_ingest">
+              Send Probe Event (measured /api/health round trip)
             </button>
           </div>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-bottom:14px;">
           <div class="action-box">
             <div class="action-box-title">One-Line Python Decorator Setup (ADK / MCP / A2A)</div>
-            <pre class="diff-pre" style="margin-top:6px;">from telemetry import vibelift_telemetry
+            <pre class="diff-pre" style="margin-top:6px;">from vibelift.telemetry import vibelift_telemetry
 
 @vibelift_telemetry(
     agent_name="it_service_desk",
     model="gemini-2.5-flash",
     protocol="ADK / MCP Message Passing",
     skill_or_mcp="mcp://service-desk-escalation",
-    user_cohort="Enterprise IT Support (2,840 DAU)",
+    user_cohort="enterprise-it-support",
 )
 async def handle_agent_turn(message_envelope):
     return await runner.process(message_envelope)</pre>
@@ -2403,10 +2432,10 @@ async def handle_agent_turn(message_envelope):
           <div class="action-box">
             <div class="action-box-title">Hosting, Security &amp; Privacy Summary</div>
             <div id="governanceDetailsBox" style="font-size:12.5px;line-height:1.65;color:var(--text-primary);margin-top:6px;">
-              <div>&bull; <strong>How Data Is Collected:</strong> Lightweight Python decorator on agent messages (&lt;10ms overhead, no BigQuery router wait).</div>
-              <div>&bull; <strong>Where It Runs:</strong> Hosted on Google Cloud Run with a right-side panel and fullscreen view.</div>
-              <div>&bull; <strong>Security &amp; Privacy:</strong> Uses OAuth 2.0 user consent and privacy-reviewed logging for 4,000&ndash;10,000 daily users.</div>
-              <div>&bull; <strong>Optimization Methods:</strong> Works with AlphaEvolve and Opus Critic.</div>
+              <div>&bull; <strong>How data is collected:</strong> the decorator times each handler call and reads token counts from the response; agents can also POST the same event to <span class="mono">/api/decorator_ingest</span>. Values a caller does not send stay empty.</div>
+              <div>&bull; <strong>Where it runs:</strong> Cloud Run (FastAPI app with the MCP endpoint and this dashboard).</div>
+              <div>&bull; <strong>Privacy:</strong> invalid bodies are rejected with HTTP 422 and kept only as key names, size and SHA-256; prompt text is stored only as a count, character total and SHA-256 / HMAC digest.</div>
+              <div>&bull; <strong>Optimizer:</strong> a simulator (synthetic numbers); it does not call AlphaEvolve or any model.</div>
             </div>
           </div>
         </div>
@@ -2430,6 +2459,18 @@ async def handle_agent_turn(message_envelope):
             <tbody id="decoratorEventsBody"></tbody>
           </table>
         </div>
+        <div class="action-box" id="ingestDeadLetterBox" style="margin-top:12px;">
+          <div class="action-box-title">Rejected ingest bodies on this instance <span id="ingestDeadLetterCount" class="badge badge-blue mono">0</span></div>
+          <div style="font-size:12px;color:var(--text-secondary);margin:4px 0 8px;">
+            Bodies sent to <span class="mono">/api/decorator_ingest</span>, <span class="mono">/api/aive_log</span> or <span class="mono">/api/csat_rating</span> that failed validation (HTTP 422). Only the key names, size and SHA-256 are kept, never the values. Nothing is filled in or retried.
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>Time (UTC)</th><th>Endpoint</th><th>Errors</th><th>Keys sent</th><th>Bytes</th><th>SHA-256</th></tr></thead>
+              <tbody id="ingestDeadLetterBody"></tbody>
+            </table>
+          </div>
+        </div>
       </div>
 
       <div class="tab-footer-nav adv-only">
@@ -2439,6 +2480,7 @@ async def handle_agent_turn(message_envelope):
       </div>
     </section>
   </main>
+  <div id="apiNotice" class="api-notice hidden" role="status" aria-live="polite"></div>
 
   <script>
     const ADVANCED_ONLY_TABS = [1, 2, 5];
@@ -2583,6 +2625,7 @@ async def handle_agent_turn(message_envelope):
           const n = document.getElementById(id);
           if (n) n.classList.remove('hidden');
         });
+        renderBillingStatus(state.billing_reconciliation);
         if (state.live_finops && !liveFinopsFromFleet) renderLiveFinops(state.live_finops);
       }
       if (state.ge_daily_usage) renderGeMartDaily(state.ge_daily_usage);
@@ -2622,7 +2665,7 @@ async def handle_agent_turn(message_envelope):
       document.getElementById('agentTitleText').textContent = agent.display_name;
       document.getElementById('agentDomainBadge').textContent = agent.domain;
       document.getElementById('agentDescText').textContent =
-        'Estimated Monthly AlphaEvolve Savings: $' + Number(agent.monthly_savings_usd || 0).toLocaleString() + '/mo';
+        'Simulated monthly savings (demo value): $' + Number(agent.monthly_savings_usd || 0).toLocaleString() + '/mo';
       document.getElementById('agentModelText').textContent = agent.model;
 
       const healthEl = document.getElementById('agentHealthBadge');
@@ -2788,9 +2831,12 @@ async def handle_agent_turn(message_envelope):
         if (optText && op.active_platform && op.active_platform.name) {
           optText.textContent = op.active_platform.name;
         }
+        const simNote = document.getElementById('simulatorNoteText');
+        if (simNote && op.simulator_note) simNote.textContent = op.simulator_note;
       }
 
       renderUserCentricAndDecorator(scopeUserCentric(state.user_centric), state.decorator_events);
+      renderIngestDeadLetters(state.ingest_dead_letters);
       try { renderExecOverview(execLastFleet, state.user_centric); } catch (e) { console.warn('overview', e); }
       renderSmeControlPlane(state);
       notifyHostSizeChanged();
@@ -2841,24 +2887,31 @@ async def handle_agent_turn(message_envelope):
     async function runNl2SqlQuery() {
       const inp = document.getElementById('nl2sqlQuestionInput');
       const question = (inp && inp.value ? inp.value.trim() : '') || 'Compare cost per 1k turns and prompt cache savings across agents';
-      if (!isEmbedded()) {
-        try {
-          const resp = await fetch('/api/nl2sql', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({question: question}),
-          });
-          if (resp.ok) {
-            const data = await resp.json();
-            renderNl2SqlResult(data);
-            return;
-          }
-        } catch (e) {}
+      const base = (currentState && currentState.nl2sql_default) || {};
+      if (isEmbedded()) {
+        // No MCP tool exposes this search, so it can't run inside Gemini Enterprise.
+        renderNl2SqlResult(Object.assign({}, base, {
+          rows: [],
+          generated_sql: '',
+          executive_summary: 'Plain-English search runs only in the full dashboard (the service URL), not inside Gemini Enterprise.',
+        }));
+        return;
       }
-      // Embedded or offline fallback
-      if (currentState && currentState.nl2sql_default) {
-        renderNl2SqlResult(currentState.nl2sql_default);
-      }
+      let failure = 'the server did not respond';
+      try {
+        const resp = await fetch('/api/nl2sql', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({question: question}),
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          renderNl2SqlResult(data);
+          return;
+        }
+        failure = 'HTTP ' + resp.status;
+      } catch (e) {}
+      renderNl2SqlResult(Object.assign({}, base, {rows: [], executive_summary: 'Search failed: ' + failure + '.'}));
     }
 
     function setOtelLayerFilter(layerId) {
@@ -2912,8 +2965,8 @@ async def handle_agent_turn(message_envelope):
       if (tbody && Array.isArray(val.checks)) {
         tbody.replaceChildren();
         val.checks.forEach(function(chk) {
-          const st = String(chk.status || 'PASS');
-          const stCls = st === 'PASS' ? 'badge-green' : 'badge-red';
+          const st = String(chk.status || 'UNKNOWN');
+          const stCls = st === 'PASS' ? 'badge-green' : st === 'UNKNOWN' ? 'badge-blue' : 'badge-red';
           tbody.appendChild(el('tr', null, [
             el('td', 'mono', [el('strong', null, [chk.check_id || ''])]),
             el('td', null, [badge(chk.tab || '', 'badge-blue')]),
@@ -3261,8 +3314,11 @@ async def handle_agent_turn(message_envelope):
       const alarmsBox = document.getElementById('watchOutAlarmsContainer');
       if (alarmsBox && Array.isArray(catalog.watch_out_alarms)) {
         alarmsBox.replaceChildren();
+        if (!catalog.watch_out_alarms.length && catalog.values_measured === false) {
+          alarmsBox.appendChild(el('div', 'kpi-sub', ['No watch-out alarms on a live project: the examples are simulator data.']));
+        }
         catalog.watch_out_alarms.forEach(function(al) {
-          const sev = String(al.severity || 'HIGH');
+          const sev = String(al.severity || '—');
           const sevCls = sev === 'CRITICAL' ? 'badge-red' : 'badge-yellow';
           alarmsBox.appendChild(el('div', 'action-box', [
             el('div', null, [
@@ -3279,18 +3335,21 @@ async def handle_agent_turn(message_envelope):
       const tbody = document.getElementById('otelCatalogTableBody');
       if (tbody && Array.isArray(catalog.layers)) {
         tbody.replaceChildren();
+        if (catalog.values_note) emptyRow(tbody, 8, catalog.values_note);
         catalog.layers.forEach(function(layer) {
-          if (currentOtelLayerFilter !== 'ALL' && layer.layer_id !== currentOtelLayerFilter) return;
+          // Buttons pass 'L1_INFRA'...; backend ids are 'layer_1_infra'..., so match on the layer number.
+          if (currentOtelLayerFilter !== 'ALL' && ('L' + layer.layer_number) !== String(currentOtelLayerFilter).split('_')[0]) return;
           (layer.metrics || layer.parameters || []).forEach(function(m) {
-            const st = String(m.status || 'OPTIMIZED');
-            const stCls = st.includes('BREACH') ? 'badge-red' : 'badge-green';
+            const st = String(m.status || (m.current_value == null ? 'NOT MEASURED' : 'SIMULATED'));
+            const stCls = st.includes('BREACH') ? 'badge-red' : (st === 'NOT MEASURED' || st === 'SIMULATED') ? 'badge-blue' : 'badge-green';
             tbody.appendChild(el('tr', null, [
               el('td', null, [badge(layer.layer_id || 'OTEL', 'badge-blue')]),
-              el('td', 'mono', [m.otel_metric || m.otel_name || m.param_id || '']),
+              el('td', 'mono', [m.otel_metric || m.otel_name || m.param_id || '',
+                m.key_status ? el('div', 'kpi-sub', [m.key_status]) : null]),
               el('td', null, [el('strong', null, [m.label || ''])]),
-              el('td', 'mono', [m.baseline_value + ' ' + (m.unit || '')]),
-              el('td', 'mono', [el('strong', null, [m.current_value + ' ' + (m.unit || '')])]),
-              el('td', 'mono', [(m.target_slo ?? m.target_value ?? '') + ' ' + (m.unit || '')]),
+              el('td', 'mono', [orDash(m.baseline_value, ' ' + (m.unit || ''))]),
+              el('td', 'mono', [el('strong', null, [orDash(m.current_value, ' ' + (m.unit || ''))])]),
+              el('td', 'mono', [orDash(m.target_slo ?? m.target_value, ' ' + (m.unit || ''))]),
               el('td', null, [m.why_it_matters || '']),
               el('td', null, [badge(st, stCls)]),
             ]));
@@ -3303,7 +3362,7 @@ async def handle_agent_turn(message_envelope):
       if (!sim || typeof sim !== 'object') return;
       const guardBadge = document.getElementById('whatIfGuardrailBadge');
       if (guardBadge) {
-        const statusStr = String(sim.guardrail_status || 'SAFE_TO_PROMOTE_CANARY');
+        const statusStr = String(sim.guardrail_status || 'UNKNOWN');
         guardBadge.textContent = statusStr + ' (Accuracy: ' + sim.projected_accuracy_pct + '% vs ' + sim.accuracy_guardrail_floor_pct + '% Floor)';
         guardBadge.className = 'badge ' + (statusStr.includes('BLOCKED') ? 'badge-red' : 'badge-green');
       }
@@ -3312,23 +3371,23 @@ async def handle_agent_turn(message_envelope):
         grid.replaceChildren(
           kpiCard(
             'Projected Cost / 1k Turns',
-            '$' + Number(sim.current_cost_per_1k_usd || 3.45).toFixed(2) + ' → $' + Number(sim.projected_cost_per_1k_usd || 2.18).toFixed(2),
-            'Baseline Gen 0: $' + Number(sim.baseline_cost_per_1k_usd || 29.40).toFixed(2) + '/1k'
+            numOr(sim.current_cost_per_1k_usd, 2, '$') + ' → ' + numOr(sim.projected_cost_per_1k_usd, 2, '$'),
+            'Baseline Gen 0: ' + numOr(sim.baseline_cost_per_1k_usd, 2, '$', '/1k')
           ),
           kpiCard(
             'Cost / CSAT-Positive Resolved Session',
-            '$' + Number(sim.projected_cost_per_resolved_session_usd || 0.0069).toFixed(4),
+            numOr(sim.projected_cost_per_resolved_session_usd, 4, '$'),
             'North-Star Outcome Unit Economics'
           ),
           kpiCard(
             'Projected P95 Latency',
-            Number(sim.current_p95_latency_ms || 690).toFixed(0) + 'ms → ' + Number(sim.projected_p95_latency_ms || 515).toFixed(0) + 'ms',
-            'Prompt Cache Hit: ' + Number(sim.projected_cache_hit_pct || 93.4).toFixed(1) + '%'
+            numOr(sim.current_p95_latency_ms, 0, '', 'ms') + ' → ' + numOr(sim.projected_p95_latency_ms, 0, '', 'ms'),
+            'Prompt Cache Hit: ' + numOr(sim.projected_cache_hit_pct, 1, '', '%')
           ),
           kpiCard(
             'Additional Monthly Fleet Savings',
-            '+$' + fmtInt(sim.additional_monthly_savings_usd || 11400) + '/mo',
-            'Canary Split: ' + (sim.traffic_canary_pct || 15) + '% Traffic'
+            sim.additional_monthly_savings_usd == null ? '—' : '+' + usdInt(sim.additional_monthly_savings_usd) + '/mo',
+            'Canary Split: ' + orDash(sim.traffic_canary_pct, '% Traffic')
           )
         );
       }
@@ -3399,17 +3458,21 @@ async def handle_agent_turn(message_envelope):
       turns.forEach(function(t) {
         const um = t.usage_metadata || {};
         const ba = t.billing_attribution || {};
+        // Logged turns carry token counts but no prompt text, so no prefix breakpoint is checked.
+        const logged = t.simulated !== true;
         const bpLine = t.cache_breakpoint_line;
-        const bpBadge = bpLine
-          ? badge('Line ' + bpLine + ' Mutated', 'badge-red')
-          : badge('100% Static Match', 'badge-green');
+        const bpBadge = logged
+          ? badge('Not checked', 'badge-blue')
+          : bpLine
+            ? badge('Line ' + bpLine + ' Mutated', 'badge-red')
+            : badge('100% Static Match', 'badge-green');
         const hitPct = Number(t.cache_hit_ratio || 0).toFixed(1) + '%';
         const hitBadge = Number(t.cache_hit_ratio || 0) >= 75
           ? badge(hitPct, 'badge-green')
           : badge(hitPct, 'badge-yellow');
         tbody.appendChild(el('tr', null, [
           el('td', 'mono', ['#' + t.turn_index]),
-          el('td', 'mono', ['Gen ' + t.evolution_generation]),
+          el('td', 'mono', [logged ? '—' : 'Gen ' + t.evolution_generation]),
           el('td', 'mono', [t.tool_called || '—']),
           el('td', 'mono', [t.prompt_prefix_hash || '—']),
           el('td', null, [bpBadge]),
@@ -3422,7 +3485,9 @@ async def handle_agent_turn(message_envelope):
           ]),
           el('td', null, [hitBadge]),
           el('td', 'mono', [
-            '$' + Number(ba.naive_count_tokens_usd || 0).toFixed(4) + ' → $' + Number(ba.actual_log_cached_usd || 0).toFixed(4)
+            ba.priced === false
+              ? 'Unpriced (no rate card for ' + (t.model || 'unknown model') + ')'
+              : numOr(ba.naive_count_tokens_usd, 4, '$') + ' → ' + numOr(ba.actual_log_cached_usd, 4, '$')
           ]),
         ]));
       });
@@ -3468,10 +3533,16 @@ async def handle_agent_turn(message_envelope):
       }
     }
 
+    // Demo mode only: posts one clearly labeled synthetic event (fixed example values, not a measurement).
     function emitLiveAiveUsageEvent() {
+      if (document.body.classList.contains('live-data')) {
+        showApiNotice('Synthetic sample events are turned off in live mode.');
+        return;
+      }
       triggerApi('/api/aive_log', {
+        agent_name: 'vibelift_dashboard',
         user_email: 'sme-demo@example.com',
-        task_type: 'SME_CONTROL_PLANE_AUDIT',
+        task_type: 'SYNTHETIC_SAMPLE',
         prompt: 'Verify closed-loop CSAT + tokenomics guardrail',
         total_tokens: 18900,
         latency_ms: 540.0,
@@ -3497,7 +3568,7 @@ async def handle_agent_turn(message_envelope):
       const badge = document.getElementById('smeEvalSummaryBadge');
       if (badge) {
         const passed = ev.passed_checks ?? 0;
-        const total = ev.total_checks ?? 30;
+        const total = ev.total_checks ?? '—';
         const score = ev.composite_automated_score_100 ?? 0;
         const smeAvg = (ev.sme_overall_avg_rating_5 !== null && ev.sme_overall_avg_rating_5 !== undefined)
           ? (ev.sme_overall_avg_rating_5 + '/5 SME (' + (ev.sme_total_ratings_submitted || 0) + ')')
@@ -3552,7 +3623,7 @@ async def handle_agent_turn(message_envelope):
           const tdSme = document.createElement('td');
           tdSme.className = 'right mono';
           if (p.avg_sme_rating_5 !== null && p.avg_sme_rating_5 !== undefined) {
-            tdSme.textContent = p.avg_sme_rating_5 + ' / 5 (' + (p.sme_rating_count || 0) + ') • ' + (p.latest_sme_verdict || 'APPROVED');
+            tdSme.textContent = p.avg_sme_rating_5 + ' / 5 (' + (p.sme_rating_count || 0) + ') • ' + (p.latest_sme_verdict || '—');
           } else {
             tdSme.textContent = 'Unrated (0)';
           }
@@ -3584,8 +3655,9 @@ async def handle_agent_turn(message_envelope):
             const tdTs = el('td', 'mono', [r.submitted_at || '']);
             const tdRev = el('td', 'mono', [r.reviewer || '']);
             const tdRole = el('td', null, [r.role_title || r.persona_id || '']);
-            const tdRate = el('td', 'right mono', [(r.overall_rating || 5) + ' / 5']);
-            const tdVerd = el('td', null, [el('span', r.verdict === 'NEEDS_WORK' ? 'badge badge-red' : 'badge badge-green', [r.verdict || 'APPROVED'])]);
+            const tdRate = el('td', 'right mono', [orDash(r.overall_rating, ' / 5')]);
+            const verdCls = r.verdict === 'NEEDS_WORK' ? 'badge badge-red' : r.verdict === 'APPROVED' ? 'badge badge-green' : 'badge badge-blue';
+            const tdVerd = el('td', null, [el('span', verdCls, [r.verdict || '—'])]);
             const tdNotes = el('td', null, [r.notes || '']);
             tr.appendChild(tdTs);
             tr.appendChild(tdRev);
@@ -3667,11 +3739,7 @@ async def handle_agent_turn(message_envelope):
         bar.replaceChildren();
         pb.personas.forEach(function(p) {
           const isActive = p.persona_id === activeSmePersonaId;
-          const bScore = p.score_before_100 ?? p.before_score ?? 48;
-          const aScore = p.score_after_100 ?? p.after_score ?? 96;
-          const btn = el('button', isActive ? 'btn btn-primary' : 'btn', [
-            p.role_title + ' (' + bScore + ' → ' + aScore + '/100)'
-          ]);
+          const btn = el('button', isActive ? 'btn btn-primary' : 'btn', [p.role_title || p.persona_id || '']);
           btn.style.padding = '4px 10px';
           btn.style.fontSize = '11.5px';
           btn.onclick = function() {
@@ -3683,24 +3751,24 @@ async def handle_agent_turn(message_envelope):
       if (card) {
         const selected = pb.personas.find(function(p) { return p.persona_id === activeSmePersonaId; }) || pb.personas[0];
         if (selected) {
-          const bScore = selected.score_before_100 ?? selected.before_score ?? 48;
-          const aScore = selected.score_after_100 ?? selected.after_score ?? 96;
-          const primKpi = selected.primary_kpi || (Array.isArray(selected.primary_kpis) ? selected.primary_kpis[0] : 'Cost & Quality');
-          const dailyAction = selected.daily_workflow_action || (Array.isArray(selected.actionable_controls) ? selected.actionable_controls.join(' • ') : '');
-          const compScore = pb.composite_after_score_100 ?? pb.fleet_average_after_score ?? 96.3;
+          const tabName = selected.primary_tab_name || 'Overview';
+          const kpis = Array.isArray(selected.primary_kpis) ? selected.primary_kpis : [];
+          const questions = Array.isArray(selected.key_questions_answered) ? selected.key_questions_answered : [];
+          const openBtn = el('button', 'btn', ['Open the ' + tabName + ' tab']);
+          openBtn.style.padding = '3px 9px';
+          openBtn.style.fontSize = '11.5px';
+          openBtn.style.marginTop = '6px';
+          openBtn.onclick = function() {
+            switchTab(selected.primary_tab);
+            const target = selected.target_panel_id ? document.getElementById(selected.target_panel_id) : null;
+            if (target && target.scrollIntoView) target.scrollIntoView({block: 'center'});
+          };
           card.replaceChildren(
-            el('div', 'action-box-title', [
-              selected.role_title + ' Operational Playbook • Primary KPI: ' + primKpi +
-              ' • Usability Score: ' + bScore + '/100 (POC) → ' + aScore + '/100 (Control Plane) • Composite: ' +
-              compScore + '/100'
-            ]),
-            el('div', null, [
-              el('strong', null, ['Daily Workflow Action: ']),
-              dailyAction
-            ]),
-            el('div', 'kpi-sub', [
-              'Key Questions Answered: ' + (selected.key_questions_answered || selected.primary_kpis || []).join(' | ')
-            ])
+            el('div', 'action-box-title', [(selected.role_title || '') + ' \\u2022 start on the ' + tabName + ' tab']),
+            el('div', null, [el('strong', null, ['What to check: ']), kpis.join(' \\u2022 ')]),
+            el('div', null, [el('strong', null, ['Where: ']), selected.actionable_controls || '']),
+            el('div', 'kpi-sub', ['Questions it answers: ' + questions.join(' | ')]),
+            openBtn
           );
         }
       }
@@ -3732,7 +3800,7 @@ async def handle_agent_turn(message_envelope):
         wfSteps.forEach(function(ws, idx) {
           const isStr = typeof ws === 'string';
           const titleStr = isStr ? ws : ('Step ' + (ws.step || (idx + 1)) + ': ' + (ws.title || ''));
-          const detailStr = isStr ? 'Verified in closed-loop telemetry pipeline' : (ws.detail || '');
+          const detailStr = isStr ? '' : (ws.detail || '');
           const pill = el('div', 'action-box', [
             el('div', 'action-box-title', [titleStr]),
             el('div', 'kpi-sub', [detailStr])
@@ -3747,26 +3815,28 @@ async def handle_agent_turn(message_envelope):
       const tsKpis = document.getElementById('turnTrajectorySummaryKpis');
       if (tsKpis && state.turn_summary) {
         const ts = state.turn_summary;
+        const unpricedTurns = Number(ts.unpriced_turns || 0);
         tsKpis.replaceChildren(
           kpiCard(
-            'Total Evaluated Agent Turns',
-            fmtInt(ts.total_turns || 0) + ' turns',
-            'Cache Hits: ' + fmtInt(ts.cache_hits || 0) + ' | Cache Busts: ' + fmtInt(ts.cache_busts || 0)
+            'Turns in View',
+            fmtInt(ts.total_turns) + ' turns',
+            fmtInt(ts.priced_turns) + ' priced • ' + fmtInt(ts.unpriced_turns) + ' unpriced (model has no rate card)'
           ),
           kpiCard(
-            'Observed Trajectory Cache Hit Rate',
-            Number(ts.cache_hit_rate_pct || 0).toFixed(1) + '%',
-            'Prefix SHA-256 verification across turns'
+            'Cache Hit Rate (cached ÷ input tokens)',
+            numOr(ts.avg_cache_hit_ratio, 1, '', '%'),
+            'Token-weighted across the turns in view'
           ),
           kpiCard(
-            'Cumulative Trajectory Spend (Actual vs Naive)',
-            '$' + Number(ts.total_actual_cost_usd || 0).toFixed(4) + ' vs $' + Number(ts.total_naive_cost_usd || 0).toFixed(4),
-            'Net Trajectory Saved: $' + Number(ts.net_cost_saved_usd || 0).toFixed(4)
+            'List-Price Token Cost (with cache vs. without)',
+            numOr(ts.total_actual_usd, 4, '$') + ' vs ' + numOr(ts.total_naive_usd, 4, '$'),
+            'Saved by caching: ' + numOr(ts.total_saved_usd, 4, '$')
+              + (unpricedTurns ? ' • excludes ' + fmtInt(unpricedTurns) + ' unpriced turns' : '')
           ),
           kpiCard(
-            'Total Cached vs Uncached Input Tokens',
-            fmtInt(ts.total_cached_read_tokens || 0) + ' cached',
-            fmtInt(ts.total_uncached_input_tokens || 0) + ' uncached • ' + fmtInt(ts.total_thoughts_tokens || 0) + ' thoughts'
+            'Cached vs Uncached Input Tokens',
+            fmtInt(ts.total_cached_read_tokens) + ' cached',
+            fmtInt(ts.total_uncached_input_tokens) + ' uncached • ' + fmtInt(ts.total_thoughts_tokens) + ' thinking'
           )
         );
       }
@@ -3784,9 +3854,9 @@ async def handle_agent_turn(message_envelope):
           crBody.appendChild(el('tr', null, [
             el('td', 'mono', [
               el('strong', null, [svc.service_name || '']),
-              el('div', 'kpi-sub', [(svc.region || 'us-central1') + ' • rev: ' + (svc.active_revision || '—')])
+              el('div', 'kpi-sub', [(svc.region || '—') + ' • rev: ' + (svc.active_revision || '—')])
             ]),
-            el('td', 'mono', ['min=' + (svc.min_instances ?? 1) + ' / max=' + (svc.max_instances ?? 10) + ' / conc=' + (svc.concurrency ?? 80)]),
+            el('td', 'mono', ['min=' + (svc.min_instances ?? '—') + ' / max=' + (svc.max_instances ?? '—') + ' / conc=' + (svc.concurrency ?? '—')]),
             el('td', 'mono', [cpuTxt + ' / ' + memTxt]),
             el('td', 'mono', [latTxt + coldTxt]),
             el('td', 'mono', [costTxt]),
@@ -3912,27 +3982,42 @@ async def handle_agent_turn(message_envelope):
         const tcRows = Array.isArray(rawTc)
           ? rawTc
           : Object.keys(rawTc).map(function(k) {
-              const item = rawTc[k] || {};
+              const item = rawTc[k];
+              if (typeof item === 'number') {
+                // Simulator figures are flat numbers: one value each, with no before/after split or cost.
+                const unit = /_pct$/.test(k) ? '%' : /_m$/.test(k) ? 'M tokens' : '';
+                return { category: k.replace(/_(m|pct)$/, '').replace(/_/g, ' ').toUpperCase(), scalar_value: item + unit };
+              }
+              const obj = item || {};
               return {
                 category: k.replace(/_/g, ' ').toUpperCase(),
-                optimization_action: item.remediation || item.description || '',
-                daily_tokens_m: ((Number(item.after_tokens_per_turn || 0) * 1000) / 1000000).toFixed(2),
-                share_before_pct: item.before_share_pct ?? 0,
-                share_after_pct: item.after_share_pct ?? 0,
-                monthly_cost_usd: Math.round(Number(item.after_tokens_per_turn || 0) * 0.45),
-                monthly_saved_usd: Math.max(0, Math.round((Number(item.before_tokens_per_turn || 0) - Number(item.after_tokens_per_turn || 0)) * 0.45)),
+                optimization_action: obj.remediation || obj.description || '',
+                tokens_per_turn: obj.after_tokens_per_turn ?? null,
+                share_before_pct: obj.before_share_pct ?? null,
+                share_after_pct: obj.after_share_pct ?? null,
+                monthly_cost_usd: obj.monthly_cost_usd ?? null,
+                monthly_saved_usd: obj.monthly_saved_usd ?? null,
               };
             });
+        const allScalar = tcRows.length > 0 && tcRows.every(function(r) { return r.scalar_value != null; });
+        if (allScalar) setTableHead('tokenCategoryBody', ['Token type (simulator)', 'Simulated value']);
         tcRows.forEach(function(cat) {
+          if (cat.scalar_value != null) {
+            const cells = [el('td', null, [el('strong', null, [cat.category])]), el('td', 'mono', [cat.scalar_value])];
+            if (!allScalar) cells.push(el('td', 'mono', ['—']), el('td', 'mono', ['—']), el('td', 'mono', ['—']));
+            tcBody.appendChild(el('tr', null, cells));
+            return;
+          }
           tcBody.appendChild(el('tr', null, [
             el('td', null, [
               el('strong', null, [cat.category || '']),
               el('div', 'kpi-sub', [cat.optimization_action || '']),
             ]),
-            el('td', 'mono', [cat.daily_tokens_m + 'M tok/d']),
-            el('td', 'mono', [cat.share_before_pct + '% → ' + cat.share_after_pct + '%']),
-            el('td', 'mono', ['$' + fmtInt(cat.monthly_cost_usd) + '/mo']),
-            el('td', 'mono', [badge('$' + fmtInt(cat.monthly_saved_usd) + '/mo saved', 'badge-green')]),
+            el('td', 'mono', [cat.daily_tokens_m != null ? cat.daily_tokens_m + 'M tok/d'
+              : cat.tokens_per_turn != null ? fmtInt(cat.tokens_per_turn) + ' tok/turn' : '—']),
+            el('td', 'mono', [orDash(cat.share_before_pct, '%') + ' → ' + orDash(cat.share_after_pct, '%')]),
+            el('td', 'mono', [cat.monthly_cost_usd == null ? '—' : usdInt(cat.monthly_cost_usd) + '/mo']),
+            el('td', 'mono', [cat.monthly_saved_usd == null ? '—' : badge(usdInt(cat.monthly_saved_usd) + '/mo saved', 'badge-green')]),
           ]));
         });
       }
@@ -3948,7 +4033,7 @@ async def handle_agent_turn(message_envelope):
           raBody.appendChild(el('tr', null, [
             el('td', 'mono', [
               el('strong', null, [al.alert_id || ('ALRT-' + (idx + 1))]),
-              el('div', null, ['Severity: ' + (al.user_ldap || al.severity || 'HIGH')]),
+              el('div', null, ['Severity: ' + (al.severity || '—')]),
             ]),
             el('td', null, [
               badge(al.agent_id || al.agent_name || '', 'badge-blue'),
@@ -4008,16 +4093,10 @@ async def handle_agent_turn(message_envelope):
       const tcoBox = document.getElementById('platformTcoBox');
       if (tcoBox && state.otel_catalog && state.otel_catalog.architecture_tco) {
         const tco = state.otel_catalog.architecture_tco;
-        const totalHosting = tco.estimated_monthly_total_usd ?? tco.total_monthly_platform_tco_usd ?? 39.0;
-        const comps = tco.components || tco.line_items || [];
         tcoBox.replaceChildren(
-          el('div', 'action-box-title', ['VibeLift hosting cost (estimate from list prices, not billed)']),
-          el('div', null, ['Estimated: $' + Number(totalHosting).toFixed(2) + '/mo' + (tco.target_scale || tco.scale_profile ? ' (' + (tco.target_scale || tco.scale_profile) + ')' : '')]),
-          el('div', 'kpi-sub', [
-            comps.map(function(c) {
-              return (c.service || c.component) + ': $' + Number(c.monthly_cost_usd || 0).toFixed(2) + '/mo';
-            }).join(' • ')
-          ])
+          el('div', 'action-box-title', ['VibeLift hosting cost']),
+          el('div', null, [tco.monthly_compute_cost_usd == null ? 'Not estimated.' : 'Estimated: ' + money(tco.monthly_compute_cost_usd) + '/mo']),
+          el('div', 'kpi-sub', [tco.cost_note || ''])
         );
       }
 
@@ -4030,13 +4109,14 @@ async def handle_agent_turn(message_envelope):
       if (vocBody && Array.isArray(aive.ratings_logs)) {
         vocBody.replaceChildren();
         aive.ratings_logs.forEach(function(r) {
-          const stars = '★'.repeat(Math.max(1, Math.min(5, Number(r.rating || 5))));
-          const rCls = Number(r.rating || 5) >= 4 ? 'badge-green' : 'badge-yellow';
+          const hasRating = r.rating != null && isFinite(Number(r.rating));
+          const stars = hasRating ? '★'.repeat(Math.max(1, Math.min(5, Number(r.rating)))) : '';
+          const rCls = !hasRating ? 'badge-blue' : Number(r.rating) >= 4 ? 'badge-green' : 'badge-yellow';
           vocBody.appendChild(el('tr', null, [
             el('td', 'mono', [r.rating_id || '']),
             el('td', 'mono', [el('strong', null, [r.user_ldap || r.user_email || ''])]),
             el('td', 'mono', [r.session_id || '']),
-            el('td', null, [badge(r.rating + ' ' + stars, rCls)]),
+            el('td', null, [badge(hasRating ? r.rating + ' ' + stars : '—', rCls)]),
             el('td', null, [r.feedback_text || '']),
           ]));
         });
@@ -4132,23 +4212,25 @@ async def handle_agent_turn(message_envelope):
       // 1. CpO & Drift KPI Cards
       const cpoKpis = document.getElementById('cpoDriftKpis');
       if (cpoKpis) {
-        const unoptMult = (Number(drift.unoptimized_billed_spend_usd || 2540) / Math.max(1, Number(drift.expected_naive_token_spend_usd || 420))).toFixed(2);
-        const remMult = (Number(drift.actual_reconciled_invoice_usd || 1355.75) / Math.max(1, Number(drift.expected_naive_token_spend_usd || 420))).toFixed(2);
+        const naiveEst = Number(drift.expected_naive_token_spend_usd);
+        const driftRatio = function(v) { return (v == null || !(naiveEst > 0)) ? '—' : (Number(v) / naiveEst).toFixed(2) + 'x'; };
+        const unoptMult = driftRatio(drift.unoptimized_billed_spend_usd);
+        const remMult = driftRatio(drift.actual_reconciled_invoice_usd);
         cpoKpis.replaceChildren(
           kpiCard(
             'True Cost per Outcome (Baseline → Optimized)',
-            '$' + Number(cpo.fleet_baseline_cpo_usd || 2.339).toFixed(3) + ' → $' + Number(cpo.fleet_optimized_cpo_usd || 0.431).toFixed(3),
-            '-' + Number(cpo.fleet_cpo_reduction_pct || 81.6).toFixed(1) + '% incl. LLM + Tools + Infra + HITL'
+            numOr(cpo.fleet_baseline_cpo_usd, 3, '$') + ' → ' + numOr(cpo.fleet_optimized_cpo_usd, 3, '$'),
+            numOr(cpo.fleet_cpo_reduction_pct, 1, '-', '%') + ' incl. LLM + Tools + Infra + HITL'
           ),
           kpiCard(
             'Fleet Total Monthly CpO Spend',
-            '$' + fmtInt(cpo.fleet_monthly_baseline_usd || 302900) + ' → $' + fmtInt(cpo.fleet_monthly_optimized_usd || 55800) + '/mo',
-            'Net Monthly CpO Savings: $' + fmtInt(cpo.fleet_monthly_saved_usd || 247100) + '/mo'
+            usdInt(cpo.fleet_monthly_baseline_usd) + ' → ' + usdInt(cpo.fleet_monthly_optimized_usd) + '/mo',
+            'Net Monthly CpO Savings: ' + usdInt(cpo.fleet_monthly_saved_usd) + '/mo'
           ),
           kpiCard(
             'Token-to-Spend Drift Multiplier (Before → After)',
-            unoptMult + 'x → ' + remMult + 'x',
-            'Naive Token Est: $' + Number(drift.expected_naive_token_spend_usd || 420).toFixed(2) + ' vs Reconciled: $' + Number(drift.actual_reconciled_invoice_usd || 1355.75).toFixed(2)
+            unoptMult + ' → ' + remMult,
+            'Naive Token Est: ' + numOr(drift.expected_naive_token_spend_usd, 2, '$') + ' vs Reconciled: ' + numOr(drift.actual_reconciled_invoice_usd, 2, '$')
           ),
           kpiCard(
             'Unattributed Invoice Drift (D1..D5 Reconciled)',
@@ -4285,7 +4367,7 @@ async def handle_agent_turn(message_envelope):
           el('div', 'action-box-title', ['Break-Even Reuse Threshold Formula: ' + (caching.formula || 'N* = 1 + S / (0.9 * P_in)')]),
           el('div', null, [
             'Flash Break-Even: ' + caching.flash_break_even_calls_per_hr + ' calls/hr • Pro Break-Even: ' + caching.pro_break_even_calls_per_hr + ' calls/hr • Winning Mode: ',
-            badge(hc.winning_mode || 'EXPLICIT_CACHE_LOCKED', 'badge-green'),
+            badge(hc.winning_mode || '—', 'badge-blue'),
             ' (Monthly Prefix Savings: $' + fmtInt(hc.monthly_prefix_savings_usd || 0) + '/mo)',
           ]),
           el('div', 'kpi-sub mono', [
@@ -4353,23 +4435,23 @@ async def handle_agent_turn(message_envelope):
         wfKpis.replaceChildren(
           kpiCard(
             'Unoptimized Baseline Monthly Spend',
-            '$' + fmtInt(wf.baseline_monthly_usd || 142000) + '/mo',
+            usdInt(wf.baseline_monthly_usd) + '/mo',
             'Before FIN-01..FIN-05 structural remediations'
           ),
           kpiCard(
             'Final Remediated Monthly Spend',
-            '$' + fmtInt(wf.optimized_monthly_usd || 10050) + '/mo',
+            usdInt(wf.optimized_monthly_usd) + '/mo',
             'Combined step-by-step savings'
           ),
           kpiCard(
             'Total Monthly & Annualized Net Savings',
-            '$' + fmtInt(wf.total_monthly_saved_usd || 131950) + '/mo',
-            '$' + fmtInt((wf.total_monthly_saved_usd || 131950) * 12) + '/yr annualized'
+            usdInt(wf.total_monthly_saved_usd) + '/mo',
+            (wf.total_monthly_saved_usd == null ? '—' : usdInt(Number(wf.total_monthly_saved_usd) * 12)) + '/yr annualized'
           ),
           kpiCard(
             'Compounded Spend Reduction',
-            '-' + Number(wf.total_reduction_pct || 92.9).toFixed(1) + '%',
-            'Verified across sequential FinOps levers'
+            numOr(wf.total_reduction_pct, 1, '-', '%'),
+            'Simulated: levers applied one after another'
           )
         );
       }
@@ -4389,7 +4471,7 @@ async def handle_agent_turn(message_envelope):
             el('td', null, [f.savings_formula || '']),
             el('td', 'mono', [badge('$' + fmtInt(f.monthly_savings_usd) + '/mo saved', 'badge-green')]),
             el('td', null, [
-              badge(f.status || 'REMEDIATED', 'badge-green'),
+              badge(f.status || '—', f.status ? 'badge-green' : 'badge-blue'),
               el('div', 'kpi-sub', [f.evidence || '']),
             ]),
           ]));
@@ -4585,16 +4667,69 @@ async def handle_agent_turn(message_envelope):
       }
     }
 
+    // Per-user cost: live = list-price estimate from logged tokens (est_cost_usd); demo = simulated monthly spend.
+    function estMoney(v) {
+      const n = Number(v);
+      return n > 0 && n < 0.01 ? '<$0.01' : money(n);
+    }
+    function estCostCell(u) {
+      const unpriced = Number(u.est_cost_unpriced_tokens || 0);
+      if (u.est_cost_usd != null) {
+        const td = el('td', 'mono', [estMoney(u.est_cost_usd) + (unpriced > 0 ? ' *' : '')]);
+        const models = Array.isArray(u.est_cost_models) ? u.est_cost_models.join(', ') : '';
+        td.title = 'Estimate at list price' + (models ? ' (' + models + ')' : '') + '; not billed cost.'
+          + (unpriced > 0 ? ' * ' + fmtTokens(unpriced) + ' more tokens (all apps) have no logged model or no rate card and are not priced.' : '');
+        return td;
+      }
+      if (u.monthly_cost_usd != null) return el('td', 'mono', [money(u.monthly_cost_usd)]);
+      const td = el('td', 'mono', ['—']);
+      td.title = unpriced > 0
+        ? fmtTokens(unpriced) + ' tokens logged, but their model is not logged or has no rate card, so they are not priced.'
+        : 'No tokens logged for this user in vibelift_mart.fct_turns in this window.';
+      return td;
+    }
+    function renderUserCostNote(users) {
+      const note = document.getElementById('powerUsersCostNote');
+      if (!note) return;
+      note.title = '';
+      const est = currentState && currentState.user_centric ? currentState.user_centric.user_cost_estimate : null;
+      if (!est || typeof est !== 'object') {
+        note.textContent = currentState && currentState.live_data === true
+          ? ''
+          : 'Demo data: the cost column shows simulated monthly spend per user.';
+        return;
+      }
+      const priced = (users || []).filter(function(u) { return u && u.est_cost_usd != null; });
+      const total = priced.reduce(function(acc, u) { return acc + Number(u.est_cost_usd); }, 0);
+      const parts = ['Estimated model cost, ' + (est.window_hours ? windowLabel(est.window_hours) : 'selected time range') + ': '];
+      if (priced.length) {
+        parts.push(el('strong', null, [estMoney(total)]));
+        parts.push(' across ' + priced.length + (priced.length === 1 ? ' user' : ' users')
+                   + (geScope !== 'all' ? ' in this scope' : '') + ' (list price, not billed cost).');
+      } else {
+        parts.push('no priced tokens for these users.');
+      }
+      const missing = Array.isArray(est.models_without_rate_card) ? est.models_without_rate_card : [];
+      if (missing.length) {
+        parts.push(' Not priced' + (geScope !== 'all' ? ' (all apps)' : '') + ': ' + fmtTokens(est.unpriced_tokens)
+                   + ' tokens from ' + missing.join(', ') + '.');
+      }
+      note.replaceChildren.apply(note, parts);
+      note.title = String(est.method || '') + ' ' + String(est.note || '');
+    }
+
     function renderPowerUsersTable(users) {
       const puBody = document.getElementById('powerUsersBody');
-      if (!puBody || !Array.isArray(users)) return;
+      if (!puBody) return;
+      renderUserCostNote(Array.isArray(users) ? users : []);
+      if (!Array.isArray(users)) return;
       puBody.replaceChildren();
       if (!users.length) {
-        emptyRow(puBody, 11, 'No user activity in this scope for the last 7 days.');
+        emptyRow(puBody, 11, 'No user activity in this scope for the selected time range.');
         return;
       }
       users.forEach(function(u) {
-        const st = String(u.anomaly_status || 'NORMAL');
+        const st = String(u.anomaly_status || '—');
         const stCls = st.includes('OPTIMIZED') || st.includes('LIVE') ? 'badge-green' : 'badge-blue';
         const hasLiveBreakdown = u.interactions_7d != null || u.api_calls_observed != null;
         const sessText = hasLiveBreakdown
@@ -4610,7 +4745,7 @@ async def handle_agent_turn(message_envelope):
           el('td', 'mono', [orDash(u.background_tokens_k, 'k')]),
           el('td', 'mono', [u.cache_hit_pct == null ? '—' : u.cache_hit_pct + '%']),
           el('td', 'mono', [u.avg_csat == null ? 'no ratings' : u.avg_csat + ' ★']),
-          el('td', 'mono', [u.monthly_cost_usd == null ? '—' : money(u.monthly_cost_usd)]),
+          estCostCell(u),
           el('td', null, [badge(st, stCls)]),
         ]);
         const puEmail = u.user_email || '';
@@ -4811,6 +4946,62 @@ async def handle_agent_turn(message_envelope):
       });
     }
 
+    // Cloud Billing export status at the top of the Cost tab; shown in Simple mode too.
+    // TODO(security): br.message can hold the raw BigQuery error (capped at 300 chars server-side), which can
+    // name projects, datasets and service accounts. Fine for dashboard operators; if this panel is ever shown
+    // to non-operators, render only br.hint.
+    function renderBillingStatus(br) {
+      const b = br && typeof br === 'object' ? br : {};
+      const status = String(b.status || 'LOADING');
+      const statusBadge = document.getElementById('billingStatusBadge');
+      if (statusBadge) {
+        const words = {LIVE: 'connected', ERROR: 'error', NOT_CONNECTED: 'not connected', LOADING: 'loading…'};
+        const classes = {LIVE: 'badge-green', ERROR: 'badge-red', NOT_CONNECTED: 'badge-yellow'};
+        statusBadge.textContent = 'Billing export: ' + (words[status] || status.toLowerCase());
+        statusBadge.className = 'badge ' + (classes[status] || 'badge-blue');
+      }
+      const tableNote = document.getElementById('billingStatusTable');
+      if (tableNote) {
+        tableNote.textContent = b.billing_export_table
+          ? 'Table: ' + b.billing_export_table
+          : 'VIBELIFT_BILLING_EXPORT_TABLE is not set';
+      }
+      const summary = document.getElementById('billingStatusSummary');
+      const hint = document.getElementById('billingStatusHint');
+      const detail = document.getElementById('billingStatusDetail');
+      if (!summary || !hint || !detail) return;
+      summary.replaceChildren();
+      hint.replaceChildren();
+      detail.replaceChildren();
+      if (status === 'LIVE') {
+        const cur = String(b.currency || 'USD');
+        const amount = function(v) {
+          if (v == null) return '—';
+          if (cur === 'USD') return money(v);
+          return Number(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) + ' ' + cur;
+        };
+        const bySvc = b.net_by_service || {};
+        let topSvc = null;
+        Object.keys(bySvc).forEach(function(k) {
+          if (k && (topSvc === null || Number(bySvc[k]) > Number(bySvc[topSvc]))) topSvc = k;
+        });
+        const parts = ['Net billed, last ' + (b.window_days || 30) + ' days: ', el('strong', null, [amount(b.total_net_invoice_usd)]),
+                       ' (gross ' + amount(b.total_gross_usd) + ', credits ' + amount(b.total_credits_usd) + ')'];
+        if (topSvc) parts.push(' · largest service: ' + topSvc + ' (' + amount(bySvc[topSvc]) + ')');
+        summary.replaceChildren.apply(summary, parts);
+        if (b.message) detail.textContent = String(b.message);
+      } else if (status === 'ERROR') {
+        summary.textContent = 'The billing export query failed, so billed cost is not shown. Token-based estimates still work.';
+        hint.replaceChildren(el('strong', null, ['How to fix: ']), String(b.hint || 'See the error below and the service logs.'));
+        if (b.message) detail.textContent = 'Error: ' + String(b.message);
+      } else if (status === 'NOT_CONNECTED') {
+        summary.textContent = 'No billing export is connected, so billed cost is not shown. Token-based estimates still work.';
+        hint.replaceChildren(el('strong', null, ['How to connect: ']), String(b.hint || b.message || ''));
+      } else {
+        summary.textContent = 'Loading the billing export…';
+      }
+    }
+
     function renderGeMartDaily(gdu) {
       if (!gdu || typeof gdu !== 'object') return;
       const refBadge = document.getElementById('geMartRefreshedBadge');
@@ -4819,16 +5010,21 @@ async def handle_agent_turn(message_envelope):
         refBadge.textContent = (gdu.mart_dataset || 'vibelift_mart') + ts;
       }
       const billBadge = document.getElementById('geMartBillingBadge');
+      const bs = String(gdu.billing_status || 'NOT_CONFIGURED');
       if (billBadge) {
-        const bs = String(gdu.billing_status || 'NOT_CONFIGURED');
         billBadge.textContent = 'Billing: ' + bs;
-        billBadge.className = 'badge ' + (bs === 'LIVE' ? 'badge-green' : 'badge-yellow');
+        billBadge.className = 'badge ' + (bs === 'LIVE' ? 'badge-green' : bs === 'ERROR' ? 'badge-red' : 'badge-yellow');
+        billBadge.title = String(gdu.billing_message || '');
       }
       const scopeNote = document.getElementById('geMartScopeNote');
       if (scopeNote) {
-        scopeNote.textContent = gdu.billing_table
-          ? 'Billing export: ' + gdu.billing_table
-          : 'Set VIBELIFT_BILLING_EXPORT_TABLE to populate live Billed AI Net ($)';
+        if (!gdu.billing_table) {
+          scopeNote.textContent = 'Set VIBELIFT_BILLING_EXPORT_TABLE to populate live Billed AI Net ($)';
+        } else if (bs === 'LIVE' || bs === 'LOADING') {
+          scopeNote.textContent = 'Billing export: ' + gdu.billing_table;
+        } else {
+          scopeNote.textContent = 'Billing export: ' + gdu.billing_table + ' (' + bs + '; see "Cloud Billing export" at the top of this tab)';
+        }
       }
 
       const dBody = document.getElementById('geMartDailyBody');
@@ -4848,8 +5044,8 @@ async def handle_agent_turn(message_envelope):
             el('td', 'mono', [fmtInt(d.active_users)]),
             el('td', 'mono', [fmtTokens(d.input_tokens)]),
             el('td', 'mono', [fmtTokens(d.output_tokens)]),
-            el('td', 'mono', [fmtTokens(d.thought_tokens)]),
-            el('td', 'mono', [fmtTokens(d.cached_tokens)]),
+            el('td', 'mono', [fmtTokens(d.reasoning_tokens)]),
+            el('td', 'mono', [fmtTokens(d.cached_input_tokens)]),
             el('td', 'mono', [d.ai_net_usd == null ? '—' : money(d.ai_net_usd)]),
             el('td', 'mono', [d.usd_per_1k_turns == null ? '—' : '$' + Number(d.usd_per_1k_turns).toFixed(4)]),
             el('td', 'mono', [d.usd_per_1m_tokens == null ? '—' : '$' + Number(d.usd_per_1m_tokens).toFixed(4)]),
@@ -4947,6 +5143,12 @@ async def handle_agent_turn(message_envelope):
 
     function badge(text, cls) { return el('span', 'badge ' + cls, [text]); }
     function orDash(v, suffix) { return v == null ? '—' : String(v) + (suffix || ''); }
+    // Fixed-decimal number, or a dash when the value is missing. Never substitutes a default.
+    function numOr(v, digits, prefix, suffix) {
+      if (v == null || v === '' || !isFinite(Number(v))) return '—';
+      return (prefix || '') + Number(v).toFixed(digits) + (suffix || '');
+    }
+    function usdInt(v) { return v == null || !isFinite(Number(v)) ? '—' : '$' + Number(v).toLocaleString(); }
     // Support-event badge colour follows the turn outcome instead of always showing green.
     function supportBadgeClass(ev) {
       const s = String(ev.status || ev.resolution_status || '').toUpperCase();
@@ -5178,7 +5380,14 @@ async def handle_agent_turn(message_envelope):
         const be = u.by_engine || {};
         const v = Object.keys(be).filter(function(k) { return engineMatchesScope(k, geScope); })
           .reduce(function(acc, k) { return acc + Number(be[k] || 0); }, 0);
-        return v > 0 ? Object.assign({}, u, {sessions_7d: v}) : null;
+        if (!(v > 0)) return null;
+        const scoped = {sessions_7d: v};
+        const ce = u.est_cost_by_engine;
+        if (ce && typeof ce === 'object' && geScope !== 'project_all') {
+          const keys = Object.keys(ce).filter(function(k) { return engineMatchesScope(k, geScope); });
+          scoped.est_cost_usd = keys.length ? keys.reduce(function(acc, k) { return acc + Number(ce[k] || 0); }, 0) : null;
+        }
+        return Object.assign({}, u, scoped);
       }).filter(Boolean);
       const cohorts = Array.isArray(uc.cohorts) ? uc.cohorts.filter(function(c) {
         return !c.engine_key || engineMatchesScope(c.engine_key, geScope);
@@ -5524,12 +5733,12 @@ async def handle_agent_turn(message_envelope):
         items.push({
           sev: Number(unregSum.zombie_runtimes_count || 0) > 0 ? 2 : 1,
           text: fmtInt(unregSum.total_unregistered_runtimes) + ' deployed runtime(s) in project (' +
-            fmtInt(unregSum.unregistered_agent_engines || 0) + ' Agent Engine, ' +
-            fmtInt(unregSum.unregistered_cloud_run || 0) + ' Cloud Run, ' +
-            fmtInt(unregSum.unregistered_gke_workloads || 0) + ' GKE) are NOT registered in any Gemini Enterprise app (' +
+            fmtInt(unregSum.unregistered_reasoning_engines || 0) + ' Agent Engine, ' +
+            fmtInt(unregSum.unregistered_cloud_run_services || 0) + ' Cloud Run, ' +
+            fmtInt(unregSum.gke_workloads_count || 0) + ' GKE) are NOT registered in any Gemini Enterprise app (' +
             fmtInt(unregSum.zombie_runtimes_count || 0) + ' zombie/idle; est. $' +
-            Number((unregSum.total_est_token_cost_usd || 0) + (unregSum.total_est_infra_cost_usd || 0)).toFixed(2) +
-            ' token + compute spend). See Standalone & Unregistered Project Runtimes below.'
+            Number(unregSum.unregistered_est_token_cost_usd || 0).toFixed(2) +
+            ' token spend at list price). See Standalone & Unregistered Project Runtimes below.'
         });
       }
       runtimes.forEach(function(rt) {
@@ -5610,25 +5819,27 @@ async def handle_agent_turn(message_envelope):
         const stCls = isZombie ? 'badge-red' : (finSt === 'ACTIVE_UNREGISTERED' ? 'badge-green' : 'badge-yellow');
         const subId = b.reasoning_engine_id || b.service || (b.cluster_name ? (b.cluster_name + '/' + b.namespace + '/' + b.container_name) : '') || rt.agent_id;
         let allocStr = '—';
-        if (m.cpu_alloc_vcpu_hours != null || m.mem_alloc_gib_hours != null) {
-          allocStr = (m.cpu_alloc_vcpu_hours || 0) + ' vCPU-h · ' + (m.mem_alloc_gib_hours || 0) + ' GiB-h';
+        if (b.kind === 'gke_workload') {
+          allocStr = (m.vcpu_hours || 0) + ' core-h · ' + (m.avg_memory_gib || 0) + ' GiB avg';
+        } else if (m.vcpu_hours != null || m.memory_gib_hours != null) {
+          allocStr = (m.vcpu_hours || 0) + ' vCPU-h · ' + (m.memory_gib_hours || 0) + ' GiB-h';
         } else if (m.billable_instance_hours != null) {
           allocStr = m.billable_instance_hours + ' inst-h (min=' + (b.min_instances || 0) + ', max=' + (b.max_instances || 0) + ')';
-        } else if (b.cpu_core_hours != null || b.avg_memory_gib != null) {
-          allocStr = (b.cpu_core_hours || 0) + ' core-h · ' + (b.avg_memory_gib || 0) + ' GiB';
         }
         const costParts = [];
         if (m.est_infra_cost_usd != null) costParts.push('Infra: $' + Number(m.est_infra_cost_usd).toFixed(2));
         if (m.est_token_cost_usd != null && m.est_token_cost_usd > 0) costParts.push('Tokens: $' + Number(m.est_token_cost_usd).toFixed(4));
+        else if (m.est_token_cost_usd == null && (m.input_tokens || m.output_tokens)) costParts.push('Tokens: unpriced (no rate card)');
 
         const cmdNodes = [];
         if (act.summary) cmdNodes.push(el('div', 'kpi-sub', [act.summary]));
-        if (act.command) {
+        const finopsCmd = act.delete_command || act.command;
+        if (finopsCmd) {
           const btnFix = el('button', 'btn', ['Copy FinOps Cmd']);
           btnFix.style.padding = '2px 7px';
           btnFix.style.fontSize = '11px';
-          btnFix.addEventListener('click', function() { copyText(act.command, btnFix); });
-          cmdNodes.push(el('div', 'cleanup-cmd', [el('code', null, [act.command]), btnFix]));
+          btnFix.addEventListener('click', function() { copyText(finopsCmd, btnFix); });
+          cmdNodes.push(el('div', 'cleanup-cmd', [el('code', null, [finopsCmd]), btnFix]));
         }
         if (act.register_ge_command) {
           const btnReg = el('button', 'btn', ['Copy GE Register']);
@@ -5711,8 +5922,10 @@ async def handle_agent_turn(message_envelope):
       const skills = Array.isArray(fleet.skills_and_mcp) ? fleet.skills_and_mcp : [];
       const totUnreg = usum.total_unregistered_runtimes != null ? usum.total_unregistered_runtimes : unreg.length;
       const zombies = usum.zombie_runtimes_count || 0;
-      const totCost = Number(usum.total_est_token_cost_usd || 0) + Number(usum.total_est_infra_cost_usd || 0);
-      const badgeText = fmtInt(totUnreg) + ' standalone · ' + fmtInt(zombies) + ' zombie/idle · Est. $' + totCost.toFixed(2);
+      // Token spend only (list price from the rate cards); compute is shown as measured usage, not dollars.
+      const totCost = Number(usum.unregistered_est_token_cost_usd || 0);
+      const unpriced = Number(usum.unregistered_unpriced_runtimes || 0);
+      const badgeText = fmtInt(totUnreg) + ' standalone · ' + fmtInt(zombies) + ' zombie/idle · Est. tokens $' + totCost.toFixed(2);
 
       ['execUnregisteredBadge', 'fleetUnregisteredBadge', 'liveUnregFinopsBadge'].forEach(function(id) {
         const b = document.getElementById(id);
@@ -5729,9 +5942,9 @@ async def handle_agent_turn(message_envelope):
           kpiCard(
             'Standalone / Non-GE Runtimes',
             fmtInt(totUnreg),
-            fmtInt(usum.unregistered_agent_engines || 0) + ' Agent Engine · ' +
-            fmtInt(usum.unregistered_cloud_run || 0) + ' Cloud Run · ' +
-            fmtInt(usum.unregistered_gke_workloads || 0) + ' GKE'
+            fmtInt(usum.unregistered_reasoning_engines || 0) + ' Agent Engine · ' +
+            fmtInt(usum.unregistered_cloud_run_services || 0) + ' Cloud Run · ' +
+            fmtInt(usum.gke_workloads_count || 0) + ' GKE'
           ),
           kpiCard(
             'Zombie / Idle Runtimes (0 req)',
@@ -5740,13 +5953,16 @@ async def handle_agent_turn(message_envelope):
           ),
           kpiCard(
             'Standalone Traffic & Tokens',
-            fmtInt(usum.total_requests || 0) + ' req · ' + fmtInt(usum.total_llm_calls || 0) + ' LLM calls',
-            fmtTokens(usum.total_input_tokens || 0) + ' in / ' + fmtTokens(usum.total_output_tokens || 0) + ' out'
+            fmtInt(usum.unregistered_requests || 0) + ' req · ' + fmtInt(usum.unregistered_llm_calls || 0) + ' LLM calls',
+            fmtTokens(usum.unregistered_input_tokens || 0) + ' in / ' + fmtTokens(usum.unregistered_output_tokens || 0) + ' out'
           ),
           kpiCard(
-            'Est. Unregistered Spend',
+            'Est. Unregistered Token Spend',
             '$' + totCost.toFixed(2),
-            'Tokens: $' + Number(usum.total_est_token_cost_usd || 0).toFixed(4) + ' · Compute: $' + Number(usum.total_est_infra_cost_usd || 0).toFixed(2)
+            'List price' + (unpriced ? ' · ' + fmtInt(unpriced) + ' runtime(s) unpriced (no rate card)' : '') +
+            ' · Compute: ' + Number(usum.unregistered_vcpu_hours || 0).toFixed(1) + ' vCPU-h, ' +
+            Number(usum.unregistered_memory_gib_hours || 0).toFixed(1) + ' GiB-h, ' +
+            Number(usum.unregistered_billable_instance_hours || 0).toFixed(1) + ' instance-h'
           )
         );
       });
@@ -6687,20 +6903,10 @@ async def handle_agent_turn(message_envelope):
       hybrid_ensemble: { id: 'hybrid_ensemble', name: 'Hybrid Ensemble (AlphaEvolve + Opus Critic)' },
     };
 
+    // Local view switches over data the server already sent (works in the embedded view and offline).
+    // Nothing here makes up numbers: other actions go to the server, or show a notice when they can't.
     function applyEmbeddedMutation(endpoint, payload) {
       if (!currentState || !currentState.active_agent) return false;
-      const agent = currentState.active_agent;
-      const ts = agent.timeline || [];
-      const lastPt = ts.length > 0 ? ts[ts.length - 1] : {
-        generation: 14,
-        latency_ms: 690.0,
-        cost_usd: 3.45,
-        accuracy_pct: 96.4,
-        cache_hit_pct: 91.2,
-        error_rate_pct: 0.0,
-      };
-      const nextGen = Number(lastPt.generation || 14) + 1;
-
       if (endpoint === '/api/select_agent') {
         const targetId = payload && payload.agent_id;
         if (targetId && allAgentsCache[targetId]) {
@@ -6710,7 +6916,6 @@ async def handle_agent_turn(message_envelope):
         }
         return false;
       }
-
       if (endpoint === '/api/select_optimizer' && payload && payload.platform_id) {
         const pid = String(payload.platform_id);
         currentState.optimizer_platforms = currentState.optimizer_platforms || {};
@@ -6719,166 +6924,6 @@ async def handle_agent_turn(message_envelope):
         renderState(currentState);
         return true;
       }
-
-      if (endpoint === '/api/decorator_ingest') {
-        currentState.decorator_events = currentState.decorator_events || [];
-        currentState.decorator_events.unshift({
-          timestamp: new Date().toLocaleTimeString() + ' (<10ms)',
-          agent_name: agent.agent_id || 'it_service_desk',
-          handler_name: (payload && payload.handler_name) || 'on_message_passing_turn',
-          protocol: (payload && payload.protocol) || 'ADK / MCP Decorator Stream',
-          model: agent.model || 'gemini-2.5-flash',
-          latency_ms: 565.0,
-          prompt_tokens: 19400,
-          cached_tokens: 17980,
-          output_tokens: 295,
-          cache_hit_pct: 92.7,
-          context_bloat_pct: 12.1,
-          idle_ratio_pct: 6.4,
-          skill_or_mcp: 'mcp://' + (agent.agent_id || 'it_service_desk') + '/decorator',
-          user_cohort: 'Enterprise Active DAU Cohort',
-          status: '200 OK (@vibelift_telemetry)',
-        });
-        renderState(currentState);
-        return true;
-      }
-
-      if (endpoint === '/api/inject_anomaly') {
-        (agent.parameters || []).forEach(function(p) {
-          const k = p.key || p.param_id;
-          if (k === 'latency_ms' || k === 'p95_latency_ms') { p.current_value = 2390.0; p.status = '⚠️ SLA BREACH (+246%)'; }
-          else if (k === 'cost_usd' || k === 'cost_per_1k_turns_usd') { p.current_value = 24.80; p.status = '⚠️ CACHE BUST SPIKE'; }
-          else if (k === 'accuracy_pct' || k === 'task_accuracy_pct') { p.current_value = 88.2; p.status = '⚠️ ACCURACY REGRESSION'; }
-          else if (k === 'cache_hit_pct' || k === 'prompt_cache_hit_pct') { p.current_value = 14.5; p.status = '⚠️ PREFIX INVALIDATED'; }
-          else if (k === 'error_rate_pct') { p.current_value = 9.4; p.status = '⚠️ 429 QUOTA ERRORS'; }
-          else if (k === 'context_bloat_pct') { p.current_value = 68.5; p.status = '⚠️ CONTEXT BLOAT SPIKE'; }
-          else if (k === 'idle_ratio_pct') { p.current_value = 44.0; p.status = '⚠️ TOOL WAIT BOTTLENECK'; }
-        });
-        agent.health_status = '⚠️ CRITICAL LOG ANOMALY (Cache Bust + 429 Spike)';
-        ts.push({
-          timestamp_label: 'Live Anomaly!',
-          generation: lastPt.generation || 14,
-          latency_ms: 2390.0,
-          cost_usd: 24.80,
-          accuracy_pct: 88.2,
-          cache_hit_pct: 14.5,
-          error_rate_pct: 9.4,
-          event_marker: '⚠️ Dynamic Prompt Regression Injected',
-        });
-        agent.actions = agent.actions || [];
-        agent.actions.unshift({
-          generation: nextGen,
-          timestamp: 'Just now (Live Log Alert)',
-          parameter_targeted: 'All Parameters (Latency, Cost, Context Bloat & Cache Breach)',
-          root_cause_from_logs: 'Upstream schema drift injected volatile correlation_id into system prefix, invalidating KV prefix cache and triggering 3x retry loops.',
-          action_title: 'LIVE ALERT: Production Log Anomaly Detected — Awaiting Optimizer Remediation',
-          action_taken: '@vibelift_telemetry decorator flagged P95 latency > 2,300ms and Cache Hit drop to 14.5%. Ready to trigger optimization cycle.',
-          impact_summary: 'Click "Run Optimization Cycle" to evaluate and promote a remediation config.',
-          status: 'ANOMALY ACTIVE — RUN OPTIMIZER',
-          diff_snippet: '! ALERT: Uncached dynamic prefix token detected at offset 14\\n! Action Required: Execute Optimization Cycle',
-        });
-        allAgentsCache[agent.agent_id] = agent;
-        renderState(currentState);
-        return true;
-      }
-
-      if (endpoint === '/api/evolve_generation') {
-        const curLat = Number(lastPt.latency_ms || lastPt.p95_latency_ms || 690.0);
-        const curCost = Number(lastPt.cost_usd || lastPt.cost_per_1k_turns_usd || 3.45);
-        const curAcc = Number(lastPt.accuracy_pct || lastPt.task_accuracy_pct || 96.4);
-        const curCache = Number(lastPt.cache_hit_pct || lastPt.prompt_cache_hit_pct || 91.2);
-        const newLat = Math.max(380.0, Math.round((curLat < 1500 ? curLat * 0.86 : 590.0) * 10) / 10);
-        const newCost = Math.max(1.80, Math.round((curCost < 9.0 ? curCost * 0.84 : 2.85) * 100) / 100);
-        const newAcc = Math.min(99.2, Math.round((curAcc > 92.0 ? curAcc + 0.6 : 97.6) * 10) / 10);
-        const newCache = Math.min(97.5, Math.round((curCache > 50.0 ? curCache + 1.8 : 94.6) * 10) / 10);
-        const activePlat = (currentState.optimizer_platforms && currentState.optimizer_platforms.active_platform && currentState.optimizer_platforms.active_platform.name)
-          ? currentState.optimizer_platforms.active_platform.name.split(' (')[0]
-          : 'AlphaEvolve';
-        (agent.parameters || []).forEach(function(p) {
-          const k = p.key || p.param_id;
-          if (k === 'latency_ms' || k === 'p95_latency_ms') { p.current_value = newLat; p.status = 'OPTIMIZED BY GEN ' + nextGen; }
-          else if (k === 'cost_usd' || k === 'cost_per_1k_turns_usd') { p.current_value = newCost; p.status = 'OPTIMIZED BY GEN ' + nextGen; }
-          else if (k === 'accuracy_pct' || k === 'task_accuracy_pct') { p.current_value = newAcc; p.status = 'EXCEEDING TARGET (' + newAcc + '%)'; }
-          else if (k === 'cache_hit_pct' || k === 'prompt_cache_hit_pct') { p.current_value = newCache; p.status = 'LOCKED (' + newCache + '% Hit)'; }
-          else if (k === 'error_rate_pct') { p.current_value = 0.0; p.status = 'REMEDIATED (0.0%)'; }
-          else if (k === 'context_bloat_pct') {
-            const nextBloat = Math.max(6.0, Math.round(Number(p.current_value || 18.0) * 0.82 * 10) / 10);
-            p.current_value = nextBloat;
-            p.status = 'PRUNED (' + nextBloat + '% Bloat)';
-          }
-          else if (k === 'idle_ratio_pct') {
-            const nextIdle = Math.max(3.5, Math.round(Number(p.current_value || 10.0) * 0.85 * 10) / 10);
-            p.current_value = nextIdle;
-            p.status = 'OPTIMIZED (' + nextIdle + '% Idle)';
-          }
-          else {
-            p.current_value = p.direction === 'LOWER'
-              ? Math.round((Number(p.current_value) * 0.92) * 100) / 100
-              : Math.min(99.9, Math.round((Number(p.current_value) * 1.02) * 100) / 100);
-            p.status = 'OPTIMIZED';
-          }
-        });
-        agent.health_status = 'OPTIMIZED & REMEDIATED (' + activePlat + ' • Gen ' + nextGen + ' Active)';
-        agent.monthly_savings_usd = Number(agent.monthly_savings_usd || 0) + 1850;
-        ts.push({
-          timestamp_label: 'Gen ' + nextGen + ' (Live)',
-          generation: nextGen,
-          latency_ms: newLat,
-          cost_usd: newCost,
-          accuracy_pct: newAcc,
-          cache_hit_pct: newCache,
-          error_rate_pct: 0.0,
-          event_marker: activePlat + ' Gen ' + nextGen + ' Remediated',
-        });
-        agent.actions = agent.actions || [];
-        agent.actions.unshift({
-          generation: nextGen,
-          timestamp: 'Just now (Live Run • ' + activePlat + ')',
-          parameter_targeted: 'Cost, Speed & Quality Balance (Latency, Cost, Context Bloat & Cache Hit)',
-          root_cause_from_logs: '@vibelift_telemetry decorator detected volatile header breaking prefix cache and redundant tool history bloating.',
-          action_title: 'Gen ' + nextGen + ' [' + activePlat + ']: Sanitized Dynamic Header & Pruned Context Bloat',
-          action_taken: 'Stripped volatile correlation_id from system prompt prefix, restored KV cache hit rate, and compacted N-2 tool history.',
-          impact_summary: 'P95 Latency -> ' + newLat + 'ms | Cost -> $' + newCost + ' | Accuracy -> ' + newAcc + '% | Cache Hit -> ' + newCache + '%',
-          status: 'PROMOTED TO PROD',
-          diff_snippet: '- system_prefix: "Correlation={{corr_id}} | Follow all steps..."\\n+ system_prefix: "[STATIC_CACHED_V' + nextGen + '] Return single verified JSON block."',
-        });
-        allAgentsCache[agent.agent_id] = agent;
-        renderState(currentState);
-        return true;
-      }
-
-      if (endpoint === '/api/add_parameter' && payload) {
-        const cleanLabel = String(payload.label || 'Custom Metric').trim() || 'Custom Metric';
-        const slug = cleanLabel.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-        const bVal = Number(payload.baseline_val) || 80.0;
-        const rawDir = String(payload.direction || 'HIGHER').toUpperCase();
-        const dir = rawDir.includes('LOWER') ? 'LOWER' : 'HIGHER';
-        const curVal = dir === 'LOWER' ? Math.round(bVal * 0.65 * 100) / 100 : Math.round(Math.min(99.0, bVal * 1.12) * 100) / 100;
-        const newParamObj = {
-          key: slug,
-          label: cleanLabel,
-          unit: payload.unit || '%',
-          direction: dir,
-          baseline_value: bVal,
-          current_value: curVal,
-          target_value: Number(payload.target_val) || 95.0,
-          weight_pct: Number(payload.weight_pct) || 10,
-          status: 'TRACKING IN LOGS (@vibelift_telemetry)',
-        };
-        agent.parameters = agent.parameters || [];
-        const existingIdx = agent.parameters.findIndex(function(p) {
-          return (p.key || p.param_id) === slug || String(p.label || '').toLowerCase() === cleanLabel.toLowerCase();
-        });
-        if (existingIdx >= 0) {
-          agent.parameters[existingIdx] = newParamObj;
-        } else {
-          agent.parameters.push(newParamObj);
-        }
-        allAgentsCache[agent.agent_id] = agent;
-        renderState(currentState);
-        return true;
-      }
-
       if (endpoint === '/api/reset' && initialStateSnapshot) {
         currentState = JSON.parse(JSON.stringify(initialStateSnapshot));
         if (currentState.all_agents) {
@@ -6890,29 +6935,47 @@ async def handle_agent_turn(message_envelope):
       return false;
     }
 
+    let apiNoticeTimer = null;
+    function showApiNotice(message) {
+      const box = document.getElementById('apiNotice');
+      if (!box) return;
+      box.textContent = String(message);
+      box.classList.remove('hidden');
+      if (apiNoticeTimer) clearTimeout(apiNoticeTimer);
+      apiNoticeTimer = setTimeout(function() { box.classList.add('hidden'); }, 9000);
+    }
+
+    function apiErrorText(endpoint, status, data) {
+      if (data && Array.isArray(data.errors) && data.errors.length) {
+        return endpoint + ' rejected the request (HTTP ' + status + '): ' + data.errors.join('; ');
+      }
+      return endpoint + ' failed (HTTP ' + status + ').';
+    }
+
     async function triggerApi(endpoint, payload = {}) {
       if (isEmbedded()) {
-        applyEmbeddedMutation(endpoint, payload);
+        if (applyEmbeddedMutation(endpoint, payload)) return;
         if (endpoint === '/api/evolve_generation' && currentState && currentState.active_agent) {
+          // The embedded view can't call the HTTP API; run the simulator through the MCP tool instead.
           const activePlatId = (currentState.optimizer_platforms && currentState.optimizer_platforms.active_platform_id) || 'alpha_evolve';
           callHost('tools/call', {
             name: 'run_alpha_evolve_generation',
-            arguments: {
-              agent_id: currentState.active_agent.agent_id,
-              platform_id: activePlatId,
-            },
+            arguments: {agent_id: currentState.active_agent.agent_id, platform_id: activePlatId},
           }, 15000).then(function(res) {
-            if (res && !res.isError && res.structuredContent) {
-              const nextState = res.structuredContent.state || res.structuredContent;
-              if (nextState && nextState.active_agent) {
-                if (!nextState.ge_fleet && currentState && currentState.ge_fleet) {
-                  nextState.ge_fleet = currentState.ge_fleet;
-                }
-                renderState(nextState);
+            const nextState = res && !res.isError && res.structuredContent
+              ? (res.structuredContent.state || res.structuredContent) : null;
+            if (nextState && nextState.active_agent) {
+              if (!nextState.ge_fleet && currentState && currentState.ge_fleet) {
+                nextState.ge_fleet = currentState.ge_fleet;
               }
+              renderState(nextState);
+            } else {
+              showApiNotice('The simulator tool returned no result.');
             }
-          }).catch(function() {});
+          }).catch(function(err) { showApiNotice('Simulator tool call failed: ' + err); });
+          return;
         }
+        showApiNotice('This action is not available in the embedded view. Open the dashboard URL in a browser tab to use it.');
         return;
       }
       try {
@@ -6921,11 +6984,43 @@ async def handle_agent_turn(message_envelope):
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(payload),
         });
-        const data = await res.json();
+        let data = null;
+        try { data = await res.json(); } catch (parseErr) { data = null; }
+        if (!res.ok || !data) {
+          showApiNotice(apiErrorText(endpoint, res.status, data));
+          return;
+        }
         renderState(data);
       } catch (err) {
-        applyEmbeddedMutation(endpoint, payload);
+        if (!applyEmbeddedMutation(endpoint, payload)) {
+          showApiNotice('Request to ' + endpoint + ' failed: ' + err);
+        }
       }
+    }
+
+    function renderIngestDeadLetters(list) {
+      const body = document.getElementById('ingestDeadLetterBody');
+      if (!body) return;
+      const rows = Array.isArray(list) ? list : [];
+      const count = document.getElementById('ingestDeadLetterCount');
+      if (count) count.textContent = String(rows.length);
+      body.replaceChildren();
+      if (!rows.length) {
+        const td = el('td', null, ['No rejected ingest bodies since this instance started.']);
+        td.colSpan = 6;
+        body.appendChild(el('tr', null, [td]));
+        return;
+      }
+      rows.forEach(function(d) {
+        body.appendChild(el('tr', null, [
+          el('td', 'mono', [d.timestamp]),
+          el('td', 'mono', [d.source]),
+          el('td', null, [(d.errors || []).join('; ')]),
+          el('td', 'mono', [(d.payload_keys || []).join(', ') || '(' + (d.payload_type || 'no body') + ')']),
+          el('td', 'mono', [d.payload_bytes == null ? '—' : String(d.payload_bytes)]),
+          el('td', 'mono', [String(d.payload_sha256 || '').slice(0, 12)]),
+        ]));
+      });
     }
 
     function onSelectAgent(agentId) {
@@ -6946,10 +7041,29 @@ async def handle_agent_turn(message_envelope):
       onAddCustomParameter();
     }
 
-    function emitLiveDecoratorEvent() {
+    // Sends a real, measured event: the round-trip time of GET /api/health from this browser.
+    // (Not /healthz: Cloud Run's front end reserves paths ending in "z".)
+    async function emitLiveDecoratorEvent() {
+      if (isEmbedded()) {
+        showApiNotice('The probe needs direct HTTP access to this service. Open the dashboard URL in a browser tab to send one.');
+        return;
+      }
+      const t0 = performance.now();
+      let status = 'OK';
+      try {
+        const ping = await fetch('/api/health', {cache: 'no-store'});
+        if (!ping.ok) status = 'HTTP ' + ping.status;
+      } catch (err) {
+        showApiNotice('Probe failed: /api/health did not respond (' + err + ').');
+        return;
+      }
+      const latencyMs = Math.round((performance.now() - t0) * 10) / 10;
       triggerApi('/api/decorator_ingest', {
-        handler_name: 'on_message_passing_turn',
-        protocol: 'ADK / MCP Decorator Stream (<10ms)',
+        agent_name: 'vibelift_dashboard',
+        handler_name: 'api_health_probe',
+        protocol: 'HTTP GET /api/health from this browser',
+        latency_ms: latencyMs,
+        status: status,
       });
     }
 

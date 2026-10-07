@@ -427,3 +427,111 @@ def build_session_token_drilldown(
       'sessionless_turns': unique_sessionless,
   }
 
+
+# ---------------------------------------------------------------------------------------------
+# Per-user estimated model cost (list price; never billed cost)
+# ---------------------------------------------------------------------------------------------
+
+USER_COST_METHOD = (
+    'Logged input, cached-input and output tokens (vibelift_mart.fct_turns) x Vertex AI list price; cached '
+    'input is priced at the cache-read rate. Thinking tokens count only when the logged output includes them.'
+)
+USER_COST_NOTE = (
+    'Estimate at list price, not your invoice. Billed cost (Cloud Billing export) is project-level and is '
+    'never split per user.'
+)
+NO_MODEL_LABEL = '(model not logged)'
+
+
+def rate_card_for(model: object, rate_cards: Mapping[str, Mapping[str, float]]) -> tuple[str, Mapping[str, float] | None]:
+  """(card name, card) for a logged model; 'publishers/google/models/x' uses card 'x'. No fallback card."""
+  name = str(model or '').strip().rsplit('/', 1)[-1]
+  return name, (rate_cards.get(name) if name else None)
+
+
+def tokens_cost_usd(input_tokens: int | None, output_tokens: int | None, cached_input_tokens: int | None,
+                    card: Mapping[str, float]) -> float:
+  """List-price cost of measured tokens, priced like fleet._estimate_token_cost_usd.
+
+  OTel input_tokens include cache reads, so cached tokens are priced once at the cache-read rate and
+  only the rest at the input rate. Reasoning is not added on top: ADK output_tokens include thoughts.
+  """
+  in_tok = int(input_tokens or 0)
+  cached = int(cached_input_tokens or 0)
+  if in_tok:
+    cached = min(cached, in_tok)
+  uncached = max(in_tok - cached, 0)
+  return (uncached * float(card.get('input') or 0)
+          + cached * float(card.get('cached_read') or 0)
+          + int(output_tokens or 0) * float(card.get('output') or 0)) / 1e6
+
+
+def estimate_user_costs(
+    users: Sequence[Mapping[str, Any]] | None,
+    model_rows: Sequence[Mapping[str, Any]] | None,
+    rate_cards: Mapping[str, Mapping[str, float]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+  """Adds a list-price cost estimate to each user from per user x model x app token sums.
+
+  `users` are live power_users_ldap dicts; `model_rows` are ge_mart.user_model_tokens_from_row rows.
+  Returns (new user dicts, summary). The input dicts are shared with the cached BigQuery insights,
+  so they are copied, never mutated. Tokens whose model is not logged or has no rate card are not
+  priced (there is no fallback price); they are counted in est_cost_unpriced_tokens instead.
+  """
+  acc: dict[str, dict[str, Any]] = {}
+  for r in model_rows or []:
+    if not isinstance(r, Mapping) or not r.get('user_email'):
+      continue
+    in_tok, out_tok, cached = r.get('input_tokens'), r.get('output_tokens'), r.get('cached_input_tokens')
+    if in_tok is None and out_tok is None and cached is None:
+      continue
+    a = acc.setdefault(str(r['user_email']), {'usd': 0.0, 'priced': False, 'by_engine': {}, 'models': set(),
+                                               'unpriced_tokens': 0, 'unpriced_models': set()})
+    name, card = rate_card_for(r.get('model_name'), rate_cards)
+    if card is None:
+      a['unpriced_tokens'] += int(in_tok or 0) + int(out_tok or 0)
+      a['unpriced_models'].add(name or NO_MODEL_LABEL)
+      continue
+    usd = tokens_cost_usd(in_tok, out_tok, cached, card)
+    a['usd'] += usd
+    a['priced'] = True
+    a['models'].add(name)
+    engine = str(r.get('engine_key') or '')
+    if engine:
+      a['by_engine'][engine] = a['by_engine'].get(engine, 0.0) + usd
+
+  out: list[dict[str, Any]] = []
+  for u in users or []:
+    if not isinstance(u, Mapping):
+      continue
+    user_acc = acc.get(str(u.get('user_email') or ''))
+    row = dict(u)
+    row.update({
+        # None when no priced tokens were logged for the user (unknown, not $0).
+        'est_cost_usd': round(user_acc['usd'], 4) if user_acc and user_acc['priced'] else None,
+        # Per GE app ('location/engine_id'), so the dashboard's app filter can scope the estimate.
+        'est_cost_by_engine': {k: round(v, 4) for k, v in sorted(user_acc['by_engine'].items())} if user_acc else {},
+        'est_cost_models': sorted(user_acc['models']) if user_acc else [],
+        'est_cost_unpriced_tokens': user_acc['unpriced_tokens'] if user_acc else 0,
+    })
+    out.append(row)
+
+  models_priced: set[str] = set()
+  models_unpriced: set[str] = set()
+  for a in acc.values():
+    models_priced |= a['models']
+    models_unpriced |= a['unpriced_models']
+  priced = [a for a in acc.values() if a['priced']]
+  summary = {
+      'status': 'LIVE' if acc else 'NO_DATA',
+      'source': 'vibelift_mart.fct_turns',
+      'method': USER_COST_METHOD,
+      'note': USER_COST_NOTE,
+      'total_est_cost_usd': round(sum(a['usd'] for a in priced), 4) if priced else None,
+      'priced_users': len(priced),
+      'models_priced': sorted(models_priced),
+      'models_without_rate_card': sorted(models_unpriced),
+      'unpriced_tokens': sum(a['unpriced_tokens'] for a in acc.values()),
+  }
+  return out, summary
+

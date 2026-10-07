@@ -227,7 +227,14 @@ if [[ -z "${HAS_BUILDER}" ]]; then
   fi
 fi
 
-echo "Building and deploying container to Cloud Run..."
+SPLIT_EDGE="${VIBELIFT_SPLIT_EDGE:-0}"
+if [[ "${SPLIT_EDGE}" == "1" ]]; then
+  SURFACE="${VIBELIFT_SURFACE:-mcp}"
+else
+  SURFACE="${VIBELIFT_SURFACE:-all}"
+fi
+
+echo "Building and deploying container to Cloud Run (${SERVICE_NAME}, surface=${SURFACE})..."
 gcloud run deploy "${SERVICE_NAME}" \
     --source . \
     --project="${PROJECT_ID}" \
@@ -243,7 +250,7 @@ gcloud run deploy "${SERVICE_NAME}" \
     --cpu-boost \
     --min-instances=1 \
     --max-instances=10 \
-    --update-env-vars="^;^GOOGLE_CLOUD_PROJECT=${PROJECT_ID};GOOGLE_CLOUD_REGION=${REGION};GOOGLE_CLOUD_LOCATION=${REGION};GOOGLE_GENAI_USE_VERTEXAI=TRUE;USE_UVICORN=1;ENABLE_MCP_APP=1;MCP_PROTOCOL_VERSION=2025-06-18;VIBELIFT_PUBLIC_URL=${PUBLIC_URL};VIBELIFT_GE_ENGINES=${GE_ENGINES}${EXTRA_ENV}"
+    --update-env-vars="^;^GOOGLE_CLOUD_PROJECT=${PROJECT_ID};GOOGLE_CLOUD_REGION=${REGION};GOOGLE_CLOUD_LOCATION=${REGION};GOOGLE_GENAI_USE_VERTEXAI=TRUE;USE_UVICORN=1;ENABLE_MCP_APP=1;VIBELIFT_SURFACE=${SURFACE};MCP_PROTOCOL_VERSION=2025-06-18;VIBELIFT_PUBLIC_URL=${PUBLIC_URL};VIBELIFT_GE_ENGINES=${GE_ENGINES}${EXTRA_ENV}"
 
 # The service is private, so Gemini Enterprise needs permission to call /mcp. The Discovery Engine
 # service agent is the identity granted roles/run.invoker on the verified deployment.
@@ -264,15 +271,61 @@ if ! gcloud run services add-iam-policy-binding "${SERVICE_NAME}" \
   IAM_FAILURES=$((IAM_FAILURES + 1))
 fi
 
+# Optional edge split: deploy a second Cloud Run service (vibe-lift-dashboard) for browser/API traffic
+# behind Cloud Run native IAP (--iap), while keeping vibe-lift-agent on the *.run.app URL for Gemini
+# Enterprise's X-Serverless-Authorization MCP calls. Reuses the image just built above.
+DASHBOARD_SERVICE_NAME="${DASHBOARD_SERVICE_NAME:-vibe-lift-dashboard}"
+DASHBOARD_PUBLIC_URL="https://${DASHBOARD_SERVICE_NAME}-${PROJECT_NUMBER}.${REGION}.run.app"
+if [[ "${SPLIT_EDGE}" == "1" ]]; then
+  echo "Enabling Identity-Aware Proxy API for ${DASHBOARD_SERVICE_NAME}..."
+  gcloud services enable iap.googleapis.com --project="${PROJECT_ID}"
+  BUILT_IMAGE="$(gcloud run services describe "${SERVICE_NAME}" --project="${PROJECT_ID}" --region="${REGION}" \
+      --format='value(spec.template.spec.containers[0].image)')"
+  echo "Deploying split dashboard service ${DASHBOARD_SERVICE_NAME} (surface=dashboard, --iap)..."
+  gcloud run deploy "${DASHBOARD_SERVICE_NAME}" \
+      --image="${BUILT_IMAGE}" \
+      --project="${PROJECT_ID}" \
+      --region="${REGION}" \
+      --service-account="${SA_EMAIL}" \
+      --platform=managed \
+      --no-allow-unauthenticated \
+      --iap \
+      --port=8080 \
+      --memory=1Gi \
+      --cpu=1 \
+      --concurrency=80 \
+      --timeout=300 \
+      --cpu-boost \
+      --min-instances=1 \
+      --max-instances=10 \
+      --update-env-vars="^;^GOOGLE_CLOUD_PROJECT=${PROJECT_ID};GOOGLE_CLOUD_REGION=${REGION};GOOGLE_CLOUD_LOCATION=${REGION};GOOGLE_GENAI_USE_VERTEXAI=TRUE;USE_UVICORN=1;ENABLE_MCP_APP=0;VIBELIFT_SURFACE=dashboard;VIBELIFT_PUBLIC_URL=${DASHBOARD_PUBLIC_URL};VIBELIFT_GE_ENGINES=${GE_ENGINES}${EXTRA_ENV}"
+  IAP_SERVICE_AGENT="service-${PROJECT_NUMBER}@gcp-sa-iap.iam.gserviceaccount.com"
+  gcloud beta services identity create --service=iap.googleapis.com --project="${PROJECT_ID}" &>/dev/null || true
+  echo "Granting roles/run.invoker on ${DASHBOARD_SERVICE_NAME} to ${IAP_SERVICE_AGENT}..."
+  if ! gcloud run services add-iam-policy-binding "${DASHBOARD_SERVICE_NAME}" \
+      --project="${PROJECT_ID}" \
+      --region="${REGION}" \
+      --member="serviceAccount:${IAP_SERVICE_AGENT}" \
+      --role="roles/run.invoker" \
+      --quiet > /dev/null; then
+    warn "could not grant roles/run.invoker to ${IAP_SERVICE_AGENT} on ${DASHBOARD_SERVICE_NAME}."
+    IAM_FAILURES=$((IAM_FAILURES + 1))
+  fi
+fi
+
 # Optional: let teammates open the private dashboard. Comma-separated IAM members, for example
 #   VIBELIFT_INVOKERS="user:alice@example.com,group:finops@example.com"
+INVOKER_TARGET_SERVICE="${SERVICE_NAME}"
+if [[ "${SPLIT_EDGE}" == "1" ]]; then
+  INVOKER_TARGET_SERVICE="${DASHBOARD_SERVICE_NAME}"
+fi
 if [[ -n "${VIBELIFT_INVOKERS:-}" ]]; then
   IFS=',' read -r -a INVOKERS <<< "${VIBELIFT_INVOKERS}"
   for MEMBER in "${INVOKERS[@]}"; do
     MEMBER="$(echo "${MEMBER}" | xargs)"
     [[ -z "${MEMBER}" ]] && continue
-    echo "Granting roles/run.invoker on ${SERVICE_NAME} to ${MEMBER}..."
-    if ! gcloud run services add-iam-policy-binding "${SERVICE_NAME}" \
+    echo "Granting roles/run.invoker on ${INVOKER_TARGET_SERVICE} to ${MEMBER}..."
+    if ! gcloud run services add-iam-policy-binding "${INVOKER_TARGET_SERVICE}" \
         --project="${PROJECT_ID}" \
         --region="${REGION}" \
         --member="${MEMBER}" \
@@ -285,10 +338,15 @@ if [[ -n "${VIBELIFT_INVOKERS:-}" ]]; then
 fi
 
 echo "Deployment complete!"
-echo "VibeLift Dashboard live at: ${PUBLIC_URL}"
-echo "BYO MCP App Endpoint:       ${PUBLIC_URL}/mcp"
-echo "Interactive MCP UI App:     ${PUBLIC_URL}/ui (or ui://vibelift-analytics/dashboard)"
-echo "Health check:               ${PUBLIC_URL}/health (/healthz is reserved by Cloud Run's front end)"
+if [[ "${SPLIT_EDGE}" == "1" ]]; then
+  echo "VibeLift MCP Service (surface=mcp):           ${PUBLIC_URL}/mcp"
+  echo "VibeLift Dashboard Service (surface=dashboard, IAP): ${DASHBOARD_PUBLIC_URL}/ui"
+else
+  echo "VibeLift Dashboard live at: ${PUBLIC_URL}"
+  echo "BYO MCP App Endpoint:       ${PUBLIC_URL}/mcp"
+  echo "Interactive MCP UI App:     ${PUBLIC_URL}/ui (or ui://vibelift-analytics/dashboard)"
+fi
+echo "Health check:               ${PUBLIC_URL}/api/health (/healthz is reserved by Cloud Run's front end)"
 echo ""
 
 # Optional: if GE_ENGINE_ID is provided, automatically deploy the Custom MCP Server to the
@@ -311,7 +369,7 @@ echo "  1. If not done yet: ./deploy/setup_bigquery_sink.sh, then re-run this sc
 echo "  2. Deploy to Gemini Enterprise Data Store (NOT Agent Registry / MCP Registry) & register to your GE App instance:"
 echo "       GE_LOCATION=global ./deploy/register_ge_agent.sh <GE_APP_ID>"
 echo "     (Deploys the Custom MCP Server to GE Data Store 'vibelift-analytics-mcp' [source=BYO_MCP], enables"
-echo "      all 6 MCP actions, and registers GE Data Store 'vibelift-analytics-mcp_mcp_data' onto GE App <GE_APP_ID>.)"
+echo "      all 9 MCP actions, and registers GE Data Store 'vibelift-analytics-mcp_mcp_data' onto GE App <GE_APP_ID>.)"
 echo "  3. Hourly mart refresh (scheduled query): GOOGLE_CLOUD_PROJECT=${PROJECT_ID} ./deploy/setup_mart_refresh.sh"
 if [[ "${IAM_FAILURES}" -gt 0 ]]; then
   warn "${IAM_FAILURES} IAM grant(s) failed; see the warnings above."

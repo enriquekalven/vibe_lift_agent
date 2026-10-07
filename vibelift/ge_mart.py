@@ -159,6 +159,35 @@ def build_user_engine_rollup_sql(project_id: str, hours: int = 168) -> str:
   """
 
 
+def build_user_model_tokens_sql(project_id: str, hours: int = 168) -> str:
+  """Per user, model and GE app: measured token sums, for list-price cost estimates.
+
+  Same window and user filter as build_user_engine_rollup_sql, so estimates cover the turns behind
+  the Top users table. Only turns that logged tokens are read; a sum is NULL when no turn logged it.
+  """
+  h = _clamp(hours, 1, 24 * 365)
+  return f"""
+    SELECT
+      user_email,
+      model_name,
+      engine_key,
+      COUNT(1) AS turns,
+      SUM(input_tokens) AS input_tokens,
+      SUM(output_tokens) AS output_tokens,
+      SUM(cached_input_tokens) AS cached_input_tokens,
+      SUM(reasoning_tokens) AS reasoning_tokens,
+      SUM(total_tokens) AS total_tokens
+    FROM `{mart_ref(project_id)}.fct_turns`
+    WHERE event_date >= DATE(TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {h} HOUR))
+      AND event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {h} HOUR)
+      AND user_email IS NOT NULL
+      AND (input_tokens IS NOT NULL OR output_tokens IS NOT NULL OR cached_input_tokens IS NOT NULL)
+    GROUP BY user_email, model_name, engine_key
+    ORDER BY turns DESC, user_email, model_name, engine_key
+    LIMIT 5000
+  """
+
+
 def build_audit_principals_sql(project_id: str, hours: int = 168) -> str:
   """Audit calls per principal, method and GE app (replaces the raw ds_ge_audit_raw query)."""
   return f"""
@@ -454,6 +483,18 @@ def daily_usage_from_row(row: Mapping[str, Any]) -> dict[str, Any]:
     if key in row:
       out[key] = int_or_none(row.get(key))  # None = no turn reported tokens
   return out
+
+
+def user_model_tokens_from_row(row: Mapping[str, Any]) -> dict[str, Any]:
+  """Maps a build_user_model_tokens_sql row. Token sums no turn reported stay None."""
+  return {
+      'user_email': _text(row.get('user_email')),
+      'model_name': _text(row.get('model_name')),
+      'engine_key': _text(row.get('engine_key')),
+      'turns': int_or_none(row.get('turns')) or 0,
+      **{k: int_or_none(row.get(k))
+         for k in ('input_tokens', 'output_tokens', 'cached_input_tokens', 'reasoning_tokens', 'total_tokens')},
+  }
 
 
 def session_from_row(row: Mapping[str, Any], project_id: str) -> dict[str, Any]:

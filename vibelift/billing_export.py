@@ -37,6 +37,44 @@ HOW_TO_CONNECT = (
     f'{BILLING_TABLE_ENV}=<project>.<dataset>.gcp_billing_export_v1_<ID> on the service.'
 )
 
+# (error_kind, pattern, hint) for failed billing queries; the first pattern found in the error text
+# wins. Permission comes before not-found because BigQuery 403s also say "or perhaps it does not exist".
+_ERROR_HINTS: tuple[tuple[str, re.Pattern[str], str], ...] = (
+    ('invalid_table_name', re.compile(r'invalid billing export table name', re.IGNORECASE),
+     f'{BILLING_TABLE_ENV} must be <project>.<dataset>.<table>, separated by dots only (no colon, no backticks).'),
+    ('permission_denied', re.compile(r'access denied|permission|http 403', re.IGNORECASE),
+     'The service account cannot read the export. Grant it roles/bigquery.dataViewer on the export dataset '
+     'and roles/bigquery.jobUser on this project.'),
+    ('schema_mismatch', re.compile(r'unrecognized name|no such field|does not exist in struct', re.IGNORECASE),
+     'The table is not a Cloud Billing export (expected gcp_billing_export_v1_* or gcp_billing_export_resource_v1_*).'),
+    ('not_found', re.compile(r'not found|http 404', re.IGNORECASE),
+     'The table or dataset was not found. Check the name and that Billing export to BigQuery is enabled '
+     '(the first rows can take about a day to appear).'),
+    ('bytes_limit', re.compile(r'bytes billed', re.IGNORECASE),
+     'The query would scan more than its 5 GB limit. Use the standard export (gcp_billing_export_v1_*), '
+     'which is smaller than the detailed one.'),
+    ('auth', re.compile(r'credentials|http 401', re.IGNORECASE),
+     'The service has no valid Google Cloud credentials.'),
+    ('timeout', re.compile(r'did not finish in time|timed out|timeout', re.IGNORECASE),
+     'The query timed out. It runs again at the next refresh (every 15 minutes).'),
+)
+
+
+def classify_billing_error(message: str | None) -> dict[str, str]:
+  """Returns {'error_kind', 'hint'} for the error text of a failed billing query."""
+  text = message or ''
+  for kind, pattern, hint in _ERROR_HINTS:
+    if pattern.search(text):
+      return {'error_kind': kind, 'hint': hint}
+  return {'error_kind': 'unknown', 'hint': 'See the error text; it is also written to the service logs.'}
+
+
+def _status_detail(status: str, message: str | None) -> dict[str, Any]:
+  """error_kind and hint for a payload that has no billed numbers, so the dashboard can say what to fix."""
+  if status == 'ERROR':
+    return classify_billing_error(message)
+  return {'error_kind': None, 'hint': HOW_TO_CONNECT if status == 'NOT_CONNECTED' else None}
+
 
 def configured_table() -> str | None:
   table = os.environ.get(BILLING_TABLE_ENV, '').strip().strip('`')
@@ -137,6 +175,7 @@ def not_connected_payload(message: str | None = None, status: str = 'NOT_CONNECT
       'total_net_invoice_usd': None,
       'reconciliation_delta_pct': None,
       'message': message or HOW_TO_CONNECT,
+      **_status_detail(status, message),
   }
 
 
@@ -203,6 +242,7 @@ class BillingExportReader:
     try:
       rows, error = self._run(build_daily_cost_sql(table, self.project_id, window_days))
       if error:
+        logger.warning('Billing export daily cost query failed: %s', error)
         result = daily_cost_not_connected(error, status='ERROR', table=table)
       else:
         result = summarize_daily_cost_rows(rows, table, window_days)
@@ -217,6 +257,8 @@ class BillingExportReader:
   def _query(self, table: str) -> dict[str, Any]:
     rows, error = self._run(build_billing_sql(table, self.project_id))
     if error:
+      # _run returns HTTP, credential and timeout failures instead of raising: log them here.
+      logger.warning('Billing export query failed: %s', error)
       return not_connected_payload(error, status='ERROR', table=table)
     return summarize_rows(rows, table)
 
@@ -302,6 +344,7 @@ def daily_cost_not_connected(message: str | None = None, status: str = 'NOT_CONN
       'last_billed_day': None,
       'currency': None,
       'message': message or HOW_TO_CONNECT,
+      **_status_detail(status, message),
   }
 
 
