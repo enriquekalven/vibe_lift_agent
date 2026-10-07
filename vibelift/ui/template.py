@@ -6780,7 +6780,7 @@ async def handle_agent_turn(message_envelope):
           if (!fleet) {
             const fallback = await callHost('tools/call', {
               name: 'open_dashboard',
-              arguments: {window_hours: requestedHours, force_refresh: !!force},
+              arguments: {window_hours: requestedHours, force_refresh: !!force, include_full_state: true},
             }, 25000);
             if (fallback && !fallback.isError && fallback.structuredContent) {
               const sc = fallback.structuredContent;
@@ -7234,13 +7234,15 @@ async def handle_agent_turn(message_envelope):
       if (data.method === 'ui/notifications/tool-result' && data.params) {
         const structured = data.params.structuredContent || data.params;
         if (structured && structured.state) {
-          renderState(structured.state);
+          if (!structured.state.compact_mcp || !currentState || currentState.compact_mcp) {
+            renderState(structured.state);
+          }
           if (structured.focus_tab != null) {
             // An explicit request for an Advanced tab turns Advanced mode on instead of being ignored.
             if (ADVANCED_ONLY_TABS.indexOf(Number(structured.focus_tab)) >= 0 && !isAdvancedMode()) applyAdvancedMode(true);
             switchTab(structured.focus_tab);
           }
-        } else if (structured && structured.active_agent) {
+        } else if (structured && structured.active_agent && structured.focus_tab == null) {
           renderState(structured);
         } else if (structured && structured.source === 'gemini_enterprise') {
           renderFleet(structured);

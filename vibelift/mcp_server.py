@@ -31,7 +31,7 @@ logger = logging.getLogger('vibelift-mcp')
 # MCP Protocol Constants & Gemini Enterprise UI Specs
 # ---------------------------------------------------------------------------
 
-SUPPORTED_PROTOCOL_VERSIONS = ('2025-06-18', '2025-03-26')
+SUPPORTED_PROTOCOL_VERSIONS = ('2025-06-18', '2025-11-25', '2025-03-26', '2024-11-05')
 
 
 def resolve_default_protocol_version(configured: str | None) -> str:
@@ -137,7 +137,65 @@ def _build_ui_meta(
   }
   if is_widget:
     meta['ui/resourceUri'] = WIDGET_URI
+    meta['resourceUri'] = WIDGET_URI
   return meta
+
+
+def _compact_state_for_mcp_open(state: dict[str, Any]) -> dict[str, Any]:
+  """Builds a lightweight state summary for open_dashboard LLM tool responses.
+
+  The full 1MB+ state payload is embedded directly in the MCP App HTML via
+  `resources/read` (`_widget_html`) and available to the iframe via
+  `get_vibelift_state`. Keeping `open_dashboard`'s `structuredContent.state`
+  compact avoids feeding ~330k tokens into the host LLM on the post-tool turn.
+  """
+  fleet = state.get('ge_fleet') if isinstance(state.get('ge_fleet'), dict) else {}
+  active = state.get('active_agent') if isinstance(state.get('active_agent'), dict) else {}
+  all_agents_raw = state.get('all_agents') if isinstance(state.get('all_agents'), dict) else {}
+  compact_all_agents: dict[str, Any] = {}
+  for agent_id, agent_val in all_agents_raw.items():
+    if isinstance(agent_val, dict):
+      compact_all_agents[agent_id] = {
+          'agent_id': agent_val.get('agent_id', agent_id),
+          'display_name': agent_val.get('display_name', agent_id),
+          'domain': agent_val.get('domain'),
+          'model': agent_val.get('model'),
+          'health_status': agent_val.get('health_status'),
+          'monthly_savings_usd': agent_val.get('monthly_savings_usd'),
+      }
+    else:
+      compact_all_agents[agent_id] = {'agent_id': agent_id}
+
+  compact_fleet = {
+      'project_id': fleet.get('project_id'),
+      'window_hours': fleet.get('window_hours'),
+      'window_label': fleet.get('window_label'),
+      'refreshed_at': fleet.get('refreshed_at'),
+      'totals': fleet.get('totals') or {},
+      'unregistered_summary': fleet.get('unregistered_summary') or {},
+      'source_status': fleet.get('source_status') or {},
+  }
+  return {
+      'compact_mcp': True,
+      'gcp_project': state.get('gcp_project'),
+      'gcp_region': state.get('gcp_region'),
+      'live_data': state.get('live_data'),
+      'active_agent': {
+          k: active.get(k)
+          for k in (
+              'agent_id',
+              'display_name',
+              'domain',
+              'model',
+              'health_status',
+              'monthly_savings_usd',
+          )
+          if k in active
+      },
+      'available_agents': state.get('available_agents') or [],
+      'all_agents': compact_all_agents,
+      'ge_fleet': compact_fleet,
+  }
 
 
 def _widget_html() -> str:
@@ -203,19 +261,21 @@ async def _tool_open_dashboard(session_key: str, args: dict[str, Any]) -> dict[s
       f'(tab {focus_tab}). It shows every agent deployed on the Gemini Enterprise app with live telemetry '
       'and refreshes automatically.\n\n' + ge_fleet.summarize_fleet(fleet)
   )
+  include_full = ge_fleet.parse_bool(args.get('include_full_state'))
+  ui_meta = _build_ui_meta(is_widget=True, preferred_mode='pip')
   structured = {
       'session_id': session_key,
       'project_id': project_id,
       'active_agent': active_agent,
       'focus_tab': focus_tab,
-      'state': state,
+      'resourceUri': WIDGET_URI,
+      'ui': ui_meta['ui'],
+      'state': state if include_full else _compact_state_for_mcp_open(state),
   }
-  ui_meta = _build_ui_meta(is_widget=True, preferred_mode='pip')
   return {
       'content': [{'type': 'text', 'text': msg}],
       'structuredContent': structured,
       '_meta': ui_meta,
-      'meta': ui_meta,
   }
 
 
@@ -705,7 +765,6 @@ def _tool_descriptor(tool: dict[str, Any]) -> dict[str, Any]:
           'googlesymbols/analytics/default/24px.svg'
       ),
       '_meta': meta,
-      'meta': meta,
   }
   if tool.get('annotations'):
     descriptor['annotations'] = {'title': tool['title'], **tool['annotations']}
@@ -739,6 +798,21 @@ class _RpcError(Exception):
     self.message = message
 
 
+_UI_CAPABILITIES: dict[str, Any] = {
+    'com.google.gemini/mcp-app-support': {},
+    UI_META_KEY: {
+        'mimeTypes': [WIDGET_MIME],
+        'resourceUri': WIDGET_URI,
+        'availableDisplayModes': ['pip', 'fullscreen', 'inline'],
+    },
+    'ui': {
+        'mimeTypes': [WIDGET_MIME],
+        'resourceUri': WIDGET_URI,
+        'availableDisplayModes': ['pip', 'fullscreen', 'inline'],
+    },
+}
+
+
 async def _dispatch(session_key: str, method: str, params: dict[str, Any]) -> Any:
   """Dispatches MCP JSON-RPC 2.0 requests."""
   if method == 'initialize':
@@ -751,6 +825,8 @@ async def _dispatch(session_key: str, method: str, params: dict[str, Any]) -> An
         'capabilities': {
             'tools': {'listChanged': False},
             'resources': {'subscribe': False, 'listChanged': False},
+            'extensions': _UI_CAPABILITIES,
+            'experimental': _UI_CAPABILITIES,
         },
         'serverInfo': {
             'name': 'vibelift-analytics-mcp',
@@ -769,7 +845,13 @@ async def _dispatch(session_key: str, method: str, params: dict[str, Any]) -> An
     return {}
 
   if method in ('ui/initialize', 'ui/request-display-mode'):
-    return {'protocolVersion': MCP_PROTOCOL_VERSION, 'capabilities': {}}
+    return {
+        'protocolVersion': MCP_PROTOCOL_VERSION,
+        'capabilities': {
+            'extensions': _UI_CAPABILITIES,
+            'experimental': _UI_CAPABILITIES,
+        },
+    }
 
   if method == 'tools/list':
     return {'tools': [_tool_descriptor(t) for t in _TOOLS]}
@@ -847,7 +929,6 @@ async def _dispatch(session_key: str, method: str, params: dict[str, Any]) -> An
     if tool.get('widget'):
       widget_meta = _build_ui_meta(is_widget=True, preferred_mode='pip')
       result.setdefault('_meta', widget_meta)
-      result.setdefault('meta', widget_meta)
     return result
 
   raise _RpcError(METHOD_NOT_FOUND, f'Unknown method: {method!r}')

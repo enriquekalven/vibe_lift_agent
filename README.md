@@ -219,7 +219,7 @@ Runtime variables are read by the service (set on Cloud Run by `deploy/deploy_cl
 | `USE_UVICORN` | `0` (deploy sets `1`) | Serve the FastAPI app with uvicorn instead of the stdlib server. |
 | `ALLOWED_ORIGINS` | `*` | Comma-separated CORS origin allowlist. |
 | `ENABLE_MCP_APP` | `1` | Enables (`1`) or disables (`0`) the `/mcp` JSON-RPC 2.0 server. |
-| `MCP_PROTOCOL_VERSION` | `2025-06-18` | Negotiated MCP protocol version (`2025-06-18` or `2025-03-26`). |
+| `MCP_PROTOCOL_VERSION` | `2025-06-18` | Version offered when a client requests one the server doesn't support (`2025-06-18`, `2025-11-25`, `2025-03-26` or `2024-11-05`). |
 
 **Gemini Enterprise fleet and runtimes**
 

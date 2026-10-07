@@ -612,8 +612,12 @@ class ProductionAppTest(unittest.TestCase):
     self.assertEqual(self.client.get('/api/agent_registry').status_code, 404)
 
   def test_mcp_open_dashboard_and_prefixed_fleet_tool(self) -> None:
-    session = self._rpc('initialize', {'protocolVersion': '2025-06-18'}).headers.get('Mcp-Session-Id')
+    init_resp = self._rpc('initialize', {'protocolVersion': '2025-06-18'})
+    session = init_resp.headers.get('Mcp-Session-Id')
     self.assertTrue(session)
+    caps = init_resp.json()['result']['capabilities']
+    self.assertIn('io.modelcontextprotocol/ui', caps.get('extensions', {}))
+    self.assertIn('io.modelcontextprotocol/ui', caps.get('experimental', {}))
     tools = {t['name']: t for t in self._rpc('tools/list', rpc_id=2, session=session).json()['result']['tools']}
     self.assertEqual(sorted(tools), sorted([
         'open_dashboard', 'query_ge_agent_fleet', 'query_project_telemetry',
@@ -627,9 +631,12 @@ class ProductionAppTest(unittest.TestCase):
     opened = self._rpc('tools/call', {'name': 'open_dashboard', 'arguments': {}}, rpc_id=3, session=session).json()['result']
     self.assertFalse(opened['isError'])
     self.assertEqual(opened['structuredContent']['focus_tab'], 6)
+    self.assertTrue(opened['structuredContent']['state']['compact_mcp'])
+    self.assertLess(len(json.dumps(opened)), 25000)
     self.assertEqual(opened['structuredContent']['state']['ge_fleet']['totals']['agents'], 3)
     self.assertIn('IT Service Desk', opened['content'][0]['text'])
     self.assertEqual(opened['_meta']['ui']['resourceUri'], 'ui://vibelift-analytics/dashboard')
+    self.assertEqual(opened['_meta']['resourceUri'], 'ui://vibelift-analytics/dashboard')
 
     # Gemini Enterprise prefixes custom MCP tool names; the dashboard's live refresh uses this tool.
     fleet = self._rpc('tools/call', {
