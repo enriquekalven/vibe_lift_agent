@@ -210,5 +210,80 @@ class DashboardFallbackTest(unittest.TestCase):
     self.assertIn('ts.unpriced_turns', self.script)
 
 
+class EnterpriseControlsAndA2ATest(unittest.TestCase):
+  """Tests incremental mart MERGE, PII column masking & redaction, Pub/Sub DLQ, live simulator gating, and A2A tasks."""
+
+  def test_incremental_merge_dml_and_pii_policy_tag_ddl(self) -> None:
+    from vibelift import ge_mart
+    dml = ge_mart.build_incremental_merge_fct_turns_dml('project-maui', lookback_days=3)
+    self.assertIn('MERGE `project-maui.vibelift_mart.fct_turns` AS T', dml)
+    self.assertIn('INTERVAL 3 DAY', dml)
+    self.assertIn('WHEN NOT MATCHED THEN', dml)
+
+    ddl = ge_mart.build_pii_policy_tag_ddl(
+        'project-maui',
+        'projects/project-maui/locations/us/taxonomies/123/policyTags/456',
+    )
+    self.assertIn('ALTER COLUMN user_email SET OPTIONS', ddl)
+    self.assertIn('policy_tags', ddl)
+
+  def test_pii_redaction_hashes_email_when_enabled(self) -> None:
+    from vibelift import ge_mart
+    with mock.patch.dict('os.environ', {'VIBELIFT_PII_REDACT': '1'}):
+      redacted = ge_mart.redact_email_if_configured('Alice.Smith@example.com')
+      self.assertTrue(redacted.startswith('user-'))
+      self.assertIn('@example.com', redacted)
+      self.assertNotIn('alice', redacted.lower())
+    with mock.patch.dict('os.environ', {'VIBELIFT_PII_REDACT': '0'}):
+      self.assertEqual(ge_mart.redact_email_if_configured('Alice.Smith@example.com'), 'Alice.Smith@example.com')
+
+  def test_pubsub_dlq_record_and_dead_letters_endpoint(self) -> None:
+    telemetry.reset_decorator_events()
+    with mock.patch.dict('os.environ', {'VIBELIFT_DLQ_PUBSUB_TOPIC': 'projects/project-maui/topics/vibelift-ingest-dlq'}):
+      entry = telemetry.record_ingest_dlq('/api/aive_log', {'bad': 1}, ['missing prompt_tokens'])
+      self.assertEqual(entry['dlq_topic'], 'projects/project-maui/topics/vibelift-ingest-dlq')
+      self.assertFalse(entry['dlq_published'])
+      ctrl = server.VibeLiftRuntimeController(fleet_service=_FAKE_FLEET)
+      dlq = ctrl.dead_letters_payload()
+      self.assertEqual(dlq['count'], 1)
+      self.assertEqual(dlq['dlq_pubsub_topic'], 'projects/project-maui/topics/vibelift-ingest-dlq')
+
+  def test_simulator_actions_disabled_in_live_mode(self) -> None:
+    ctrl = server.VibeLiftRuntimeController(fleet_service=_FAKE_FLEET)
+    with mock.patch.object(ctrl, '_is_live_gcp', return_value=True), \
+         mock.patch.dict('os.environ', {'VIBELIFT_ENABLE_SIMULATOR': '0'}):
+      self.assertEqual(ctrl.inject_anomaly()['status'], 'DISABLED_IN_LIVE_MODE')
+      self.assertEqual(ctrl.step_turn()['status'], 'DISABLED_IN_LIVE_MODE')
+      self.assertEqual(ctrl.evolve_generation()['status'], 'DISABLED_IN_LIVE_MODE')
+
+  def test_a2a_task_execution_for_skills(self) -> None:
+    ctrl = server.VibeLiftRuntimeController(fleet_service=_FAKE_FLEET)
+    res_xray = ctrl.handle_a2a_task({
+        'jsonrpc': '2.0',
+        'id': 42,
+        'method': 'tasks/send',
+        'params': {'id': 't-xray', 'skill': 'xray_prompt_cache'},
+    })
+    self.assertEqual(res_xray['id'], 42)
+    self.assertEqual(res_xray['result']['status']['state'], 'completed')
+    self.assertEqual(res_xray['result']['skill'], 'xray_prompt_cache')
+
+    res_econ = ctrl.handle_a2a_task({
+        'jsonrpc': '2.0',
+        'id': 43,
+        'method': 'tasks/send',
+        'params': {'id': 't-econ', 'skill': 'calculate_prompt_cache_economics'},
+    })
+    self.assertEqual(res_econ['result']['skill'], 'calculate_prompt_cache_economics')
+
+    res_bad = ctrl.handle_a2a_task({
+        'jsonrpc': '2.0',
+        'id': 44,
+        'method': 'tasks/unknown',
+    })
+    self.assertIn('error', res_bad)
+
+
 if __name__ == '__main__':
   unittest.main()
+

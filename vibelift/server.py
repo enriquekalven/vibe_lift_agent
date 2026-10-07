@@ -480,9 +480,17 @@ class VibeLiftRuntimeController:
         ),
     }
 
-  def refresh_ge_mart(self) -> dict[str, Any]:
-    """Rebuilds vibelift_mart.fct_turns from v_fct_turns and returns the refreshed state."""
-    result = self.gcp_telemetry.refresh_ge_mart_turns()
+  def refresh_ge_mart(self, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Refreshes vibelift_mart.fct_turns (full rebuild or incremental MERGE) and returns refreshed state."""
+    raw = body or {}
+    incremental = ge_fleet.parse_bool(raw.get('incremental'))
+    try:
+      lookback_days = max(1, int(float(str(raw.get('lookback_days') or 3))))
+    except (TypeError, ValueError):
+      lookback_days = 3
+    result = self.gcp_telemetry.refresh_ge_mart_turns(
+        incremental=incremental, lookback_days=lookback_days
+    )
     if self._is_live_gcp():
       self.gcp_telemetry.fetch_live_bigquery_project_insights(force_refresh=True, non_blocking=False)
     return {'refresh': result, 'state': self.get_state_payload(include_fleet=False)}
@@ -913,24 +921,140 @@ class VibeLiftRuntimeController:
       )
     return self.get_state_payload(include_fleet=False)
 
+  @staticmethod
+  def _simulator_enabled_in_live_mode() -> bool:
+    return os.environ.get('VIBELIFT_ENABLE_SIMULATOR', '').strip().lower() in ('1', 'true', 'yes', 'on')
+
   def inject_anomaly(self) -> dict[str, Any]:
     """Simulator: applies the fixed cache-bust scenario to the active demo agent."""
+    if self._is_live_gcp() and not self._simulator_enabled_in_live_mode():
+      return {
+          'status': 'DISABLED_IN_LIVE_MODE',
+          'reason': 'Synthetic anomaly injection is disabled when connected to a live Google Cloud project.',
+      }
     with self._lock:
       self.optimizer.inject_anomaly()
     return self.get_state_payload(include_fleet=False)
 
   def step_turn(self) -> dict[str, Any]:
     """Simulator: appends one synthetic turn (hidden in live mode) and returns updated state."""
+    if self._is_live_gcp() and not self._simulator_enabled_in_live_mode():
+      return {
+          'status': 'DISABLED_IN_LIVE_MODE',
+          'reason': 'Synthetic turn stepping is disabled when connected to a live Google Cloud project.',
+      }
     with self._lock:
       self.agent.step_turn()
     return self.get_state_payload(include_fleet=False)
 
   def evolve_generation(self) -> dict[str, Any]:
     """Simulator: runs one optimizer generation on the demo agent and appends a synthetic turn."""
+    if self._is_live_gcp() and not self._simulator_enabled_in_live_mode():
+      return {
+          'status': 'DISABLED_IN_LIVE_MODE',
+          'reason': (
+              'The synthetic demo optimizer is disabled when connected to a live Google Cloud project. '
+              'Use /api/prompt_xray (evolved via AlphaEvolve in experiments/prompt_cache_evolve/) or '
+              '/api/what_if_live for live optimization.'
+          ),
+      }
     with self._lock:
       self.optimizer.run_next_generation()
       self.agent.step_turn()
     return self.get_state_payload(include_fleet=False)
+
+  def dead_letters_payload(self) -> dict[str, Any]:
+    """Returns rejected ingest dead-letter events and configured Cloud Pub/Sub DLQ topic."""
+    events = telemetry.get_ingest_dlq_events()
+    return {
+        'status': 'OK',
+        'count': len(events),
+        'dlq_pubsub_topic': telemetry.configured_dlq_topic() or None,
+        'dead_letters': events,
+    }
+
+  def handle_a2a_task(self, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Executes an A2A JSON-RPC 2.0 task request (/a2a/app) against live VibeLift skills."""
+    raw = body or {}
+    rpc_id = raw.get('id', 1)
+    method = str(raw.get('method') or 'tasks/send').strip()
+    params = as_mapping(raw.get('params'))
+    task_id = str(params.get('id') or 'vibelift-a2a-task-1')
+    skill = str(params.get('skill') or '').strip()
+    message = as_mapping(params.get('message'))
+    text_parts: list[str] = []
+    for part in as_list(message.get('parts')):
+      part_map = as_mapping(part)
+      if isinstance(part_map.get('text'), str):
+        text_parts.append(part_map['text'])
+    prompt_text = '\n'.join(text_parts).strip()
+
+    if not skill:
+      lower = prompt_text.lower()
+      if 'xray' in lower or ('cache' in lower and 'previous' in lower):
+        skill = 'xray_prompt_cache'
+      elif 'telemetry' in lower or 'cloud run' in lower:
+        skill = 'query_project_telemetry'
+      elif 'economics' in lower or 'savings' in lower:
+        skill = 'calculate_prompt_cache_economics'
+      else:
+        skill = 'query_ge_agent_fleet'
+
+    if method not in ('tasks/send', 'message/send', 'tasks/get'):
+      return {
+          'jsonrpc': '2.0',
+          'id': rpc_id,
+          'error': {'code': -32601, 'message': f'Unsupported A2A method: {method}'},
+      }
+
+    if skill == 'query_project_telemetry':
+      artifact_data: dict[str, Any] = self.gcp_telemetry.get_telemetry_summary_payload()
+    elif skill == 'xray_prompt_cache':
+      prev = str(params.get('previous_prompt') or prompt_xray.EXAMPLE_PREVIOUS)
+      curr = str(params.get('current_prompt') or prompt_xray.EXAMPLE_CURRENT)
+      artifact_data = prompt_xray.analyze(prev, curr)
+    elif skill == 'calculate_prompt_cache_economics':
+      uncached_tok = max(0, int(params.get('uncached_input_tokens') or 2000))
+      cached_tok = max(0, int(params.get('cached_input_tokens') or 18000))
+      output_tok = max(0, int(params.get('output_tokens') or 500))
+      log_entry = telemetry.TurnUsageLog(
+          timestamp=telemetry._utc_now_iso(),  # pylint: disable=protected-access
+          agent_name='a2a-client',
+          model=str(params.get('model') or 'gemini-2.5-pro'),
+          turn_index=1,
+          prompt_prefix_hash='a2a_calc',
+          cache_breakpoint_line=None,
+          cache_breakpoint_reason='a2a_eval',
+          prompt_token_count=uncached_tok + cached_tok,
+          cached_content_token_count=cached_tok,
+          cache_creation_input_tokens=0,
+          uncached_input_tokens=uncached_tok,
+          candidates_token_count=output_tok,
+          thoughts_token_count=0,
+          status_code=200,
+          tool_called='calculate_prompt_cache_economics',
+          evolution_generation=0,
+      )
+      artifact_data = log_entry.to_dict()
+    else:
+      skill = 'query_ge_agent_fleet'
+      artifact_data = self.get_fleet_payload(allow_stale=True, max_wait_s=5.0)
+
+    return {
+        'jsonrpc': '2.0',
+        'id': rpc_id,
+        'result': {
+            'id': task_id,
+            'status': {'state': 'completed'},
+            'skill': skill,
+            'artifacts': [
+                {
+                    'name': skill,
+                    'parts': [{'type': 'data', 'data': artifact_data}],
+                }
+            ],
+        },
+    }
 
   def reset(self) -> dict[str, Any]:
     """Resets the optimizer and agent trajectory to the initial seed state."""
@@ -1088,6 +1212,9 @@ class VibeLiftRequestHandler(http.server.BaseHTTPRequestHandler):
     if path == '/api/prompt_xray/live_turns':
       self._send_json(srv.controller.prompt_xray_live_turns())
       return
+    if path in ('/api/dead_letters', '/api/dead-letters'):
+      self._send_json(srv.controller.dead_letters_payload())
+      return
     self.send_error(404, 'Not Found')
 
   def do_POST(self) -> None:  # pylint: disable=invalid-name
@@ -1106,6 +1233,9 @@ class VibeLiftRequestHandler(http.server.BaseHTTPRequestHandler):
       self.send_header('Content-Length', str(len(res_bytes)))
       self.end_headers()
       self.wfile.write(res_bytes)
+      return
+    if self.path == '/a2a/app':
+      self._send_json(srv.controller.handle_a2a_task(body))
       return
     if not dashboard_surface_enabled():
       self.send_error(404, 'Not Found')
@@ -1198,7 +1328,7 @@ class VibeLiftRequestHandler(http.server.BaseHTTPRequestHandler):
       })
       return
     if self.path == '/api/ge_mart/refresh':
-      self._send_json(srv.controller.refresh_ge_mart())
+      self._send_json(srv.controller.refresh_ge_mart(body))
       return
     if self.path in ('/api/enable_agent_observability', '/api/agent_observability'):
       self._send_json(srv.controller.enable_agent_observability(body))
@@ -1358,6 +1488,10 @@ def register_api_routes(app: Any, controller: VibeLiftRuntimeController) -> None
   def get_agent_card(request: fastapi.Request):
     return JSONResponse(content=build_agent_card(base_url_from_headers(request.headers)), status_code=200)
 
+  @app.post('/a2a/app')
+  def post_a2a_task(payload: dict = fastapi.Body(default={})):
+    return controller.handle_a2a_task(payload)
+
   # /healthz is for container probes; Cloud Run's front end reserves paths ending in "z", so browsers
   # and external checks use /api/health instead.
   @app.get('/healthz')
@@ -1393,6 +1527,11 @@ def register_api_routes(app: Any, controller: VibeLiftRuntimeController) -> None
   def get_state(window_hours: str | None = None):
     return controller.get_state_payload(window_hours=ge_fleet.parse_window_hours(window_hours))
 
+  @app.get('/api/dead_letters')
+  @app.get('/api/dead-letters')
+  def get_dead_letters():
+    return controller.dead_letters_payload()
+
   @app.get('/api/ge_fleet')
   def get_ge_fleet(window_hours: str | None = None, force_refresh: str | None = None):
     return controller.get_fleet_payload(
@@ -1409,8 +1548,8 @@ def register_api_routes(app: Any, controller: VibeLiftRuntimeController) -> None
     }
 
   @app.post('/api/ge_mart/refresh')
-  def post_refresh_ge_mart():
-    return controller.refresh_ge_mart()
+  def post_refresh_ge_mart(payload: dict = fastapi.Body(default={})):
+    return controller.refresh_ge_mart(payload)
 
   @app.post('/api/enable_agent_observability')
   @app.post('/api/agent_observability')

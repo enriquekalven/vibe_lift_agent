@@ -12,6 +12,7 @@ payload carries None, never a default.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from collections.abc import Mapping, Sequence
@@ -20,6 +21,8 @@ from typing import Any
 CURATED_DATASET_ENV = 'VIBELIFT_GE_CURATED_DATASET'
 MART_DATASET_ENV = 'VIBELIFT_GE_MART_DATASET'
 OTEL_DATASET_ENV = 'VIBELIFT_OTEL_DATASET'
+PII_REDACT_ENV = 'VIBELIFT_PII_REDACT'
+POLICY_TAG_PII_ENV = 'VIBELIFT_POLICY_TAG_PII'
 DEFAULT_CURATED_DATASET = 'ds_ge_curated_staging'
 DEFAULT_MART_DATASET = 'vibelift_mart'
 # Dataset holding the OTel GenAI table `gen_ai_client_inference_operation_details`. The default
@@ -28,9 +31,28 @@ DEFAULT_OTEL_DATASET = 'sre_triage_agent_telemetry'
 
 _PROJECT_RE = re.compile(r'^(?:[a-z][a-z0-9\-]{1,61}[a-z0-9]\.[a-z]{2,}:)?[a-z][a-z0-9\-]{4,61}[a-z0-9]$')
 _DATASET_RE = re.compile(r'^[A-Za-z0-9_]{1,1024}$')
+_POLICY_TAG_RE = re.compile(
+    r'^projects/[a-z][a-z0-9\-]{4,61}[a-z0-9]/locations/[a-z0-9\-]+/taxonomies/[0-9]+/policyTags/[0-9]+$'
+)
 
 # Turn statuses that are not failures (see fct_turns.is_failed).
 NON_FAILURE_STATUSES = ('SUCCESS', 'SKIPPED', 'UNKNOWN', 'CANCELLED')
+
+
+def pii_redaction_enabled() -> bool:
+  """Returns True when runtime SHA-256 PII pseudonymization is enabled via VIBELIFT_PII_REDACT=1."""
+  return (os.environ.get(PII_REDACT_ENV) or '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def redact_email_if_configured(email: str | None) -> str | None:
+  """Pseudonymizes user_email with a deterministic SHA-256 prefix when VIBELIFT_PII_REDACT=1."""
+  if not email:
+    return None
+  if not pii_redaction_enabled():
+    return email
+  digest = hashlib.sha256(email.strip().lower().encode('utf-8')).hexdigest()[:12]
+  domain = email.split('@', 1)[1] if '@' in email else 'redacted.local'
+  return f'user-{digest}@{domain}'
 
 
 def _dataset_from_env(env: str, default: str) -> str:
@@ -94,6 +116,61 @@ def build_refresh_fct_turns_ddl(project_id: str) -> str:
       '  *,\n'
       '  CURRENT_TIMESTAMP() AS refreshed_at\n'
       f'FROM `{mart}.v_fct_turns`'
+  )
+
+
+def build_incremental_merge_fct_turns_dml(project_id: str, lookback_days: int = 3) -> str:
+  """Partition-pruned incremental MERGE into fct_turns over the recent lookback window."""
+  mart = mart_ref(project_id)
+  days = _clamp(lookback_days, 1, 90)
+  return (
+      f'MERGE `{mart}.fct_turns` AS T\n'
+      'USING (\n'
+      '  SELECT\n'
+      '    *,\n'
+      '    CURRENT_TIMESTAMP() AS refreshed_at\n'
+      f'  FROM `{mart}.v_fct_turns`\n'
+      f'  WHERE event_date >= DATE_SUB(CURRENT_DATE(), INTERVAL {days} DAY)\n'
+      ') AS S\n'
+      'ON T.turn_id = S.turn_id\n'
+      f'  AND T.event_date >= DATE_SUB(CURRENT_DATE(), INTERVAL {days} DAY)\n'
+      'WHEN MATCHED THEN\n'
+      '  UPDATE SET\n'
+      '    T.turn_status = S.turn_status,\n'
+      '    T.is_failed = S.is_failed,\n'
+      '    T.is_actionable_issue = S.is_actionable_issue,\n'
+      '    T.status_code = S.status_code,\n'
+      '    T.status_message = S.status_message,\n'
+      '    T.error_reason = S.error_reason,\n'
+      '    T.audit_match_method = S.audit_match_method,\n'
+      '    T.is_guardrail_blocked = S.is_guardrail_blocked,\n'
+      '    T.guardrail_categories = S.guardrail_categories,\n'
+      '    T.latency_ms = S.latency_ms,\n'
+      '    T.input_tokens = S.input_tokens,\n'
+      '    T.output_tokens = S.output_tokens,\n'
+      '    T.cached_input_tokens = S.cached_input_tokens,\n'
+      '    T.reasoning_tokens = S.reasoning_tokens,\n'
+      '    T.total_tokens = S.total_tokens,\n'
+      '    T.llm_calls = S.llm_calls,\n'
+      '    T.tool_call_count = S.tool_call_count,\n'
+      '    T.tool_failure_count = S.tool_failure_count,\n'
+      '    T.tool_names = S.tool_names,\n'
+      '    T.mcp_server_name = S.mcp_server_name,\n'
+      '    T.refreshed_at = S.refreshed_at\n'
+      'WHEN NOT MATCHED THEN\n'
+      '  INSERT ROW'
+  )
+
+
+def build_pii_policy_tag_ddl(project_id: str, policy_tag: str | None = None) -> str:
+  """Builds ALTER TABLE DDL attaching a Data Catalog Policy Tag to fct_turns.user_email."""
+  mart = mart_ref(project_id)
+  tag = (policy_tag or os.environ.get(POLICY_TAG_PII_ENV) or '').strip()
+  if not _POLICY_TAG_RE.match(tag):
+    raise ValueError(f'Invalid BigQuery Data Catalog policy tag resource name: {tag!r}')
+  return (
+      f'ALTER TABLE `{mart}.fct_turns`\n'
+      f'ALTER COLUMN user_email SET OPTIONS (policy_tags = ["{tag}"])'
   )
 
 
@@ -381,7 +458,7 @@ def support_event_from_row(row: Mapping[str, Any], project_id: str) -> dict[str,
   actionable = bool_or_none(row.get('is_actionable_issue')) is True
   blocked = bool_or_none(row.get('is_guardrail_blocked')) is True
   method = _text(row.get('api_method')) or _text(row.get('turn_kind')) or 'turn'
-  user = _text(row.get('user_email'))
+  user = redact_email_if_configured(_text(row.get('user_email')))
   engine = _text(row.get('engine_key'))
   if blocked and status == 'SUCCESS':
     category = 'GUARDRAIL_BLOCK'
@@ -430,7 +507,7 @@ def usage_log_from_row(row: Mapping[str, Any], project_id: str) -> dict[str, Any
   """Maps a fct_turns row to an aive usage-log dict. No prompt text, no invented latency or rating."""
   source_table = f'{mart_ref(project_id)}.fct_turns'
   turn_id = str(row.get('turn_id') or '')
-  email = _text(row.get('user_email'))
+  email = redact_email_if_configured(_text(row.get('user_email')))
   status = str(row.get('turn_status') or 'UNKNOWN')
   return {
       'event_id': turn_id,
@@ -488,7 +565,7 @@ def daily_usage_from_row(row: Mapping[str, Any]) -> dict[str, Any]:
 def user_model_tokens_from_row(row: Mapping[str, Any]) -> dict[str, Any]:
   """Maps a build_user_model_tokens_sql row. Token sums no turn reported stay None."""
   return {
-      'user_email': _text(row.get('user_email')),
+      'user_email': redact_email_if_configured(_text(row.get('user_email'))),
       'model_name': _text(row.get('model_name')),
       'engine_key': _text(row.get('engine_key')),
       'turns': int_or_none(row.get('turns')) or 0,
@@ -507,7 +584,7 @@ def session_from_row(row: Mapping[str, Any], project_id: str) -> dict[str, Any]:
       'session_end': _text(row.get('session_end')),
       'duration_seconds': int_or_none(row.get('duration_seconds')),
       'session_date': _text(row.get('session_date')),
-      'user_email': _text(row.get('user_email')),
+      'user_email': redact_email_if_configured(_text(row.get('user_email'))),
       'agent_name': _text(row.get('agent_name')),
       'model_names': _text(row.get('model_names')),
       'turns': int_or_none(row.get('turns')) or 0,
@@ -540,7 +617,7 @@ def session_turn_from_row(row: Mapping[str, Any]) -> dict[str, Any]:
       'ts': _text(row.get('ts')),
       'turn_kind': _text(row.get('turn_kind')),
       'turn_status': _text(row.get('turn_status')),
-      'user_email': _text(row.get('user_email')),
+      'user_email': redact_email_if_configured(_text(row.get('user_email'))),
       'agent_name': _text(row.get('agent_name')),
       'model_name': _text(row.get('model_name')),
       'latency_ms': int_or_none(row.get('latency_ms')),

@@ -700,13 +700,13 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <button class="btn" id="syncGcpBtn" onclick="syncGcpTelemetry()" title="Sync GCP Telemetry (Cloud Monitoring, BigQuery, Gemini Enterprise)">
         Refresh
       </button>
-      <button class="btn btn-danger adv-only" onclick="triggerApi('/api/inject_anomaly')" title="Simulator: applies a fixed cache-bust scenario to the demo agent (synthetic numbers)">
+      <button class="btn btn-danger adv-only sim-panel" onclick="triggerApi('/api/inject_anomaly')" title="Simulator: applies a fixed cache-bust scenario to the demo agent (synthetic numbers)">
         Simulate Alert
       </button>
-      <button class="btn btn-primary adv-only" onclick="triggerApi('/api/evolve_generation')" title="Simulator: one generation of fixed improvement factors on the demo agent; nothing is deployed">
+      <button class="btn btn-primary adv-only sim-panel" onclick="triggerApi('/api/evolve_generation')" title="Simulator: one generation of fixed improvement factors on the demo agent; nothing is deployed">
         Run Optimizer (simulated)
       </button>
-      <button class="btn adv-only" onclick="triggerApi('/api/reset')">
+      <button class="btn adv-only sim-panel" onclick="triggerApi('/api/reset')">
         Reset
       </button>
       <button class="btn adv-toggle" id="advancedToggleBtn" aria-pressed="false" onclick="toggleAdvancedMode()" title="Show optimizer, simulators, FinOps deep-dives and SDK tools">
@@ -732,7 +732,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     <button id="tabBtn1" class="tab-btn adv-only" onclick="switchTab(1)">
       Goals &amp; Metrics
     </button>
-    <button id="tabBtn2" class="tab-btn adv-only" onclick="switchTab(2)">
+    <button id="tabBtn2" class="tab-btn adv-only sim-panel" onclick="switchTab(2)">
       Optimizer &amp; Testing
     </button>
     <button id="tabBtn5" class="tab-btn adv-only" onclick="switchTab(5)">

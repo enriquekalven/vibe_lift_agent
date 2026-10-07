@@ -240,32 +240,154 @@ def _segments(text: str, regions: Sequence[tuple[int, int, str]],
   return out
 
 
+_VOLATILE_JSON_KEY_RE = re.compile(
+    r'^(?:current[ _-]?(?:time|date|datetime)|today|timestamp|now|'
+    r'request[ _-]?id|session[ _-]?id|trace[ _-]?id|correlation[ _-]?id|'
+    r'user[ _-]?(?:name|id|email)|customer[ _-]?(?:name|id)|nonce|span[ _-]?id)$',
+    re.IGNORECASE,
+)
+
+
+def _is_volatile_json_value(key: str, val: Any) -> bool:
+  """Returns True when a JSON key or scalar value carries per-turn volatile state."""
+  if _VOLATILE_JSON_KEY_RE.match(str(key)):
+    return True
+  if isinstance(val, str):
+    return bool(scan_volatile_spans(val))
+  if isinstance(val, int) and 1_500_000_000 <= val <= 2_500_000_000_000:
+    return True
+  return False
+
+
+def _partition_json_dict(obj: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+  """Splits a JSON dict into (static_dict, dynamic_dict) recursively while preserving all keys."""
+  static_part: dict[str, Any] = {}
+  dynamic_part: dict[str, Any] = {}
+  for k, v in obj.items():
+    if _is_volatile_json_value(k, v):
+      dynamic_part[k] = v
+    elif isinstance(v, dict):
+      s_sub, d_sub = _partition_json_dict(v)
+      if s_sub:
+        static_part[k] = s_sub
+      if d_sub:
+        dynamic_part[k] = d_sub
+    else:
+      static_part[k] = v
+  return static_part, dynamic_part
+
+
+def _canonicalize_multiline_blocks(prompt: str) -> tuple[str, int]:
+  """Canonicalizes fenced ```json blocks and multi-line JSON objects into deterministic sorted lines."""
+  lines = prompt.split('\n')
+  out_lines: list[str] = []
+  sorted_blocks = 0
+  i = 0
+  n = len(lines)
+  while i < n:
+    line = lines[i].rstrip()
+    stripped = line.strip()
+    if stripped.startswith('```json'):
+      j = i + 1
+      block_lines: list[str] = []
+      while j < n and not lines[j].strip().startswith('```'):
+        block_lines.append(lines[j])
+        j += 1
+      if j < n:
+        raw_block = '\n'.join(block_lines).strip()
+        parsed = _parse_json_fragment(raw_block)
+        if isinstance(parsed, (dict, list)):
+          canonical = json.dumps(parsed, sort_keys=True, ensure_ascii=False)
+          if canonical != raw_block:
+            sorted_blocks += 1
+          out_lines.append(line)
+          out_lines.append(canonical)
+          out_lines.append(lines[j].rstrip())
+          i = j + 1
+          continue
+    if stripped.startswith('{') and not stripped.rstrip(',').endswith('}'):
+      acc = [lines[i]]
+      j = i + 1
+      parsed_multi = None
+      while j < n and (j - i) <= 60:
+        acc.append(lines[j])
+        candidate = '\n'.join(acc).strip()
+        if candidate.rstrip(',').endswith('}'):
+          parsed_multi = _parse_json_fragment(candidate)
+          if isinstance(parsed_multi, dict):
+            break
+        j += 1
+      if isinstance(parsed_multi, dict):
+        indent = line[:len(line) - len(line.lstrip())]
+        trailing = ',' if acc[-1].rstrip().endswith(',') else ''
+        canonical = indent + json.dumps(parsed_multi, sort_keys=True, ensure_ascii=False) + trailing
+        sorted_blocks += 1
+        out_lines.append(canonical)
+        i = j + 1
+        continue
+    out_lines.append(line)
+    i += 1
+  return '\n'.join(out_lines), sorted_blocks
+
+
 def propose_cache_friendly_rewrite(prompt: str) -> dict[str, Any]:
-  """Moves lines holding volatile values to the end and sorts JSON object keys line by line."""
+  """Moves volatile values/keys to the end, normalizes trailing spaces, and sorts JSON keys."""
+  normalized_prompt, block_sorts = _canonicalize_multiline_blocks(prompt)
   kept: list[str] = []
   moved: list[dict[str, Any]] = []
-  sorted_json = 0
-  findings = scan_volatile_spans(prompt)
+  moved_texts: list[str] = []
+  sorted_json = block_sorts
+  findings = scan_volatile_spans(normalized_prompt)
   kinds_by_line: dict[int, list[str]] = {}
   for f in findings:
     kinds_by_line.setdefault(int(f['line']), []).append(str(f['kind']))
-  for line_no, line in enumerate(prompt.split('\n'), start=1):
+
+  in_dynamic_footer = False
+  for line_no, raw_line in enumerate(normalized_prompt.split('\n'), start=1):
+    line = raw_line.rstrip()
+    if line.strip() == DYNAMIC_SECTION_HEADER:
+      in_dynamic_footer = True
+      continue
     parsed = _parse_json_fragment(line)
     if isinstance(parsed, dict):
       indent = line[:len(line) - len(line.lstrip())]
       trailing = ',' if line.rstrip().endswith(',') else ''
+      static_dict, dynamic_dict = _partition_json_dict(parsed)
+      if static_dict and dynamic_dict and not in_dynamic_footer:
+        static_line = indent + json.dumps(static_dict, sort_keys=True, ensure_ascii=False) + trailing
+        dynamic_line = indent + json.dumps(dynamic_dict, sort_keys=True, ensure_ascii=False)
+        sorted_json += 1
+        kept.append(static_line)
+        moved.append({
+            'line': line_no,
+            'text': dynamic_line[:200],
+            'kinds': sorted(set(kinds_by_line.get(line_no) or ['dynamic_label'])),
+        })
+        moved_texts.append(dynamic_line)
+        continue
       normalized = indent + json.dumps(parsed, sort_keys=True, ensure_ascii=False) + trailing
       if normalized != line:
         sorted_json += 1
         line = normalized
-    if line_no in kinds_by_line and line.strip() != DYNAMIC_SECTION_HEADER:
+    if in_dynamic_footer:
+      if line.strip():
+        moved.append({
+            'line': line_no,
+            'text': line[:200],
+            'kinds': sorted(set(kinds_by_line.get(line_no) or ['dynamic_label'])),
+        })
+        moved_texts.append(line)
+      continue
+    if line_no in kinds_by_line:
       moved.append({'line': line_no, 'text': line[:200], 'kinds': sorted(set(kinds_by_line[line_no]))})
+      moved_texts.append(line)
     else:
       kept.append(line)
-  if moved:
+
+  if moved_texts:
     while kept and not kept[-1].strip():
       kept.pop()
-    rewritten = '\n'.join(kept + ['', DYNAMIC_SECTION_HEADER] + [m_line for m_line in _moved_lines(prompt, moved)])
+    rewritten = '\n'.join([*kept, '', DYNAMIC_SECTION_HEADER, *moved_texts])
   else:
     rewritten = '\n'.join(kept)
   return {
@@ -278,7 +400,7 @@ def propose_cache_friendly_rewrite(prompt: str) -> dict[str, Any]:
 
 def _moved_lines(prompt: str, moved: Sequence[Mapping[str, Any]]) -> list[str]:
   lines = prompt.split('\n')
-  return [lines[int(m['line']) - 1] for m in moved]
+  return [lines[int(m['line']) - 1] for m in moved if 1 <= int(m['line']) <= len(lines)]
 
 
 def _rate_card(model: str) -> telemetry.ModelRateCard | None:

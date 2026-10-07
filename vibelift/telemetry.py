@@ -526,8 +526,74 @@ class IngestValidationError(ValueError):
     return {'error': 'invalid_payload', 'errors': self.errors, 'dead_letter': self.dead_letter}
 
 
+DLQ_PUBSUB_TOPIC_ENV = 'VIBELIFT_DLQ_PUBSUB_TOPIC'
+
+
+def configured_dlq_topic() -> str | None:
+  """Returns the configured Cloud Pub/Sub dead-letter topic resource name, or None."""
+  raw = (os.environ.get(DLQ_PUBSUB_TOPIC_ENV) or '').strip()
+  if not raw:
+    return None
+  if raw.startswith('projects/') and '/topics/' in raw:
+    return raw
+  project = (os.environ.get('GOOGLE_CLOUD_PROJECT') or '').strip()
+  if project and raw:
+    return f'projects/{project}/topics/{raw}'
+  return None
+
+
+def _get_pubsub_access_token() -> str | None:
+  """Fetches an Application Default Credentials access token for Cloud Pub/Sub REST publishing."""
+  try:
+    import google.auth  # pylint: disable=import-outside-toplevel
+    import google.auth.transport.requests  # pylint: disable=import-outside-toplevel
+
+    creds, _ = google.auth.default(scopes=['https://www.googleapis.com/auth/pubsub'])
+    creds.refresh(google.auth.transport.requests.Request())
+    return str(creds.token) if creds.token else None
+  except Exception:
+    return None
+
+
+def publish_dead_letter_to_pubsub(entry: Mapping[str, Any], topic: str | None = None) -> bool:
+  """Publishes a values-free dead-letter envelope to Cloud Pub/Sub when VIBELIFT_DLQ_PUBSUB_TOPIC is set."""
+  target_topic = topic or configured_dlq_topic()
+  if not target_topic:
+    return False
+  token = _get_pubsub_access_token()
+  if not token:
+    return False
+  import base64  # pylint: disable=import-outside-toplevel
+  import urllib.request  # pylint: disable=import-outside-toplevel
+
+  try:
+    body_bytes = json.dumps({
+        'messages': [{
+            'data': base64.b64encode(json.dumps(dict(entry), sort_keys=True).encode('utf-8')).decode('ascii'),
+            'attributes': {
+                'source': str(entry.get('source') or 'unknown')[:80],
+                'payload_sha256': str(entry.get('payload_sha256') or '')[:64],
+                'app': 'vibelift',
+            },
+        }],
+    }).encode('utf-8')
+    req = urllib.request.Request(
+        f'https://pubsub.googleapis.com/v1/{target_topic}:publish',
+        data=body_bytes,
+        headers={
+            'Authorization': f'Bearer {token}',
+            'Content-Type': 'application/json; charset=utf-8',
+        },
+        method='POST',
+    )
+    with urllib.request.urlopen(req, timeout=2.5) as resp:
+      return 200 <= int(getattr(resp, 'status', 200)) < 300
+  except Exception:
+    return False
+
+
 def record_ingest_dlq(source: str, payload: Any, errors: Sequence[str]) -> dict[str, Any]:
-  """Records a rejected ingest body in the bounded dead-letter list and as a WARNING log line.
+  """Records a rejected ingest body in the bounded dead-letter list, Cloud Logging, and optional Pub/Sub DLQ.
 
   Only the body's key names, size and SHA-256 are kept, never its values, because rejected bodies
   can carry prompt text or e-mail addresses. Nothing is retried or replayed automatically.
@@ -537,6 +603,7 @@ def record_ingest_dlq(source: str, payload: Any, errors: Sequence[str]) -> dict[
   except (TypeError, ValueError):
     canonical = repr(payload)
   encoded = canonical.encode('utf-8', errors='replace')
+  dlq_topic = configured_dlq_topic()
   entry: dict[str, Any] = {
       'timestamp': _utc_now_iso(),
       'source': str(source)[:80],
@@ -545,7 +612,11 @@ def record_ingest_dlq(source: str, payload: Any, errors: Sequence[str]) -> dict[
       'payload_keys': sorted(str(k)[:64] for k in payload)[:40] if isinstance(payload, Mapping) else [],
       'payload_bytes': len(encoded),
       'payload_sha256': hashlib.sha256(encoded).hexdigest(),
+      'values_logged': False,
   }
+  if dlq_topic:
+    entry['dlq_topic'] = dlq_topic
+    entry['dlq_published'] = publish_dead_letter_to_pubsub(entry, topic=dlq_topic)
   with _DECORATOR_LOCK:
     _INGEST_DLQ.insert(0, entry)
     del _INGEST_DLQ[_INGEST_DLQ_MAX:]

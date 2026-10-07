@@ -760,13 +760,18 @@ class GoogleCloudTelemetryService:
     self._cached_live_turns = turns
     return turns
 
-  def refresh_ge_mart_turns(self) -> dict[str, Any]:
-    """Rebuilds the materialized vibelift_mart.fct_turns table from v_fct_turns via BigQuery REST."""
+  def refresh_ge_mart_turns(self, incremental: bool = False, lookback_days: int = 3) -> dict[str, Any]:
+    """Refreshes vibelift_mart.fct_turns via incremental MERGE or full atomic CREATE OR REPLACE."""
     if not self.project_id or self.project_id in (UNCONFIGURED_PROJECT_ID, 'test-project'):
       return {'status': 'OFFLINE', 'message': 'No live Google Cloud project configured.'}
     mart = ge_mart.mart_ref(self.project_id)
-    ddl = ge_mart.build_refresh_fct_turns_ddl(self.project_id)
-    self._query_bigquery_rest(ddl, timeout_s=60.0)
+    mode = 'INCREMENTAL_MERGE' if incremental else 'FULL_REBUILD'
+    if incremental:
+      dml = ge_mart.build_incremental_merge_fct_turns_dml(self.project_id, lookback_days=lookback_days)
+      self._query_bigquery_rest(dml, timeout_s=60.0)
+    else:
+      ddl = ge_mart.build_refresh_fct_turns_ddl(self.project_id)
+      self._query_bigquery_rest(ddl, timeout_s=60.0)
     rows = self._query_bigquery_rest(
         f'SELECT COUNT(1) AS row_count, CAST(MAX(refreshed_at) AS STRING) AS refreshed_at FROM `{mart}.fct_turns`',
         timeout_s=15.0,
@@ -780,6 +785,7 @@ class GoogleCloudTelemetryService:
     row = rows[0] if rows else {}
     return {
         'status': 'REFRESHED',
+        'mode': mode,
         'table': f'{mart}.fct_turns',
         'row_count': ge_mart.int_or_none(row.get('row_count')) or 0,
         'refreshed_at': str(row.get('refreshed_at') or ''),

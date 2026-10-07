@@ -1,0 +1,39 @@
+{
+  "name": "prompt_cache_evolve",
+  "title": "Evolutionary Prompt Cache Prefix Canonicalization & Reordering",
+  "problem_description": "Given multi-turn enterprise agent prompts containing interleaved static system instructions, tool schemas, multi-line JSON payloads, RAG context, and volatile per-turn tokens (ISO-8601 timestamps, UUIDs/request IDs, user emails, unsorted JSON keys, mixed JSON objects with both static schemas and volatile fields, and trailing whitespace variance), evolve propose_cache_friendly_rewrite(prompt: str) -> dict[str, Any] to maximize the shared byte-identical cached prefix across consecutive turns while preserving 100% of semantic content.",
+  "metric_name": "composite_cache_savings_score",
+  "metric_direction": "maximize",
+  "eval_inputs": {
+    "benchmark_cases": 12,
+    "model": "gemini-3.5-flash"
+  },
+  "allowed_imports": [
+    "re",
+    "json",
+    "hashlib",
+    "collections",
+    "typing",
+    "dataclasses"
+  ],
+  "forbidden_imports": [
+    "os",
+    "sys",
+    "subprocess",
+    "socket",
+    "urllib"
+  ],
+  "source_file": "vibelift/prompt_xray.py",
+  "initial_program_description": "Extracts propose_cache_friendly_rewrite and its volatile-span detectors from vibelift/prompt_xray.py (lines 243-281), which moves volatile lines to a trailing dynamic section and sorts single-line JSON dicts.",
+  "evolve_block_description": "The EVOLVE-BLOCK wraps propose_cache_friendly_rewrite(prompt: str) -> dict[str, Any] and its helper functions for multi-line JSON canonicalization, mixed static/volatile JSON object partitioning, and deterministic static prefix assembly.",
+  "evaluation_strategy": "COMPOSITE_MULTI_OBJECTIVE",
+  "timeout_seconds": 30,
+  "python_version": ">=3.10",
+  "dependencies": [
+    "pytest"
+  ],
+  "constraints": [
+    "Lossless invariant: all non-whitespace tokens and JSON key-value pairs from the input prompt must be preserved in rewritten_prompt",
+    "Deterministic invariant: calling propose_cache_friendly_rewrite twice on the same input must be idempotent"
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "experiment_dir": "/Users/enriq/.gemini/jetski/scratch/vibe_lift_agent/experiments/prompt_cache_evolve",
+  "mappings": [
+    {
+      "experiment_file": "initial_program.py",
+      "symbol": "propose_cache_friendly_rewrite",
+      "symbol_type": "function",
+      "is_evolve_block": true,
+      "original_file": "vibelift/prompt_xray.py",
+      "original_lines": [243, 281],
+      "original_symbol": "propose_cache_friendly_rewrite",
+      "integration_mode": "function_replacement"
+    },
+    {
+      "experiment_file": "initial_program.py",
+      "symbol": "_DETECTORS",
+      "symbol_type": "function",
+      "is_evolve_block": false,
+      "original_file": "vibelift/prompt_xray.py",
+      "original_lines": [53, 81],
+      "original_symbol": "_DETECTORS",
+      "integration_mode": "skip"
+    }
+  ],
+  "strip_evolve_markers": true
+}

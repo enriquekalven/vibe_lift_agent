@@ -179,6 +179,15 @@ EXTRA_ENV=""
 if [[ -n "${VIBELIFT_BILLING_EXPORT_TABLE:-}" ]]; then
   EXTRA_ENV=";VIBELIFT_BILLING_EXPORT_TABLE=${VIBELIFT_BILLING_EXPORT_TABLE}"
 fi
+# Optional: Cloud Pub/Sub Dead-Letter Queue topic for rejected telemetry ingest payloads (HTTP 422).
+DLQ_TOPIC="${VIBELIFT_DLQ_PUBSUB_TOPIC:-projects/${PROJECT_ID}/topics/vibelift-ingest-dlq}"
+if gcloud pubsub topics describe "${DLQ_TOPIC}" --project="${PROJECT_ID}" &>/dev/null; then
+  EXTRA_ENV="${EXTRA_ENV};VIBELIFT_DLQ_PUBSUB_TOPIC=${DLQ_TOPIC}"
+fi
+# Optional: SHA-256 PII pseudonymization of principal_email when VIBELIFT_PII_REDACT=1
+if [[ -n "${VIBELIFT_PII_REDACT:-}" ]]; then
+  EXTRA_ENV="${EXTRA_ENV};VIBELIFT_PII_REDACT=${VIBELIFT_PII_REDACT}"
+fi
 # Optional: live mode for the Prompt Cache X-Ray (diff two logged turns instead of pasted prompts).
 # The OTel prompt-log bucket holds RAW USER PROMPTS, so this is opt-in: set VIBELIFT_PROMPT_LOG_BUCKET
 # (e.g. my-project-agent-logs, no gs://) to grant the runtime SA read access on that bucket only and
