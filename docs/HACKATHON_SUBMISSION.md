@@ -1,23 +1,23 @@
 # VibeLift: hackathon submission
 
-The 7 fields the evaluator expects. Every file, route and resource named here exists in this repository; `tests/test_docs_integrity.py` checks that the docs' links, anchors, file paths and URLs resolve, that the tool, test and tab counts match the code, and that every documented endpoint and `VIBELIFT_*` variable exists. `tests/test_no_invented_values.py` fails if the dashboard substitutes a hardcoded number for missing data. The numbers under "How it saves effort" were measured in `project-maui`, and each one is labeled as either a measurement or a projection.
+Submission overview and verification summary. Every file, route and resource named here exists in this repository; `tests/test_docs_integrity.py` checks that the docs' links, anchors, file paths and URLs resolve, that the tool, test and tab counts match the code, and that every documented endpoint and `VIBELIFT_*` variable exists. `tests/test_no_invented_values.py` fails if the dashboard substitutes a hardcoded number for missing data. The numbers under "How it saves effort" were measured in `project-maui`, and each one is labeled as either a measurement or a projection.
 
 ---
 
-## 1. `solution_name`
+## 1. Solution Name
 **VibeLift: Gemini Enterprise agent fleet observability and prompt-cache FinOps**
 
-## 2. `arch_url`
+## 2. Architecture Diagram
 https://github.com/enriquekalven/vibe_lift_agent/blob/main/docs/ARCHITECTURE.md
 
 The diagram is Mermaid source (diagram as code). Every box names the file or Google Cloud resource behind it. The legend marks each part as live, simulated or not configured, and the page ends with a known-gaps table.
 
-## 3. `code_base_url`
+## 3. Codebase & Deployment Guide
 https://github.com/enriquekalven/vibe_lift_agent#deploy-in-your-own-gcp-project
 
 ---
 
-## 4. `About the solution`
+## 4. About the Solution
 Teams that run agents in **Gemini Enterprise** can't easily see which agents exist across apps and regions, what they cost in tokens, or why prompt caching isn't saving money. VibeLift answers those questions from live Google Cloud data.
 
 It is a private **Cloud Run** service (`vibe-lift-agent`, IAM `run.invoker` only) with two front ends. One is an **MCP server** (`/mcp`, Streamable HTTP, JSON-RPC 2.0, MCP `2025-06-18`, 9 tools) that Gemini Enterprise calls through a Custom MCP Server data store; it renders the dashboard in the side panel as an MCP App. The other is an **ADK agent** (`app/agent.py`, Gemini 2.5 Flash on Vertex AI). Both call the same in-process controller.
@@ -31,7 +31,7 @@ What it does, by source file:
 6. **Plain-English search** ([vibelift/optimizer.py](../vibelift/optimizer.py), [vibelift/server.py](../vibelift/server.py)): a question is matched by keyword to one of 5 fixed read-only SELECT templates over `vibelift_mart`; the question text never enters the SQL. `verify_nl2sql_sql` re-checks the SQL and fails closed, and the query runs on BigQuery with a 100 MB `maximumBytesBilled` cap. A question asking to change data returns `BLOCKED`.
 7. **Live A2A task execution and live-mode simulator gating** ([vibelift/server.py](../vibelift/server.py), [vibelift/ui/template.py](../vibelift/ui/template.py)): serves both the A2A agent card (`GET /.well-known/agent.json`) and live A2A JSON-RPC 2.0 task execution (`POST /a2a/app` for `message/send` and `tasks/send`). In live GCP mode on `main`, simulator UI panels and endpoints (`inject_anomaly`, `step_turn`, `evolve_generation`, `simulate_what_if`, `recompute_finops`) are hidden and blocked with `DISABLED_IN_LIVE_MODE` (`HTTP 403`), while the full interactive What-If Simulator is preserved on `feature/what-if-simulator`.
 
-## 5. `How it saves effort`
+## 5. How It Saves Effort
 **Effort replaced.** One view and one MCP tool call replace separate queries to 8 Google Cloud APIs: Discovery Engine (per location, engine and assistant), Vertex AI, Cloud Monitoring, Cloud Logging, Cloud Trace, Cloud Run, GKE and BigQuery. Today an operator joins those by hand. We have not timed the manual process, so we don't claim hours saved.
 
 **Measured in `project-maui`** (`vibelift_mart.fct_turns`, the 30 days ending 2026-10-07 03:42 UTC):
@@ -43,12 +43,12 @@ What it does, by source file:
 - On the 12-case multi-turn enterprise prompt benchmark in `experiments/prompt_cache_evolve/`, the evolved `propose_cache_friendly_rewrite` algorithm raises the prefix cacheable ratio from **10.9% to 99.6%** (`composite_cache_savings_score`: `0.732105` -> `0.995733`, `+36.0%` relative improvement over the single-line baseline).
 - **Projection on `project-maui` traffic:** raising `gemini-3.5-flash`'s cache hit rate from 37.5% to 90% cuts its list-price token cost by about **70%** ($19.49 to $5.85 for the same tokens).
 
-## 6. `How it was happening previously?`
+## 6. How It Was Happening Previously
 1. **Inventory:** each Gemini Enterprise location (`global`, `us`, `eu`), app and assistant has to be listed separately in the console or through the Discovery Engine API. Agent Engine regions, Cloud Run services and GKE workloads are listed in other consoles.
 2. **Cost:** Cloud Billing reports cost by project and SKU, not by Gemini Enterprise agent, session or user. Token counts sit in `gen_ai` log entries and Monitoring metrics that nobody joins to prices.
 3. **Caching:** nothing shows *why* a prompt prefix misses the cache. Engineers compare prompts by eye.
 
-## 7. `Deployment Readiness`
+## 7. Deployment Readiness
 **Enterprise-ready architecture deployed in `project-maui` with automated customer-org security and governance scripts.**
 
 Deployed and verified in `project-maui`:

@@ -100,13 +100,13 @@ class LinkTest(unittest.TestCase):
   def test_submission_urls_point_at_this_repository(self) -> None:
     text = _read(SUBMISSION)
     blob_paths = re.findall(re.escape(REPO_URL) + r'/blob/main/([\w/.-]+)', text)
-    self.assertTrue(blob_paths, 'arch_url should be an absolute GitHub URL')
+    self.assertTrue(blob_paths, 'Architecture URL should be an absolute GitHub URL')
     for path in blob_paths:
       with self.subTest(path=path):
         self.assertTrue((ROOT / path).is_file(), f'{path} does not exist')
     readme_anchors = _anchors(README)
     repo_anchors = re.findall(re.escape(REPO_URL) + r'#([\w-]+)', text)
-    self.assertTrue(repo_anchors, 'code_base_url should link to the README deploy section')
+    self.assertTrue(repo_anchors, 'Codebase URL should link to the README deploy section')
     for anchor in repo_anchors:
       with self.subTest(anchor=anchor):
         self.assertIn(anchor, readme_anchors)
