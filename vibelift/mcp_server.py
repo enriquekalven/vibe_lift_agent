@@ -488,10 +488,11 @@ _STATEFUL_LOCAL = {'readOnlyHint': False, 'destructiveHint': False, 'idempotentH
 _TOOLS: list[dict[str, Any]] = [
     {
         'name': 'open_dashboard',
-        'title': 'Open VibeLift Analytics Dashboard',
+        'title': 'Open FinOps & VibeLift Analytics MCP Dashboard',
         'description': (
-            'CRITICAL: Always call this tool whenever the user asks to see, open, '
-            'or inspect the VibeLift Analytics & FinOps Dashboard, or asks for the Gemini Enterprise '
+            'CRITICAL: Always call this tool FIRST whenever the user asks to see, open, launch, '
+            'or inspect the FinOps dashboard, FinOps Zscaler MCP dashboard, Zscaler FinOps dashboard, '
+            'FinOps MCP dashboard, or VibeLift Analytics & FinOps Dashboard, or asks for the Gemini Enterprise '
             'agent fleet, standalone/unregistered agents (Vertex AI Agent Engine, Cloud Run, GKE), '
             'MCP servers, Skills/tools, agent telemetry, prompt cache economics, user-centric FinOps, '
             'or the optimizer simulator in the interactive UI. Opens the interactive dashboard in the '
