@@ -277,10 +277,11 @@ def validate_telemetry_grounding(run_llm_judge: bool = False) -> str:
 
 
 def open_dashboard(focus_tab: int = 6, initial_agent: str = "it_service_desk") -> str:
-  """Opens the VibeLift Analytics & FinOps Dashboard with interactive UI widget.
+  """Opens the FinOps & VibeLift Analytics MCP Dashboard with interactive UI widget.
 
-  CRITICAL: Always call this tool FIRST whenever the user asks to see, open, or
-  inspect the VibeLift dashboard, or asks for agent telemetry, prompt cache
+  CRITICAL: Always call this tool FIRST whenever the user asks to see, open, launch, or
+  inspect the FinOps dashboard, FinOps Zscaler MCP dashboard, Zscaler FinOps dashboard,
+  FinOps MCP dashboard, or VibeLift dashboard, or asks for agent telemetry, prompt cache
   economics, or the optimizer simulator in the UI.
 
   Args:
@@ -292,9 +293,9 @@ def open_dashboard(focus_tab: int = 6, initial_agent: str = "it_service_desk") -
   """
   dashboard_url = os.environ.get("VIBELIFT_PUBLIC_URL", "").strip().rstrip("/")
   location = (
-      f"The VibeLift Analytics & FinOps Dashboard is now open: {dashboard_url}."
+      f"The FinOps & VibeLift Analytics Dashboard is now open: {dashboard_url}."
       if dashboard_url
-      else "The VibeLift Analytics & FinOps Dashboard is available as the MCP App resource "
+      else "The FinOps & VibeLift Analytics Dashboard is available as the MCP App resource "
       "ui://vibelift-analytics/dashboard."
   )
   return json.dumps(
@@ -319,7 +320,7 @@ root_agent = Agent(
     ),
     instruction="""You are VibeLift Agent, a Google Cloud agent-fleet telemetry and cost analysis agent.
 Your mission is to:
-1. Always call `open_dashboard` FIRST whenever the user asks to open, view, or inspect the VibeLift Analytics Platform, or asks for agent telemetry, FinOps prompt cache economics, or the optimizer simulator. Calling `open_dashboard` opens the interactive glassmorphic dashboard.
+1. Always call `open_dashboard` FIRST whenever the user asks to open, view, or inspect the FinOps dashboard, FinOps Zscaler MCP dashboard, Zscaler FinOps dashboard, VibeLift Analytics Platform, or asks for agent telemetry, FinOps prompt cache economics, or the optimizer simulator. Calling `open_dashboard` opens the interactive glassmorphic dashboard.
 2. Report on every agent deployed on the Gemini Enterprise app AND standalone/unregistered runtimes (Vertex AI Agent Engine, Cloud Run agents/MCP servers, GKE workloads, and Cloud Trace Skills/MCP tools) with `query_ge_agent_fleet`: live requests, errors, latency, tokens, conversations, zombie/idle allocation, and project-wide model usage and estimated cost. Only quote numbers returned by the tools.
 3. Query the BigQuery reporting mart (`vibelift_mart`) and Cloud Billing export reconciliation with `query_live_finops_and_mart`, and verify live telemetry grounding with `validate_telemetry_grounding`.
 4. Calculate token cache economics (Cache Read vs Write vs Uncached) and dollar savings vs naive pricing.

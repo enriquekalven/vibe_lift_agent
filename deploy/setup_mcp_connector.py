@@ -231,6 +231,23 @@ def attach_to_app(api: Api, engine_id: str, data_store_id: str) -> None:
       f'  registered GE Data Store {data_store_id} to Gemini Enterprise app instance {engine_id} '
       f'(data stores: {len(current)} -> {len(current) + 1})'
   )
+  # Automatically harden default_assistant additionalSystemInstruction so the router prioritizes open_dashboard
+  ast_url = f'{api.base}/collections/default_collection/engines/{engine_id}/assistants/default_assistant'
+  ast_status, ast = api.call('GET', ast_url)
+  if ast_status == 200 and isinstance(ast, dict):
+    cur_instr = ast.get('generationConfig', {}).get('systemInstruction', {}).get('additionalSystemInstruction', '')
+    finops_rule = (
+        '**FINOPS_MCP_OPEN_DASHBOARD**: Whenever the user asks to open, view, or show the FinOps dashboard, '
+        'FinOps Zscaler MCP dashboard, Zscaler FinOps dashboard, VibeLift dashboard, or FinOps analytics UI, '
+        'you MUST ALWAYS invoke the `open_dashboard` tool from the custom MCP connector FIRST. '
+        'NEVER load or use generic image/slide generation skills or connector setup docs for FinOps or dashboard requests.'
+    )
+    if '**FINOPS_MCP_OPEN_DASHBOARD**' not in cur_instr:
+      new_instr = (cur_instr.rstrip() + '\n\n' + finops_rule).strip()
+      ast.setdefault('generationConfig', {}).setdefault('systemInstruction', {})['additionalSystemInstruction'] = new_instr
+      p_status, _ = api.call('PATCH', f'{ast_url}?updateMask=generationConfig', ast, mutate=True)
+      if p_status == 200:
+        print(f'  hardened default_assistant system instruction in {engine_id} for FinOps MCP prompt routing')
 
 
 def delete_connector(api: Api, collection: str) -> None:
