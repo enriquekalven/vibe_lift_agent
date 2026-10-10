@@ -707,6 +707,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <button id="btnModeFullscreen" class="btn btn-fullscreen-toggle" onclick="toggleDisplayMode()" title="Toggle between Right Side Panel and Fullscreen">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg> Fullscreen
       </button>
+      <button type="button" class="btn vl-palette-btn" id="vlPaletteBtn" aria-haspopup="dialog" aria-expanded="false" aria-keyshortcuts="Meta+K Control+K" title="Search agents, users, sessions, apps and commands">&#8981; Search <kbd class="vl-kbd">Ctrl K</kbd></button>
       <span id="activeGenBadge" class="badge badge-blue adv-only">ACTIVE CONFIG</span>
       <button type="button" class="btn vl-fresh vl-fresh-wait" id="vlFreshChip" title="How fresh the fleet data is. Click to refresh."><i class="vl-fresh-dot"></i>Loading&hellip;</button>
       <button class="btn verify-chip" onclick="toggleTelemetryValidatorDrawer()" id="toggleTelemetryValidatorBtn" title="See which data source backs each number">
@@ -2539,6 +2540,8 @@ async def handle_agent_turn(message_envelope):
   <div id="apiNotice" class="api-notice hidden" role="status" aria-live="polite"></div>
   <div id="vlDrawerBackdrop" class="vl-backdrop hidden"></div>
   <aside id="vlDrawer" class="vl-drawer hidden" role="dialog" aria-modal="true" aria-labelledby="vlDrawerTitle" tabindex="-1"></aside>
+  <div id="vlPaletteBackdrop" class="vl-backdrop vl-palette-backdrop hidden"></div>
+  <div id="vlPalette" class="vl-palette hidden" role="dialog" aria-modal="true" aria-label="Search and commands"></div>
 
   <script>
 __VIBELIFT_ENHANCEMENTS_JS__

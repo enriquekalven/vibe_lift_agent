@@ -1,6 +1,6 @@
 # Testing
 
-390 tests across 18 files. They run offline: `GOOGLE_APPLICATION_CREDENTIALS` points at a file that does not
+391 tests across 18 files. They run offline: `GOOGLE_APPLICATION_CREDENTIALS` points at a file that does not
 exist, and every Google Cloud API is replaced by an in-process fake (`FakeGoogleApi` in
 [`tests/test_fleet.py`](../tests/test_fleet.py)), so no live project is touched.
 
@@ -56,7 +56,7 @@ is shown as unknown, never as an invented value. These tests enforce it.
 | GE mart: inference tokens attached to one turn per trace (no fan-out); stage defects stay fixed | `test_ge_mart.TemplateDefectFixTest` |
 | GE mart: provisioner renders every view, stubs missing or wrong-location sources, rejects bad identifiers | `test_ge_mart.ProvisionerTest` |
 | Daily cost: `None` when billing is not connected or the day is outside the exported range; unit costs `None` on a 0 or unknown denominator | `test_ge_mart.DailyCostJoinTest` |
-| **Dashboard enhancements are honest and safe.** Fleet health follows the documented thresholds; billed spend, month to date and run-rate are `None` without billed days; missing values sort last; CSV cells are formula-guarded; only https Cloud Console links open; users show as LDAP; the dark theme is applied before first paint, follows the MCP host and never reaches print; the inlined assets cannot break out of their tags and parse in Node | `test_dashboard_enhancements.py` (`DashboardEnhancementLogicTest`, `DashboardEnhancementSafetyTest`, `DashboardAssetInliningTest`, `DashboardScriptsParseTest`) |
+| **Dashboard enhancements are honest and safe.** Fleet health follows the documented thresholds; billed spend, month to date and run-rate are `None` without billed days; missing values sort last; CSV cells are formula-guarded; only https Cloud Console links open; users show as LDAP; the dark theme is applied before first paint, follows the MCP host and never reaches print; command palette search ranks direct matches first; the inlined assets cannot break out of their tags and parse in Node | `test_dashboard_enhancements.py` (`DashboardEnhancementLogicTest`, `DashboardEnhancementSafetyTest`, `DashboardAssetInliningTest`, `DashboardScriptsParseTest`) |
 | **`make preview` is fictional and offline.** The fixture drives a live-mode dashboard with no network call, covers every fleet health state, keeps totals consistent, puts a banner on every page, listens on 127.0.0.1 only and leaves no patches behind | `test_preview_fixture.py` |
 
 ## Adding a test

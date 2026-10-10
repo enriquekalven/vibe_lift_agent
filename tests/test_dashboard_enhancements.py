@@ -71,7 +71,8 @@ class DashboardAssetInliningTest(unittest.TestCase):
   def test_new_dashboard_elements_exist(self):
     for element_id in ('vlFreshChip', 'vlCopyLinkBtn', 'vlHealthStrip', 'vlAttentionBadge', 'vlSpendPanel',
                        'vlSpendKpis', 'vlSpendKpisEst', 'vlSpendChart', 'vlAdoptionPanel', 'vlAdoptionKpis',
-                       'vlAdoptionChart', 'vlDrawer', 'vlDrawerBackdrop', 'vlThemeBtn'):
+                       'vlAdoptionChart', 'vlDrawer', 'vlDrawerBackdrop', 'vlThemeBtn', 'vlPaletteBtn', 'vlPalette',
+                       'vlPaletteBackdrop'):
       self.assertIn(f'id="{element_id}"', self.html, element_id)
 
   def test_live_only_panels_stay_hidden_in_demo_mode(self):
@@ -125,7 +126,11 @@ class DashboardThemeTest(unittest.TestCase):
   def test_dark_theme_is_screen_only(self):
     css = re.sub(r'/\*.*?\*/', '', _CSS, flags=re.S)
     screen = _block(css, '@media screen {')
-    self.assertEqual(css.count('html[data-theme="dark"]'), screen.count('html[data-theme="dark"]'))
+    outside = css
+    while '@media screen {' in outside:  # drop every screen-only block; no dark rule may remain
+      body = _block(outside, '@media screen {')
+      outside = outside.replace('@media screen {' + body + '}', '', 1)
+    self.assertNotIn('data-theme="dark"', outside)
     self.assertIn('color-scheme: dark;', screen)
     for var in ('--bg', '--surface', '--surface-2', '--border', '--input-border', '--text-primary', '--text-secondary'):
       self.assertIn(f'{var}:', _block(screen, 'html[data-theme="dark"] {'), var)
@@ -271,6 +276,19 @@ out.trendMissing = VL.trendTotals(CASES.trend, ['missing']);
 out.runtimeKeys = CASES.runtime_agents.map(VL.runtimeKey);
 out.urls = CASES.urls.map(VL.safeExternalUrl);
 out.users = CASES.users.map(VL.userLabel);
+const palItems = [{title: 'Code Review Copilot', keywords: ['ADK']}, {title: 'Warranty Claims', keywords: ['No-code']},
+                  {title: 'Contract Analyzer'}, {title: 'dev.patel', hideWhenEmpty: true}];
+const titles = function(list) { return list.map(function(i) { return i.title; }); };
+out.palette = {
+  scores: [VL.paletteScore('code', 'Code Review Copilot'), VL.paletteScore('code', 'No-code'),
+           VL.paletteScore('crc', 'Code Review Copilot'), VL.paletteScore('xyz', 'Code Review Copilot'),
+           VL.paletteScore('review code', 'Code Review Copilot'), VL.paletteScore('', 'anything')],
+  code: titles(VL.paletteFilter(palItems, 'code')),
+  dev: titles(VL.paletteFilter(palItems, 'dev')),
+  typo: titles(VL.paletteFilter(palItems, 'cntrct')),
+  empty: titles(VL.paletteFilter(palItems, '')),
+  limit: VL.paletteFilter(palItems, '', 2).length,
+};
 out.theme = [VL.resolveTheme('dark', 'light', 'light'), VL.resolveTheme(null, 'dark', 'light'),
              VL.resolveTheme(null, null, 'dark'), VL.resolveTheme(null, null, 'light'), VL.resolveTheme('x', 'y', 'z')];
 out.prompt = VL.agentPrompt({display_name: 'Code Review Copilot', engine_display_name: 'Acme Intranet Assistant',
@@ -391,6 +409,20 @@ class DashboardEnhancementLogicTest(unittest.TestCase):
 
   def test_users_are_shown_by_ldap(self):
     self.assertEqual(self.out['users'], ['dev.patel', 'maria.lopez', '\u2014', '\u2014', '@x'])
+
+  def test_palette_ranking(self):
+    p = self.out['palette']
+    prefix, word, letters, miss, words, empty = p['scores']
+    self.assertGreater(prefix, word)
+    self.assertGreater(word, words)
+    self.assertGreater(words, letters)
+    self.assertIsNone(miss)
+    self.assertEqual(empty, 0)
+    self.assertEqual(p['code'], ['Code Review Copilot', 'Warranty Claims'])
+    self.assertEqual(p['dev'], ['dev.patel'])  # no letters-in-order noise when something matches directly
+    self.assertEqual(p['typo'], ['Contract Analyzer'])
+    self.assertEqual(p['empty'], ['Code Review Copilot', 'Warranty Claims', 'Contract Analyzer'])
+    self.assertEqual(p['limit'], 2)
 
   def test_theme_resolution_order(self):
     # Saved choice, then the MCP host theme, then the OS setting; anything unknown falls back to light.

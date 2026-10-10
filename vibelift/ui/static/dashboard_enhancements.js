@@ -657,6 +657,7 @@ var VL = (function() {
           resized();
         });
       }
+      st.compactBtn = compactBtn;
       st.bar = h('div', {class: 'vl-tt'}, [
         h('div', {class: 'vl-tt-row'}, [st.search, h('span', {class: 'vl-tt-spacer'}), st.count, compactBtn, st.colsBtn, st.csvBtn]),
         st.facetBox,
@@ -1725,6 +1726,7 @@ var VL = (function() {
 
   function setupKeys() {
     document.addEventListener('keydown', function(ev) {
+      if (ev.key === 'Escape' && paletteOpen()) { closePalette(); return; }
       if (ev.key === 'Escape' && openState) { closeAgent(); return; }
       var tag = ev.target && ev.target.tagName;
       var typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (ev.target && ev.target.isContentEditable);
@@ -1794,6 +1796,303 @@ var VL = (function() {
   }
 
   // ===================================================================================================
+  // Part 11: command palette (Cmd/Ctrl+K): jump to agents, users, sessions, apps, time ranges, actions
+  // ===================================================================================================
+  // Ranks text against a query: exact > prefix > word start > substring > all words > letters in order.
+  // Returns null when the text does not match.
+  function vlPaletteScore(query, text) {
+    var q = String(query === null || query === undefined ? '' : query).trim().toLowerCase();
+    var t = String(text === null || text === undefined ? '' : text).toLowerCase();
+    if (!q) return 0;
+    if (!t) return null;
+    if (t === q) return 1000;
+    if (t.indexOf(q) === 0) return 800 - Math.min(t.length, 100) / 10;
+    var spaced = ' ' + t.replace(/[^a-z0-9@]+/g, ' ');
+    if (spaced.indexOf(' ' + q) >= 0) return 600 - spaced.indexOf(' ' + q) / 10;
+    var at = t.indexOf(q);
+    if (at >= 0) return 400 - Math.min(at, 100) / 10;
+    var words = q.split(/\s+/).filter(Boolean);
+    if (words.length > 1 && words.every(function(w) { return t.indexOf(w) >= 0; })) return 300;
+    var pos = -1;
+    var gaps = 0;
+    for (var k = 0; k < q.length; k++) {
+      if (q[k] === ' ') continue;
+      var next = t.indexOf(q[k], pos + 1);
+      if (next < 0) return null;
+      if (pos >= 0) gaps += next - pos - 1;
+      pos = next;
+    }
+    return Math.max(1, 200 - gaps);
+  }
+  // items: [{title, keywords?, boost?, hideWhenEmpty?}]; returns the matching items, best first.
+  function vlPaletteFilter(items, query, limit) {
+    var q = String(query === null || query === undefined ? '' : query).trim();
+    var scored = [];
+    (items || []).forEach(function(it, idx) {
+      if (!q && it.hideWhenEmpty) return;
+      var best = null;
+      [it.title].concat(it.keywords || []).forEach(function(text) {
+        var sc = vlPaletteScore(q, text);
+        if (sc !== null && (best === null || sc > best)) best = sc;
+      });
+      if (best === null) return;
+      scored.push({item: it, base: best, score: best + (q ? (it.boost || 0) : 0), idx: idx});
+    });
+    // Letters-in-order matches only help with typos: drop them when something matches directly.
+    var direct = scored.some(function(x) { return x.base >= 300; });
+    if (direct) scored = scored.filter(function(x) { return x.base >= 300; });
+    scored.sort(function(a, b) { return (b.score - a.score) || (a.idx - b.idx); });
+    return scored.slice(0, pick(limit, 60)).map(function(x) { return x.item; });
+  }
+
+  var palette = null;  // {root, input, list, items, shown, active, opener}
+  function isMac() { try { return /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || ''); } catch (e) { return false; } }
+  function clickById(id) { var b = byId(id); if (b) b.click(); }
+  function visible(node) { return !!(node && node.offsetParent !== null); }
+  function selectOption(id, value) {
+    var sel = byId(id);
+    if (!sel) return;
+    sel.value = value;
+    sel.dispatchEvent(new Event('change', {bubbles: true}));
+  }
+  function revealTable(tbodyId) {
+    var body = byId(tbodyId);
+    var panel = body && body.closest('.panel');
+    if (panel && panel.scrollIntoView) panel.scrollIntoView({block: 'start'});
+  }
+
+  function paletteItems() {
+    var items = [];
+    var st = state() || {};
+    var fl = rawFleet() || {};
+    // Tabs that are visible right now (advanced and simulator tabs only when shown).
+    Array.prototype.forEach.call(document.querySelectorAll('.tabs-bar .tab-btn'), function(btn) {
+      if (!visible(btn) || btn.classList.contains('active')) return;
+      var idx = Number(String(btn.id || '').replace('tabBtn', ''));
+      var label = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+      items.push({kind: 'Go to', group: 'Go to', title: label, keywords: ['tab ' + label, 'go ' + label], boost: 40,
+                  run: function() { try { switchTab(idx); } catch (e) { /* not ready */ } }});
+    });
+    var agents = Array.isArray(fl.agents) ? fl.agents.slice() : [];
+    var counts = vlHealthCounts(agents);
+    HEALTH_LEVELS.forEach(function(l) {
+      if (!counts[l.id]) return;
+      items.push({kind: 'Show', group: 'Show', title: 'Show ' + l.label.toLowerCase() + ' agents',
+                  sub: counts[l.id] + (counts[l.id] === 1 ? ' agent' : ' agents'), keywords: ['health ' + l.label, 'filter ' + l.label],
+                  dot: l.id, boost: l.rank <= 2 ? 20 : 0, hideWhenEmpty: l.rank > 2,  // problems first; the rest on search
+                  run: function() { focusAgents({health: l.id}); }});
+    });
+    agents.sort(function(a, b) { return vlHealth(a).rank - vlHealth(b).rank; });
+    agents.forEach(function(a) {
+      var hl = vlHealth(a);
+      var b = a.backend || {};
+      items.push({kind: 'Agent', group: 'Agents', title: String(a.display_name || a.agent_id || DASH), dot: hl.id,
+                  sub: [hl.label, a.engine_display_name || a.engine_id, TYPE_LABELS[a.type] || a.type].filter(Boolean).join(' \u00b7 '),
+                  keywords: [a.agent_id, a.engine_display_name, a.type_label, b.service, b.reasoning_engine_id].concat(b.models || []),
+                  boost: 30, run: function() { openAgent(a); }});
+    });
+    var scope = byId('geScopeSelect');
+    if (scope) {
+      Array.prototype.forEach.call(scope.options, function(opt) {
+        if (opt.value === scope.value) return;
+        items.push({kind: 'App', group: 'Apps & regions', title: opt.textContent, sub: 'Show only this scope',
+                    keywords: ['scope', 'app', 'region'], run: function() { selectOption('geScopeSelect', opt.value); }});
+      });
+    }
+    var win = byId('fleetWindow');
+    if (win) {
+      Array.prototype.forEach.call(win.options, function(opt) {
+        if (opt.value === win.value) return;
+        items.push({kind: 'Time range', group: 'Time range', title: opt.textContent, keywords: ['time range', 'window', 'period'],
+                    run: function() { selectOption('fleetWindow', opt.value); }});
+      });
+    }
+    var uc = st.user_centric || {};
+    (Array.isArray(uc.power_users_ldap) ? uc.power_users_ldap : []).forEach(function(u) {
+      var ldap = u.user_ldap || vlUserLabel(u.user_email);
+      if (!ldap || ldap === DASH) return;
+      items.push({kind: 'User', group: 'Users', title: ldap, sub: u.primary_agent ? 'Mostly ' + u.primary_agent : 'Top user',
+                  keywords: [u.department, u.primary_agent], hideWhenEmpty: true,
+                  run: function() { try { switchTab(4); } catch (e) { return; } setTableQuery('powerUsersBody', ldap); revealTable('powerUsersBody'); }});
+    });
+    (Array.isArray(uc.ge_sessions) ? uc.ge_sessions : []).slice(0, 80).forEach(function(se) {
+      var sid = String(se.session_id || '');
+      if (!sid) return;
+      items.push({kind: 'Session', group: 'Sessions', title: 'Session \u2026' + sid.slice(-8),
+                  sub: [vlUserLabel(se.user_email), se.agent_name, se.session_end ? fmtAgo(se.session_end) : null].filter(function(x) { return x && x !== DASH; }).join(' \u00b7 '),
+                  keywords: [sid, vlUserLabel(se.user_email), se.agent_name], hideWhenEmpty: true,
+                  run: function() { try { switchTab(4); } catch (e) { return; } setTableQuery('geSessionsBody', sid); revealTable('geSessionsBody'); }});
+    });
+    var dark = currentTheme() === 'dark';
+    var actions = [
+      {title: 'Refresh data', keywords: ['reload', 'sync'], run: function() { clickById('syncGcpBtn'); }},
+      embedded() ? null : {title: 'Copy link to this view', keywords: ['share', 'url'], run: function() { clickById('vlCopyLinkBtn'); }},
+      {title: 'Export PDF', keywords: ['print', 'report', 'download'], run: function() { clickById('exportPdfBtn'); }},
+      {title: dark ? 'Use the light theme' : 'Use the dark theme', keywords: ['theme', 'dark mode', 'light mode', 'appearance'],
+       run: function() { setTheme(dark ? 'light' : 'dark'); }},
+      themeChoice ? {title: embedded() ? 'Match the Gemini Enterprise theme' : 'Match the system theme', keywords: ['theme', 'auto'],
+                     run: function() { setTheme(null); }} : null,
+      tables.fleetAgentsBody && tables.fleetAgentsBody.compactBtn ? {
+        title: tables.fleetAgentsBody.compactBtn.getAttribute('aria-pressed') === 'true' ? 'Show full agent rows' : 'Use compact agent rows',
+        keywords: ['compact', 'density', 'rows'], run: function() { tables.fleetAgentsBody.compactBtn.click(); }} : null,
+      byId('advancedToggleBtn') ? {title: byId('advancedToggleBtn').getAttribute('aria-pressed') === 'true' ? 'Hide advanced tabs' : 'Show advanced tabs',
+                                   keywords: ['advanced', 'optimizer', 'sdk'], run: function() { clickById('advancedToggleBtn'); }} : null,
+      embedded() && byId('btnModeFullscreen') ? {title: 'Toggle fullscreen', keywords: ['side panel', 'expand'], run: function() { clickById('btnModeFullscreen'); }} : null,
+      byId('vlSpendPanel') ? {title: 'Set the monthly AI budget', keywords: ['budget', 'cost', 'spend'],
+                              run: function() { try { switchTab(3); } catch (e) { return; } toggleBudgetForm(true); revealTable('vlSpendKpis'); }} : null,
+    ];
+    actions.forEach(function(a) {
+      if (!a) return;
+      items.push({kind: 'Action', group: 'Actions', title: a.title, keywords: a.keywords, boost: 10, run: a.run});
+    });
+    return items;
+  }
+
+  var PALETTE_GROUPS = ['Go to', 'Show', 'Actions', 'Agents', 'Apps & regions', 'Time range'];
+  function paletteVisibleItems(query) {
+    var items = palette.items;
+    if (String(query || '').trim()) return vlPaletteFilter(items, query, 60);
+    // Empty query: a few items per group, in a fixed group order.
+    var out = [];
+    PALETTE_GROUPS.forEach(function(g) {
+      var groupItems = items.filter(function(it) { return it.group === g && !it.hideWhenEmpty; });
+      out = out.concat(groupItems.slice(0, g === 'Agents' ? 8 : 6));
+    });
+    return out;
+  }
+  function renderPaletteList() {
+    var q = palette.input.value;
+    var shown = paletteVisibleItems(q);
+    palette.shown = shown;
+    palette.active = shown.length ? Math.min(palette.active, shown.length - 1) : -1;
+    var kids = [];
+    var lastGroup = null;
+    var grouped = !String(q).trim();
+    shown.forEach(function(it, i) {
+      if (grouped && it.group !== lastGroup) {
+        kids.push(h('li', {class: 'vl-pal-group', role: 'presentation'}, [it.group]));
+        lastGroup = it.group;
+      }
+      var li = h('li', {id: 'vlPalOpt' + i, class: 'vl-pal-item' + (i === palette.active ? ' vl-pal-active' : ''), role: 'option',
+                        'aria-selected': i === palette.active ? 'true' : 'false'}, [
+        it.dot ? h('span', {class: 'vl-dot vl-dot-' + it.dot, 'aria-hidden': 'true'}) : h('span', {class: 'vl-pal-bullet', 'aria-hidden': 'true'}),
+        h('span', {class: 'vl-pal-title'}, [it.title]),
+        it.sub ? h('span', {class: 'vl-pal-sub'}, [it.sub]) : null,
+        h('span', {class: 'vl-pal-kind'}, [it.kind]),
+      ]);
+      li.addEventListener('mousemove', function() { if (palette.active !== i) { palette.active = i; markActive(); } });
+      li.addEventListener('click', function() { runPaletteItem(i); });
+      kids.push(li);
+    });
+    if (!shown.length) kids.push(h('li', {class: 'vl-pal-empty', role: 'presentation'}, ['No matches for \u201c' + String(q).trim() + '\u201d.']));
+    setKids(palette.list, kids);
+    markActive();
+  }
+  function markActive() {
+    Array.prototype.forEach.call(palette.list.querySelectorAll('.vl-pal-item'), function(li) {
+      var on = li.id === 'vlPalOpt' + palette.active;
+      li.classList.toggle('vl-pal-active', on);
+      li.setAttribute('aria-selected', on ? 'true' : 'false');
+      if (on && li.scrollIntoView) li.scrollIntoView({block: 'nearest'});
+    });
+    if (palette.active >= 0) palette.input.setAttribute('aria-activedescendant', 'vlPalOpt' + palette.active);
+    else palette.input.removeAttribute('aria-activedescendant');
+  }
+  function runPaletteItem(i) {
+    var it = palette && palette.shown[i];
+    if (!it) return;
+    closePalette(true);
+    try { it.run(); } catch (e) { /* the target view is not ready */ }
+  }
+  function buildPalette() {
+    var root = byId('vlPalette');
+    if (!root) return null;
+    var input = h('input', {id: 'vlPaletteInput', class: 'vl-pal-input', type: 'text', role: 'combobox', autocomplete: 'off',
+                            spellcheck: 'false', 'aria-expanded': 'true', 'aria-controls': 'vlPaletteList', 'aria-autocomplete': 'list',
+                            'aria-label': 'Search agents, users, sessions, apps and commands',
+                            placeholder: 'Search agents, users, sessions, apps or commands\u2026'});
+    var list = h('ul', {id: 'vlPaletteList', class: 'vl-pal-list', role: 'listbox', 'aria-label': 'Results'});
+    setKids(root, [
+      h('div', {class: 'vl-pal-head'}, [h('span', {class: 'vl-pal-icon', 'aria-hidden': 'true'}, ['\u2315']), input,
+                                        h('kbd', {class: 'vl-kbd'}, ['Esc'])]),
+      list,
+      h('div', {class: 'vl-pal-foot', 'aria-hidden': 'true'}, ['\u2191\u2193 move \u00b7 \u21b5 open \u00b7 Esc close \u00b7 ' +
+                                                                 (isMac() ? '\u2318K' : 'Ctrl+K') + ' anywhere']),
+    ]);
+    input.addEventListener('input', function() { palette.active = 0; renderPaletteList(); });
+    input.addEventListener('keydown', function(ev) {
+      var n = palette.shown.length;
+      if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        if (!n) return;
+        palette.active = (palette.active + (ev.key === 'ArrowDown' ? 1 : n - 1)) % n;
+        markActive();
+      } else if (ev.key === 'Home' || ev.key === 'End') {
+        if (!n) return;
+        ev.preventDefault();
+        palette.active = ev.key === 'Home' ? 0 : n - 1;
+        markActive();
+      } else if (ev.key === 'Enter') {
+        ev.preventDefault();
+        runPaletteItem(palette.active);
+      } else if (ev.key === 'Escape') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        closePalette();
+      } else if (ev.key === 'Tab') {
+        ev.preventDefault();  // keep focus in the dialog; the list is driven from the input
+      }
+    });
+    var back = byId('vlPaletteBackdrop');
+    if (back) back.addEventListener('click', function() { closePalette(); });
+    return {root: root, input: input, list: list, items: [], shown: [], active: 0, opener: null};
+  }
+  function openPalette(initialQuery) {
+    if (!palette) palette = buildPalette();
+    if (!palette) return;
+    palette.opener = document.activeElement;
+    palette.items = paletteItems();
+    palette.input.value = initialQuery || '';
+    palette.active = 0;
+    var inline = embedded() && !useDrawer();  // side panel: the iframe is as tall as the page, so no fixed overlay
+    palette.root.classList.toggle('vl-pal-inline', inline);
+    palette.root.classList.remove('hidden');
+    var back = byId('vlPaletteBackdrop');
+    if (back) back.classList.toggle('hidden', inline);
+    var btn = byId('vlPaletteBtn');
+    if (btn) btn.setAttribute('aria-expanded', 'true');
+    renderPaletteList();
+    if (inline && palette.root.scrollIntoView) palette.root.scrollIntoView({block: 'start'});
+    palette.input.focus();
+    resized();
+  }
+  function closePalette(keepFocus) {
+    if (!palette || palette.root.classList.contains('hidden')) return;
+    palette.root.classList.add('hidden');
+    var back = byId('vlPaletteBackdrop');
+    if (back) back.classList.add('hidden');
+    var btn = byId('vlPaletteBtn');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+    if (!keepFocus && palette.opener && palette.opener.focus) palette.opener.focus();
+    resized();
+  }
+  function paletteOpen() { return !!(palette && !palette.root.classList.contains('hidden')); }
+  function setupPalette() {
+    var btn = byId('vlPaletteBtn');
+    if (btn) {
+      var kbd = btn.querySelector('kbd');
+      if (kbd) kbd.textContent = isMac() ? '\u2318K' : 'Ctrl K';
+      btn.addEventListener('click', function() { if (paletteOpen()) closePalette(); else openPalette(); });
+    }
+    document.addEventListener('keydown', function(ev) {
+      if ((ev.metaKey || ev.ctrlKey) && !ev.altKey && !ev.shiftKey && String(ev.key).toLowerCase() === 'k') {
+        ev.preventDefault();
+        if (paletteOpen()) closePalette(); else openPalette();
+      }
+    });
+  }
+
+  // ===================================================================================================
   // Part 10: hooks called by the main script, and mount
   // ===================================================================================================
   function onFleet(fleet) {
@@ -1818,6 +2117,7 @@ var VL = (function() {
 
   function mount() {
     setupTheme();
+    setupPalette();
     setupAria();
     setupKeys();
     var p = urlParams();
@@ -1876,6 +2176,7 @@ var VL = (function() {
     costSummary: vlCostSummary, cacheSavings: vlCacheSavings, spendDelta: vlSpendDelta, adoption: vlAdoption,
     trendTotals: vlTrendTotals, runtimeKey: vlRuntimeKey, agentPrompt: vlAgentPrompt, safeExternalUrl: safeExternalUrl, userLabel: vlUserLabel,
     resolveTheme: vlResolveTheme,
+    paletteScore: vlPaletteScore, paletteFilter: vlPaletteFilter,
     // DOM (browser only)
     mount: mount, smartTable: smartTable, setTableQuery: setTableQuery, setTableFacet: setTableFacet,
     renderHealthStrip: renderHealthStrip, agentRowDecorate: agentRowDecorate, healthCell: healthCell, typeCell: typeCell, agentSpark: agentSpark,
@@ -1883,6 +2184,7 @@ var VL = (function() {
     spendDeltaNode: spendDeltaNode, requestsSparkNode: requestsSparkNode, usersSparkNode: usersSparkNode,
     setHostCapabilities: setHostCapabilities, urlWindowHours: urlWindowHours, syncUrl: syncUrl, onTab: onTab,
     setTheme: setTheme, toggleTheme: toggleTheme, setHostTheme: setHostTheme, currentTheme: currentTheme,
+    openPalette: openPalette, closePalette: closePalette,
     onFleet: onFleet, onState: onState, onTraceRow: onTraceRow, focusAgents: focusAgents,
   };
   return api;
