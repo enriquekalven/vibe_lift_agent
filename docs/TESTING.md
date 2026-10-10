@@ -1,6 +1,6 @@
 # Testing
 
-345 tests across 16 files. They run offline: `GOOGLE_APPLICATION_CREDENTIALS` points at a file that does not
+384 tests across 18 files. They run offline: `GOOGLE_APPLICATION_CREDENTIALS` points at a file that does not
 exist, and every Google Cloud API is replaced by an in-process fake (`FakeGoogleApi` in
 [`tests/test_fleet.py`](../tests/test_fleet.py)), so no live project is touched.
 
@@ -56,13 +56,15 @@ is shown as unknown, never as an invented value. These tests enforce it.
 | GE mart: inference tokens attached to one turn per trace (no fan-out); stage defects stay fixed | `test_ge_mart.TemplateDefectFixTest` |
 | GE mart: provisioner renders every view, stubs missing or wrong-location sources, rejects bad identifiers | `test_ge_mart.ProvisionerTest` |
 | Daily cost: `None` when billing is not connected or the day is outside the exported range; unit costs `None` on a 0 or unknown denominator | `test_ge_mart.DailyCostJoinTest` |
+| **Dashboard enhancements are honest and safe.** Fleet health follows the documented thresholds; billed spend, month to date and run-rate are `None` without billed days; missing values sort last; CSV cells are formula-guarded; only https Cloud Console links open; users show as LDAP; the inlined assets cannot break out of their tags and parse in Node | `test_dashboard_enhancements.py` (`DashboardEnhancementLogicTest`, `DashboardEnhancementSafetyTest`, `DashboardAssetInliningTest`, `DashboardScriptsParseTest`) |
+| **`make preview` is fictional and offline.** The fixture drives a live-mode dashboard with no network call, covers every fleet health state, keeps totals consistent, puts a banner on every page, listens on 127.0.0.1 only and leaves no patches behind | `test_preview_fixture.py` |
 
 ## Adding a test
 
 Put it in the file for the module it covers: `test_fleet.py` (collection and inventory),
 `test_live_data_sources.py` (tokens, registrations, live FinOps, validator live checks),
 `test_honest_metrics.py` (billing, judge, live analytics, partition pruning & FinOps safeguards), `test_ge_mart.py` (GE mart provisioner, SQL
-templates, mart readers, daily cost join), `test_prompt_xray.py` (Prompt Cache X-Ray), `test_session_drilldown.py` (session turn drilldowns), `test_sme_eval.py` (30-check SME rubric & rating ledger), `test_trace_logging.py` (trace logging switch), `test_ingest_validation.py` (ingest validation and dead letters), `test_simulator_labels.py` (simulator labels), `test_cost_visibility.py` (billing errors and per-user estimates), `test_nl2sql_and_pricing.py` (plain-English search, pricing, dashboard headers), `test_no_invented_values.py` (no guessed prices, calculator inputs or UI fallbacks), `test_docs_integrity.py` (docs match the code), `test_full_coverage.py` (unit coverage), `test_vibelift.py` (HTTP, MCP, UI, deploy config).
+templates, mart readers, daily cost join), `test_prompt_xray.py` (Prompt Cache X-Ray), `test_session_drilldown.py` (session turn drilldowns), `test_sme_eval.py` (30-check SME rubric & rating ledger), `test_trace_logging.py` (trace logging switch), `test_ingest_validation.py` (ingest validation and dead letters), `test_simulator_labels.py` (simulator labels), `test_cost_visibility.py` (billing errors and per-user estimates), `test_nl2sql_and_pricing.py` (plain-English search, pricing, dashboard headers), `test_no_invented_values.py` (no guessed prices, calculator inputs or UI fallbacks), `test_docs_integrity.py` (docs match the code), `test_dashboard_enhancements.py` (dashboard health, smart tables, spend overview, adoption, asset inlining), `test_preview_fixture.py` (`make preview` fixture), `test_full_coverage.py` (unit coverage), `test_vibelift.py` (HTTP, MCP, UI, deploy config).
 When you add or remove a test, update the count on the first line; `test_docs_integrity.py` checks it.
 Any new dashboard number should come with a test showing it is `None` (not `0`) when its source is missing.
 

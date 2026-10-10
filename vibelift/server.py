@@ -47,11 +47,12 @@ PROMPT_XRAY_LIVE_ENV = 'VIBELIFT_PROMPT_XRAY_LIVE'
 # the startup probe budget in deploy/cloud_run_service.yaml (2 s + 6 x 5 s).
 STARTUP_INSIGHTS_TIMEOUT_S = 15.0
 
-# HTTP headers for the dashboard HTML (/, /ui, /app). The page is self-contained: one inline script,
-# inline onclick handlers and inline styles, no external scripts, styles, fonts or images, and every
-# fetch goes to the same origin. 'unsafe-inline' is needed for the inline script and handlers. The
-# Gemini Enterprise side panel gets the HTML through MCP resources/read, so its CSP is the MCP
-# resource's _meta.ui.csp (mcp_server.py), not these headers.
+# HTTP headers for the dashboard HTML (/, /ui, /app). The page is self-contained: inline scripts (the
+# enhancement module, then the main script), inline onclick handlers and inline styles, no external
+# scripts, styles, fonts or images, and every fetch goes to the same origin. 'unsafe-inline' is needed
+# for the inline scripts and handlers. The Gemini Enterprise side panel gets the HTML through MCP
+# resources/read, so its CSP is the MCP resource's _meta.ui.csp (mcp_server.py), not these headers.
+# TODO(security): drop 'unsafe-inline' (script hashes or nonces) once the inline onclick handlers are removed.
 DASHBOARD_SECURITY_HEADERS: Mapping[str, str] = {
     'Content-Security-Policy': (
         "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "

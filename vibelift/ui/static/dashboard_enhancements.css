@@ -1,0 +1,162 @@
+/* VibeLift dashboard enhancements (smart tables, health, agent detail, spend overview, adoption). */
+
+/* ---- Smart table toolbar, sorting, paging ---- */
+.vl-tt { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 10px; }
+.vl-tt-row { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; }
+.vl-tt .btn[aria-pressed="true"] { background: #0f172a; color: #fff; border-color: #0f172a; }
+.vl-tt-search { flex: 0 1 340px; min-width: 200px; font: inherit; font-size: 12.5px; padding: 6px 10px;
+  border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; color: var(--text-primary); }
+.vl-tt-search:focus { outline: 2px solid #93c5fd; outline-offset: 0; border-color: #60a5fa; }
+.vl-tt-facets { display: flex; gap: 8px 16px; flex-wrap: wrap; align-items: center; }
+.vl-tt-facets:empty { display: none; }
+.vl-compact > tbody > tr:not(.vl-agent-detail-row) .fleet-agent-desc { display: none; }
+.vl-compact > tbody > tr:not(.vl-agent-detail-row) .trace-row button,
+.vl-compact > tbody > tr:not(.vl-agent-detail-row) .trace-row .trace-confirm,
+.vl-compact > tbody > tr:not(.vl-agent-detail-row) .trace-row .trace-msg { display: none; }
+.vl-compact > tbody > tr:not(.vl-agent-detail-row) .fleet-agent-tags {
+  display: inline-flex; flex-wrap: nowrap; gap: 4px; margin: 4px 4px 0 0; vertical-align: middle; }
+.vl-compact > tbody > tr:not(.vl-agent-detail-row) .fleet-agent-tags .badge { font-size: 10px; padding: 1px 6px; }
+.vl-compact > tbody > tr:not(.vl-agent-detail-row) .fleet-agent-tags .vl-scope-all { display: none; }
+.vl-compact > tbody > tr:not(.vl-agent-detail-row) > td { padding: 7px 8px; }
+.vl-compact > thead > tr > th { padding-left: 8px; padding-right: 8px; }
+.vl-compact > tbody > tr:not(.vl-agent-detail-row) > td:first-child { min-width: 200px; }
+.vl-compact > tbody > tr:not(.vl-agent-detail-row) > td.vl-runs-on { max-width: 150px; }
+.vl-compact > tbody > tr:not(.vl-agent-detail-row) > td.vl-runs-on > div:first-child {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vl-type { white-space: nowrap; }
+.vl-tt-spacer { flex: 1 1 auto; }
+.vl-tt-count { font-size: 11.5px; color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.vl-facet { display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.vl-facet-label { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--text-secondary); margin-right: 2px; }
+.vl-chip { display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 11.5px; font-weight: 600;
+  padding: 3px 9px; border-radius: 99px; border: 1px solid var(--border); background: #fff; color: #334155; cursor: pointer; }
+.vl-chip:hover { background: #f1f5f9; }
+.vl-chip[aria-pressed="true"] { background: #0f172a; border-color: #0f172a; color: #fff; }
+.vl-chip-n { font-family: var(--font-mono); font-size: 10.5px; padding: 0 5px; border-radius: 99px; background: rgba(15,23,42,.07); }
+.vl-chip[aria-pressed="true"] .vl-chip-n { background: rgba(255,255,255,.18); }
+th.vl-sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+th.vl-sortable:hover { color: var(--text-primary); }
+th.vl-sortable::after { content: '\2195'; opacity: .35; margin-left: 4px; font-size: 10px; }
+th.vl-sortable[aria-sort="ascending"]::after { content: '\25B2'; opacity: .9; }
+th.vl-sortable[aria-sort="descending"]::after { content: '\25BC'; opacity: .9; }
+th.vl-sortable:focus-visible { outline: 2px solid #93c5fd; outline-offset: -2px; }
+.vl-row-filtered, .vl-row-paged { display: none; }
+.vl-col-hidden { display: none; }
+.vl-pager { display: flex; align-items: center; gap: 8px; justify-content: flex-end; margin: 8px 0 2px; font-size: 12px; color: var(--text-secondary); }
+.vl-pager-size { font: inherit; font-size: 12px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; background: #fff; }
+tr.vl-row-click { cursor: pointer; }
+tr.vl-row-click:hover > td { background: #f8fafc; }
+tr.vl-row-click:focus-visible { outline: 2px solid #93c5fd; outline-offset: -2px; }
+tr.vl-row-open > td { background: #eff6ff; }
+
+/* ---- Health ---- */
+.vl-health { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; padding: 2px 9px 2px 7px;
+  border-radius: 99px; border: 1px solid transparent; white-space: nowrap; }
+.vl-health::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.vl-h-failing { background: #fef2f2; color: #b91c1c; border-color: #fecaca; }
+.vl-h-broken { background: #fff1f2; color: #9f1239; border-color: #fecdd3; }
+.vl-h-degraded { background: #fffbeb; color: #b45309; border-color: #fde68a; }
+.vl-h-healthy { background: #f0fdf4; color: #15803d; border-color: #bbf7d0; }
+.vl-h-idle { background: #f8fafc; color: #475569; border-color: #e2e8f0; }
+.vl-h-disabled { background: #f8fafc; color: #64748b; border-color: #e2e8f0; }
+.vl-h-unknown { background: #f8fafc; color: #94a3b8; border-color: #e2e8f0; }
+.vl-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #94a3b8; }
+.vl-dot-failing { background: #dc2626; } .vl-dot-broken { background: #be123c; } .vl-dot-degraded { background: #f59e0b; }
+.vl-dot-healthy { background: #16a34a; } .vl-dot-idle { background: #64748b; } .vl-dot-disabled { background: #94a3b8; }
+.vl-dot-unknown { background: #cbd5e1; }
+.vl-strip { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; }
+.vl-strip-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--text-secondary); margin-right: 4px; }
+.vl-strip-rules { margin-left: auto; font-size: 11.5px; color: var(--text-secondary); text-decoration: underline dotted; cursor: help; }
+
+/* ---- KPI context ---- */
+.vl-delta { display: inline-block; margin-top: 6px; font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 6px; }
+.vl-delta-up { background: #fffbeb; color: #b45309; }
+.vl-delta-down { background: #f0fdf4; color: #15803d; }
+.vl-delta-flat { background: #f1f5f9; color: #475569; }
+.vl-kpi-spark { display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+.vl-kpi-spark-note { font-size: 11px; color: var(--text-secondary); }
+.vl-spark { display: block; overflow: visible; }
+td .vl-spark { margin-top: 3px; }
+.kpi-card.vl-kpi-ok { border-left: 3px solid #16a34a; }
+.kpi-card.vl-kpi-warn { border-left: 3px solid #f59e0b; }
+.kpi-card.vl-kpi-bad { border-left: 3px solid #dc2626; }
+.vl-progress { position: relative; height: 8px; border-radius: 99px; background: #e2e8f0; margin: 8px 0; overflow: visible; }
+.vl-progress-used { height: 100%; border-radius: 99px; background: #2563eb; }
+.vl-kpi-warn .vl-progress-used { background: #f59e0b; }
+.vl-kpi-bad .vl-progress-used { background: #dc2626; }
+.vl-progress-proj { position: absolute; top: -3px; width: 2px; height: 14px; background: #0f172a; border-radius: 1px; }
+.vl-budget-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: #f8fafc; border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; font-size: 12.5px; }
+.vl-budget-form input { font: inherit; font-size: 12.5px; width: 130px; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 6px; margin-left: 6px; }
+.vl-chart { width: 100%; height: 210px; display: block; }
+.vl-chart text { font-size: 10px; fill: #64748b; font-family: var(--font-mono); }
+.vl-chart text.vl-axis-r { fill: #059669; }
+.vl-chart text.vl-ref { fill: #b45309; font-weight: 600; }
+
+/* ---- Needs attention ---- */
+.attention-list li.vl-att-click { cursor: pointer; border-radius: 6px; padding-left: 6px; padding-right: 6px; }
+.attention-list li.vl-att-click:hover, .attention-list li.vl-att-click:focus-visible { background: #f8fafc; outline: none; }
+.vl-att-go { margin-left: auto; flex: none; font-size: 11.5px; font-weight: 600; color: #2563eb; white-space: nowrap; }
+
+/* ---- Freshness ---- */
+.vl-fresh { gap: 7px; font-size: 11.5px; padding: 6px 10px; }
+.vl-fresh-dot { width: 8px; height: 8px; border-radius: 50%; background: #cbd5e1; display: inline-block; }
+.vl-fresh-ok .vl-fresh-dot { background: #16a34a; box-shadow: 0 0 0 3px rgba(22,163,74,.15); }
+.vl-fresh-warn .vl-fresh-dot { background: #f59e0b; }
+.vl-fresh-bad .vl-fresh-dot { background: #dc2626; }
+
+/* ---- Agent detail (drawer and inline) ---- */
+.vl-backdrop { position: fixed; inset: 0; background: rgba(15,23,42,.32); z-index: 60; }
+.vl-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(640px, 100vw); background: #fff; z-index: 61;
+  box-shadow: -12px 0 32px rgba(15,23,42,.18); overflow-y: auto; padding: 18px 20px 28px; outline: none; }
+body.vl-drawer-open { overflow: hidden; }
+tr.vl-agent-detail-row > td { background: #f8fafc; padding: 14px 16px; border-bottom: 2px solid #bfdbfe; }
+.vl-agent-detail { font-size: 12.5px; color: var(--text-primary); }
+/* The detail row spans every column of a table that scrolls sideways in the side panel: keep the
+   content pinned to the visible width instead of the full table width. */
+tr.vl-agent-detail-row .vl-agent-detail { position: sticky; left: 0; max-width: calc(100vw - 72px); }
+.vl-mode-inline { max-width: 1100px; }
+.vl-d-head { display: flex; gap: 12px; justify-content: space-between; align-items: flex-start; flex-wrap: wrap;
+  padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.vl-d-title { font-size: 18px; font-weight: 700; margin: 0; letter-spacing: -.2px; }
+.vl-d-sub { font-size: 12px; color: var(--text-secondary); margin-top: 3px; }
+.vl-d-badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.vl-d-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.vl-d-desc { margin: 10px 0 0; color: var(--text-secondary); }
+.vl-d-sec { margin-top: 16px; }
+.vl-d-sec h3 { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; color: var(--text-secondary); margin: 0 0 8px; }
+.vl-sec-health { border-radius: 8px; padding: 10px 12px; border: 1px solid var(--border); }
+.vl-sec-failing, .vl-sec-broken { background: #fef2f2; border-color: #fecaca; }
+.vl-sec-degraded { background: #fffbeb; border-color: #fde68a; }
+.vl-sec-healthy { background: #f0fdf4; border-color: #bbf7d0; }
+.vl-reasons { margin: 0 0 0 18px; padding: 0; line-height: 1.55; }
+.vl-d-note { font-size: 11.5px; color: var(--text-secondary); margin-top: 6px; line-height: 1.5; }
+.vl-d-row { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-top: 8px; }
+.vl-minis { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
+.vl-mini { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: #fff; }
+.vl-mini-label { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; color: var(--text-secondary); }
+.vl-mini-value { font-size: 16px; font-weight: 700; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vl-mini-sub { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+.vl-kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 12px; margin: 0; }
+.vl-kv dt { color: var(--text-secondary); font-size: 12px; }
+.vl-kv dd { margin: 0; word-break: break-word; overflow-wrap: anywhere; }
+.vl-mini-table { width: 100%; font-size: 12px; }
+.vl-mini-table th { font-size: 10.5px; }
+.vl-mini-table td, .vl-mini-table th { padding: 6px 8px; }
+.vl-topusers { margin-top: 8px; font-size: 12px; color: var(--text-secondary); }
+.vl-links { display: flex; gap: 6px; flex-wrap: wrap; }
+.vl-agent-detail .trend-svg { height: 150px; }
+.vl-kpi-group { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
+  color: var(--text-secondary); margin: 6px 0 8px; }
+.vl-kpi-group:empty { display: none; }
+.kpi-grid + .vl-kpi-group { margin-top: 16px; }
+
+@media (max-width: 720px) {
+  .vl-kv { grid-template-columns: 1fr; }
+  .vl-tt-search { flex-basis: 100%; }
+}
+@media print {
+  .vl-tt, .vl-pager, .vl-drawer, .vl-backdrop, .vl-strip-rules, .vl-att-go, .vl-fresh { display: none !important; }
+  .vl-row-paged { display: table-row !important; }
+}

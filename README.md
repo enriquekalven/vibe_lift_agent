@@ -98,6 +98,8 @@ flowchart LR
 
 The dashboard has 4 basic tabs (**Overview**, **Agents**, **Cost**, **Users**) and 3 advanced tabs (**Goals & Metrics**, **Optimizer & Testing**, **SDK & Tools**). When it is connected to a real project, panels that run on example inputs are hidden.
 
+Across tabs, a freshness chip shows how old the data is ("Live · updated 10 s ago"), **Copy link** shares the current view (the URL keeps the tab, app scope, time range, agent search and open agent), and the keyboard works: `/` focuses the search box of the current table, `Esc` closes the agent detail. These features live in [vibelift/ui/static/dashboard_enhancements.js](vibelift/ui/static/dashboard_enhancements.js), which is inlined into the same self-contained HTML.
+
 ### 1. Live Gemini Enterprise agent fleet (Agents tab)
 - **Multi-region Discovery Engine inventory**: lists every agent in the configured Gemini Enterprise apps (`VIBELIFT_GE_ENGINES`; `auto` scans `global`, `us` and `eu`) across all assistants and pages. With `VIBELIFT_DISCOVER_UNREGISTERED`, it also finds standalone Agent Engine, Cloud Run and GKE workloads.
 - **Joined Cloud telemetry**:
@@ -107,10 +109,15 @@ The dashboard has 4 basic tabs (**Overview**, **Agents**, **Cost**, **Users**) a
 - **Project-wide model usage**: Vertex AI publisher token and invocation metrics (`publisher/online_serving/*`) next to Gemini Enterprise `StreamAssist` traffic. Models without a rate card stay unpriced instead of getting a guessed price.
 - **No synthetic fallbacks in the collectors**: an unavailable source returns `null` metrics and is listed in `source_status` and `errors`. Fleet snapshots are cached in memory (`VIBELIFT_FLEET_TTL_SECONDS=60`) with rate-limited forced refreshes (`VIBELIFT_FLEET_MIN_REFRESH_SECONDS=10`).
 - **Trace logging switch**: turns Discovery Engine trace logging (`observabilityConfig`) on or off for one agent or for all agents. This changes live agent settings, so the MCP tool asks the user to confirm.
+- **Fleet health**: each agent gets a health level computed in the browser from the metrics on screen, with the reasons spelled out. Failing: 5xx on at least 5% of requests (with 20 or more requests), or 20+ LLM calls per request. Degraded: 5xx at least 1%, 4xx at least 20%, p95 at least 15 s, or any 5xx on low traffic. The other levels are Idle, Disabled, Broken (backend missing) and No telemetry. The Overview shows the counts as chips that filter the Agents table, and "Needs attention" ranks server errors by rate instead of marking every 5xx critical.
+- **Agents table**: search, Health and Type filters, sortable columns (missing values always sort last), a request sparkline per agent, a Compact rows toggle that is remembered, and Export CSV (cells that a spreadsheet would run as formulas are neutralized).
+- **Agent detail**: click an agent, or open a link with `?agent=<id>`. It shows why the agent has its health level, its key numbers and request trend, runtime and token sources, trace logging, recent sessions and top users (by LDAP), Cloud Console links (Logs Explorer, Cloud Run metrics, Trace Explorer) and **Copy investigation prompt**.
 
 ### 2. Cost and Users tabs
 - **Token cost estimates**: measured token counts multiplied by the list prices in `RATE_CARDS` ([vibelift/telemetry.py](vibelift/telemetry.py)) for `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3.5-flash`, `gemini-3.6-flash`, `gemini-3.7-flash`, `gemini-3.8-flash`, `gemini-3.1-flash`, `gemini-3.1-flash-lite`, `gemini-3.5-pro`, `gemini-1.5-flash`, `gemini-1.5-pro`, `claude-opus-5-5` and `claude-opus-4-6`. Cards that were checked against the Vertex AI pricing page say so in a code comment. These are estimates, not billed cost.
 - **Billed cost**: read from the Cloud Billing BigQuery export when `VIBELIFT_BILLING_EXPORT_TABLE` is set. When it is not set, or the query fails, the Cost tab shows the status and a fix hint (`invalid_table_name`, `permission_denied`, `schema_mismatch`, `not_found`, `bytes_limit`, `auth`, `timeout`) instead of a number.
+- **Spend overview** (top of the Cost tab): billed AI spend from the Cloud Billing export (days covered, month to date, a run-rate month-end projection labeled as a projection, cost per 1,000 Gemini Enterprise turns), shown apart from the estimates (model spend at list price with the change from the previous period and its biggest driver, and prompt-cache savings). An optional monthly budget is stored only in the browser and adds burn, projected burn and a daily pace line to the chart.
+- **Adoption** (top of the Users tab, real projects): daily active users, sessions per day, turns per session and the failed-turn rate from `vibelift_mart` daily totals. Averages use complete days only.
 - **Per-user and per-session tokens** (Users tab): rollups from `vibelift_mart.fct_sessions` / `fct_turns`, with a list-price estimate per user. Token counts only, no prompt text.
 - **Plain-English search** (advanced, `/api/nl2sql`): the question picks one of 5 fixed `SELECT` templates over `vibelift_mart`; its text never enters the SQL. On a real project the query is checked (one read-only statement over the mart) and run on BigQuery with a 100 MB `maximumBytesBilled` cap, and the drawer shows BigQuery's rows or its error. In demo mode the rows are labeled simulator output.
 - **What-if from observed usage** (`/api/what_if_live`): projects a model switch or a different cache share from the project's measured usage. The parametric what-if and Tokenomics cockpit panels use example inputs, so they are off on a real project.
@@ -130,6 +137,7 @@ The dashboard has 4 basic tabs (**Overview**, **Agents**, **Cost**, **Users**) a
 - **Streamable HTTP MCP server**: MCP `2025-06-18` and `2025-03-26` at `/mcp`, with 9 tools.
 - **Side panel and fullscreen**: opens in the Gemini Enterprise right side panel (`pip`) by default, with a Fullscreen toggle through the MCP AppBridge (`ui/request-display-mode`).
 - **Embedded live state**: every `open_dashboard` call and `resources/read` response embeds a fresh server-side snapshot of `state`, `gcp_telemetry` and `ge_fleet` in the HTML, so the dashboard renders inside the sandboxed iframe without cross-origin calls.
+- **Host integration**: when the host advertises the capability, Cloud Console links open through `ui/open-link`, CSV exports go through `ui/download-file`, **Copy investigation prompt** becomes a `ui/message` to Gemini, and the agent you are looking at is shared through `ui/update-model-context`. When it does not, the dashboard copies the link, CSV or prompt to the clipboard. In the side panel the agent detail opens inline in the table instead of as a drawer.
 
 ---
 
@@ -155,15 +163,19 @@ vibe_lift_agent/
 │   ├── optimizer.py             # Demo simulator (disabled in live mode) and user analytics
 │   ├── long_running_agent.py    # Multi-turn trajectory simulator
 │   └── ui/
-│       ├── template.py          # Dashboard HTML/JS
+│       ├── template.py          # Dashboard HTML and main script; inlines the assets below
 │       ├── logo_asset.py        # Embedded brand assets
-│       └── static/              # Source logo images
+│       └── static/              # Source logo images and dashboard enhancement assets
+│           ├── dashboard_enhancements.js  # Fleet health, smart tables, agent detail, spend overview, adoption
+│           └── dashboard_enhancements.css # Styles for the above
 ├── experiments/
 │   └── prompt_cache_evolve/     # AlphaEvolve experiment evolving propose_cache_friendly_rewrite
 │       ├── initial_program.py   # EVOLVE-BLOCK candidate + 12-pair enterprise prompt benchmark
 │       ├── evaluator.py         # CLI-compatible AlphaEvolve evaluator
 │       ├── test_program.py      # Candidate unit tests
 │       └── test_evaluator.py    # Evaluator unit tests
+├── scripts/
+│   └── preview_dashboard.py     # `make preview`: dashboard on fictional fixture data (no Google Cloud calls)
 ├── tests/                       # Offline test suite (no live API calls; see docs/TESTING.md)
 ├── deploy/
 │   ├── deploy_cloud_run.sh      # Tests, then idempotent Cloud Run + IAM deploy
@@ -300,6 +312,12 @@ See [docs/TESTING.md](docs/TESTING.md) for which test enforces which requirement
 python -m vibelift.server --port=8080
 ```
 Open [http://localhost:8080](http://localhost:8080) to inspect the dashboard locally (`make playground` does the same). Locally the server uses your `gcloud auth application-default login` credentials against `GOOGLE_CLOUD_PROJECT`.
+
+### 4. Preview the Dashboard on Fixture Data
+```bash
+make preview   # http://127.0.0.1:8766
+```
+Serves the real dashboard on a fictional project (`acme-ge-preview`: 14 agents in 3 apps, including failing, degraded, broken, idle, disabled and inventory-only agents, with billing, sessions and daily usage). It needs no Google Cloud project and makes no Google Cloud calls; every page carries a banner saying the data is fictional, and the server only listens on 127.0.0.1. Use it for UI work and for reviewing dashboard changes. The fixtures live in [scripts/preview_dashboard.py](scripts/preview_dashboard.py).
 
 ---
 
@@ -759,7 +777,7 @@ Routes marked **Simulator** act only on the built-in demo profiles. `tests/test_
 | Cloud Billing export is optional per billing account | Requires billing-account export to BigQuery (`VIBELIFT_BILLING_EXPORT_TABLE`) | When unset, the Cost tab reports `not configured` and labels token costs as list-price estimates |
 | In-memory decorator ring buffer is per instance | Decorator events live in memory per Cloud Run instance while rejected ingest payloads are durability-backed by Cloud Pub/Sub (`vibelift-ingest-dlq`) | Structured JSON audit records are also emitted to Cloud Logging (`vibelift.audit_sink`) and queried from BigQuery |
 | Hardcoded list prices | No live Cloud Billing Catalog API sync | Cards checked against the pricing page say so in a comment; models without a card stay unpriced and are counted; runtime compute is reported as usage, not dollars |
-| `'unsafe-inline'` in the dashboard CSP | The page uses an inline script and inline `onclick` handlers | No external origins are allowed; every fetch is same-origin |
+| `'unsafe-inline'` in the dashboard CSP | The page uses inline scripts and inline `onclick` handlers | No external origins are allowed; every fetch is same-origin |
 
 ---
 

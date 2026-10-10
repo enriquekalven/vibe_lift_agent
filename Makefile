@@ -1,5 +1,5 @@
 # VibeLift Agent — Google ADK & Agent Starter Pack Standard Recipes
-.PHONY: install lint test coverage smoke ci playground demo deploy
+.PHONY: install lint test coverage smoke ci playground demo deploy preview
 
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then echo .venv/bin/python; else echo python3; fi)
 OFFLINE_ENV = GOOGLE_APPLICATION_CREDENTIALS=/nonexistent/offline-test-credentials.json GOOGLE_CLOUD_PROJECT=test-project
@@ -30,6 +30,10 @@ playground:
 	PORT=8080 $(PYTHON) -m vibelift.server --port=8080
 
 demo: playground
+
+# Dashboard on fictional fixture data at http://127.0.0.1:8766 (no Google Cloud calls; bannered as fictional).
+preview:
+	$(PYTHON) scripts/preview_dashboard.py --port 8766
 
 deploy:
 	./deploy/deploy_cloud_run.sh
