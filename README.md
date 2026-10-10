@@ -174,6 +174,8 @@ vibe_lift_agent/
 │       ├── evaluator.py         # CLI-compatible AlphaEvolve evaluator
 │       ├── test_program.py      # Candidate unit tests
 │       └── test_evaluator.py    # Evaluator unit tests
+├── scripts/
+│   └── preview_dashboard.py     # `make preview`: dashboard on fictional fixture data (no Google Cloud calls)
 ├── tests/                       # Offline test suite (no live API calls; see docs/TESTING.md)
 ├── deploy/
 │   ├── deploy_cloud_run.sh      # Tests, then idempotent Cloud Run + IAM deploy
@@ -310,6 +312,12 @@ See [docs/TESTING.md](docs/TESTING.md) for which test enforces which requirement
 python -m vibelift.server --port=8080
 ```
 Open [http://localhost:8080](http://localhost:8080) to inspect the dashboard locally (`make playground` does the same). Locally the server uses your `gcloud auth application-default login` credentials against `GOOGLE_CLOUD_PROJECT`.
+
+### 4. Preview the Dashboard on Fixture Data
+```bash
+make preview   # http://127.0.0.1:8766
+```
+Serves the real dashboard on a fictional project (`acme-ge-preview`: 14 agents in 3 apps, including failing, degraded, broken, idle, disabled and inventory-only agents, with billing, sessions and daily usage). It needs no Google Cloud project and makes no Google Cloud calls; every page carries a banner saying the data is fictional, and the server only listens on 127.0.0.1. Use it for UI work and for reviewing dashboard changes. The fixtures live in [scripts/preview_dashboard.py](scripts/preview_dashboard.py).
 
 ---
 
