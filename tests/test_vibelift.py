@@ -705,7 +705,7 @@ def _element_ancestry(html: str) -> dict[str, tuple[set[str], set[str]]]:
           break
 
   walker = _Walker()
-  walker.feed(html.split('<script', 1)[0])  # markup only; the inline script builds no static ids
+  walker.feed(re.sub(r'<script\b.*?</script>', '', html, flags=re.S))  # markup only; inline scripts build no static ids
   return walker.found
 
 

@@ -356,6 +356,149 @@ var VL = (function() {
     return parts.join(' ');
   }
 
+  // ---- Cloud Monitoring alert policies (pure) ---------------------------------------------------------
+  // Builds alert policies for one agent from the same Cloud Monitoring metrics VibeLift reads, with the
+  // dashboard's health thresholds as defaults. Nothing is created here: the user copies the commands,
+  // reviews them and runs `gcloud monitoring policies create --policy-from-file` (GA) themselves.
+  var ALERT_WINDOWS = [300, 900, 3600];
+  var PROJECT_ID_RE = /^(?:\d{6,20}|[a-z][a-z0-9-]{4,28}[a-z0-9]|[a-z][a-z0-9.-]{0,62}:[a-z][a-z0-9-]{4,28}[a-z0-9])$/;
+  var ENGINE_ID_RE = /^\d{1,30}$/;
+  var SERVICE_NAME_RE = /^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+  var CHANNEL_ID_RE = /^\d{1,30}$/;
+  var CHANNEL_NAME_RE = /^projects\/([^\/\s]+)\/notificationChannels\/(\d{1,30})$/;
+
+  function oneLine(v) { return String(v === null || v === undefined ? '' : v).replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, ' ').trim(); }
+  function alertSlug(name) {
+    var slug = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/g, '');
+    return slug || 'agent';
+  }
+  // The monitored resource behind an agent, or null when it has no per-project runtime metrics.
+  function vlAlertTarget(a, fleetProject) {
+    var b = (a && a.backend) || {};
+    var project = String(b.project || fleetProject || '');
+    if (b.kind === 'agent_engine') {
+      var m = /\/reasoningEngines\/(\d+)$/.exec(String(b.resource || ''));
+      var id = String(b.reasoning_engine_id || (m ? m[1] : ''));
+      return {kind: 'agent_engine', project: project, id: id, label: 'resource.label.reasoning_engine_id',
+              resourceType: 'aiplatform.googleapis.com/ReasoningEngine',
+              requests: 'aiplatform.googleapis.com/reasoning_engine/request_count',
+              latencies: 'aiplatform.googleapis.com/reasoning_engine/request_latencies',
+              describe: 'Agent Engine ' + id + (b.location ? ' (' + oneLine(b.location) + ')' : '')};
+    }
+    if (b.kind === 'cloud_run' && b.service) {
+      return {kind: 'cloud_run', project: project, id: String(b.service), label: 'resource.label.service_name',
+              resourceType: 'cloud_run_revision', requests: 'run.googleapis.com/request_count',
+              latencies: 'run.googleapis.com/request_latencies',
+              describe: 'Cloud Run service ' + oneLine(b.service) + (b.region ? ' (' + oneLine(b.region) + ')' : '')};
+    }
+    return null;
+  }
+  // Smallest evaluation window in which the agent's observed traffic gives at least minRequests requests.
+  function vlAutoAlertWindow(requests, windowHours, minRequests) {
+    var r = num(requests);
+    var hours = num(windowHours);
+    if (r === null || hours === null || hours <= 0) return {seconds: 3600, perWindow: null};
+    var perMinute = r / (hours * 60);
+    for (var i = 0; i < ALERT_WINDOWS.length; i++) {
+      var per = perMinute * ALERT_WINDOWS[i] / 60;
+      if (per >= minRequests) return {seconds: ALERT_WINDOWS[i], perWindow: per};
+    }
+    return {seconds: 3600, perWindow: perMinute * 60};
+  }
+  function vlAlertPolicies(a, opts) {
+    var o = opts || {};
+    var R = HEALTH_RULES;
+    var target = vlAlertTarget(a, o.project);
+    if (!target) {
+      return {ok: false, reason: 'This agent type has no per-project runtime metrics (no-code, Google-managed or Dialogflow agents), so there is nothing to alert on.'};
+    }
+    var include = o.include || {errors: true, latency: true, absence: false};
+    var errorPct = num(o.errorPct);
+    if (errorPct === null) errorPct = R.failing5xxPct;
+    var latencyS = num(o.latencyS);
+    if (latencyS === null) latencyS = R.degradedP95Ms / 1000;
+    var absenceMin = num(o.absenceMin);
+    if (absenceMin === null) absenceMin = 60;
+    var problems = [];
+    if (!PROJECT_ID_RE.test(target.project)) problems.push('The Google Cloud project is unknown or not a valid project ID.');
+    if (target.kind === 'agent_engine' && !ENGINE_ID_RE.test(target.id)) problems.push('The Agent Engine ID is missing or invalid.');
+    if (target.kind === 'cloud_run' && !SERVICE_NAME_RE.test(target.id)) problems.push('The Cloud Run service name is invalid.');
+    if (!include.errors && !include.latency && !include.absence) problems.push('Pick at least one condition.');
+    if (include.errors && !(errorPct > 0 && errorPct <= 100)) problems.push('The server error threshold must be above 0% and at most 100%.');
+    if (include.latency && !(latencyS > 0 && latencyS <= 3600)) problems.push('The latency threshold must be above 0 s and at most 3600 s.');
+    if (include.absence && !(absenceMin >= 5 && absenceMin <= 1440 && Math.round(absenceMin) === absenceMin)) {
+      problems.push('The no-traffic time must be a whole number of minutes from 5 to 1440.');
+    }
+    var channel = null;
+    var ch = String(o.channel === null || o.channel === undefined ? '' : o.channel).trim();
+    if (ch) {
+      var named = CHANNEL_NAME_RE.exec(ch);
+      if (CHANNEL_ID_RE.test(ch)) channel = 'projects/' + target.project + '/notificationChannels/' + ch;
+      else if (named && PROJECT_ID_RE.test(named[1])) channel = ch;
+      else problems.push('The notification channel must be a channel ID or projects/PROJECT/notificationChannels/ID.');
+    }
+    var auto = vlAutoAlertWindow(((a && a.metrics) || {}).requests, o.windowHours, R.minRequestsForRates);
+    var windowS = ALERT_WINDOWS.indexOf(Number(o.windowS)) >= 0 ? Number(o.windowS) : auto.seconds;
+    if (problems.length) return {ok: false, reason: problems.join(' '), problems: problems, target: target, autoWindow: auto};
+
+    var name = oneLine((a && (a.display_name || a.agent_id)) || 'agent');
+    var slug = alertSlug(name);
+    var where = target.describe + ' in project ' + target.project;
+    var winText = windowS >= 3600 ? '1-hour' : (windowS / 60) + '-minute';
+    var base = 'resource.type="' + target.resourceType + '" AND ' + target.label + '="' + target.id + '"';
+    var reqFilter = 'metric.type="' + target.requests + '" AND ' + base;
+    var agg = function(reducer, seconds) {
+      return [{alignmentPeriod: seconds + 's', perSeriesAligner: 'ALIGN_DELTA', crossSeriesReducer: reducer, groupByFields: [target.label]}];
+    };
+    var policies = [];
+    var add = function(key, title, severity, combiner, conditions, doc) {
+      var p = {displayName: 'VibeLift: ' + name + ' \u00b7 ' + title, documentation: {content: doc, mimeType: 'text/markdown'},
+               userLabels: {source: 'vibelift', vibelift_agent: slug}, conditions: conditions, combiner: combiner, enabled: true,
+               severity: severity};
+      if (channel) p.notificationChannels = [channel];
+      policies.push({key: key, file: 'vibelift-' + slug + '-' + key + '.json', policy: p});
+    };
+    if (include.errors) {
+      add('5xx', 'server errors', 'CRITICAL', 'AND', [
+        {displayName: 'Server errors (5xx) above ' + errorPct + '% of requests', conditionThreshold: {
+          filter: reqFilter + ' AND metric.label.response_code_class=starts_with("5")', aggregations: agg('REDUCE_SUM', windowS),
+          denominatorFilter: reqFilter, denominatorAggregations: agg('REDUCE_SUM', windowS),
+          comparison: 'COMPARISON_GT', thresholdValue: errorPct / 100, duration: '0s', trigger: {count: 1},
+          evaluationMissingData: 'EVALUATION_MISSING_DATA_INACTIVE'}},
+        {displayName: 'At least ' + R.minRequestsForRates + ' requests in the window', conditionThreshold: {
+          filter: reqFilter, aggregations: agg('REDUCE_SUM', windowS), comparison: 'COMPARISON_GE',
+          thresholdValue: R.minRequestsForRates, duration: '0s', trigger: {count: 1},
+          evaluationMissingData: 'EVALUATION_MISSING_DATA_INACTIVE'}},
+      ], 'Server errors (5xx) on **' + name + '** (' + where + ') were above ' + errorPct + '% of requests in a ' + winText +
+         ' window with at least ' + R.minRequestsForRates + ' requests. That is the rule VibeLift uses to mark an agent Failing. ' +
+         'Created from the VibeLift dashboard.');
+    }
+    if (include.latency) {
+      add('p95', 'slow responses', 'WARNING', 'OR', [
+        {displayName: 'p95 latency above ' + latencyS + ' s', conditionThreshold: {
+          filter: 'metric.type="' + target.latencies + '" AND ' + base, aggregations: agg('REDUCE_PERCENTILE_95', windowS),
+          comparison: 'COMPARISON_GT', thresholdValue: latencyS * 1000, duration: '0s', trigger: {count: 1},
+          evaluationMissingData: 'EVALUATION_MISSING_DATA_INACTIVE'}},
+      ], 'The 95th percentile latency of **' + name + '** (' + where + ') was above ' + latencyS + ' s in a ' + winText +
+         ' window. VibeLift marks an agent Degraded at ' + (R.degradedP95Ms / 1000) + ' s. Created from the VibeLift dashboard.');
+    }
+    if (include.absence) {
+      add('no-traffic', 'no traffic', 'WARNING', 'OR', [
+        {displayName: 'No requests for ' + absenceMin + ' minutes', conditionAbsent: {
+          filter: reqFilter, aggregations: agg('REDUCE_SUM', 300), duration: (absenceMin * 60) + 's', trigger: {count: 1}}},
+      ], '**' + name + '** (' + where + ') received no requests for ' + absenceMin + ' minutes. Created from the VibeLift dashboard.');
+    }
+    var lines = ['# VibeLift alert policies for "' + name + '": ' + where + '.',
+                 '# Review, then run with gcloud (needs roles/monitoring.alertPolicyEditor). Nothing is created until you run it.'];
+    if (!channel) lines.push('# No notification channel: incidents only show in Cloud Monitoring until you add one.');
+    if (target.kind === 'cloud_run') lines.push('# Cloud Run metrics are per service, so these alerts cover all traffic to ' + target.id + '.');
+    policies.forEach(function(p) {
+      lines.push('', 'cat > ' + p.file + " <<'VIBELIFT_POLICY'", JSON.stringify(p.policy, null, 2), 'VIBELIFT_POLICY',
+                 "gcloud monitoring policies create --project='" + target.project + "' --policy-from-file=" + p.file);
+    });
+    return {ok: true, target: target, windowS: windowS, autoWindow: auto, policies: policies, script: lines.join('\n') + '\n'};
+  }
+
   // ===================================================================================================
   // Part 2: DOM helpers
   // ===================================================================================================
@@ -657,6 +800,7 @@ var VL = (function() {
           resized();
         });
       }
+      st.compactBtn = compactBtn;
       st.bar = h('div', {class: 'vl-tt'}, [
         h('div', {class: 'vl-tt-row'}, [st.search, h('span', {class: 'vl-tt-spacer'}), st.count, compactBtn, st.colsBtn, st.csvBtn]),
         st.facetBox,
@@ -1176,6 +1320,8 @@ var VL = (function() {
       ])]));
     }
 
+    wrap.appendChild(alertSection(a, fl));
+
     var sess = relatedSessions(a);
     if (sess.length) {
       var byUser = {};
@@ -1221,6 +1367,99 @@ var VL = (function() {
     return wrap;
   }
 
+  // ---- Alert policy section (agent detail) -----------------------------------------------------------
+  // The form state lives here so a background refresh of the detail never wipes what the user typed.
+  var alertForm = {agentId: null};
+  function resetAlertForm(id) {
+    alertForm = {agentId: id, open: false, errors: true, latency: true, absence: false,
+                 errorPct: HEALTH_RULES.failing5xxPct, latencyS: HEALTH_RULES.degradedP95Ms / 1000, absenceMin: 60,
+                 windowS: 'auto', channel: ''};
+  }
+  function windowName(seconds) { return seconds >= 3600 ? '1 hour' : (seconds / 60) + ' min'; }
+  function alertSection(a, fl) {
+    var id = a.agent_id || a.resource_name;
+    if (alertForm.agentId !== id) resetAlertForm(id);
+    if (openState && openState.alert) { alertForm.open = true; openState.alert = false; }
+    var hours = num(fl.window_hours);
+    var probe = vlAlertPolicies(a, {project: fl.project_id, windowHours: hours});
+    if (!probe.target) {
+      return section('Alert policy', [h('div', {class: 'vl-d-note'}, [probe.reason])]);
+    }
+    var out = h('pre', {class: 'vl-cmd', tabindex: '0', 'aria-label': 'gcloud commands'});
+    var err = h('div', {class: 'vl-alert-err', role: 'alert'});
+    var copyBtn = h('button', {type: 'button', class: 'btn btn-xs btn-primary'}, ['Copy commands']);
+    var askBtn = hostCan('message') ? h('button', {type: 'button', class: 'btn btn-xs'}, ['Ask Gemini to review']) : null;
+    var current = null;
+    var refresh = function() {
+      current = vlAlertPolicies(a, {project: fl.project_id, windowHours: hours, include: {errors: alertForm.errors, latency: alertForm.latency,
+                                    absence: alertForm.absence}, errorPct: alertForm.errorPct, latencyS: alertForm.latencyS,
+                                    absenceMin: alertForm.absenceMin, windowS: alertForm.windowS, channel: alertForm.channel});
+      out.textContent = current.ok ? current.script : '';
+      out.classList.toggle('hidden', !current.ok);
+      err.textContent = current.ok ? '' : current.reason;
+      err.classList.toggle('hidden', current.ok);
+      copyBtn.disabled = !current.ok;
+      if (askBtn) askBtn.disabled = !current.ok;
+      resized();
+    };
+    var numInput = function(key, step, min, max, label) {
+      var inp = h('input', {type: 'number', class: 'vl-alert-num', step: step, min: min, max: max, value: String(alertForm[key]),
+                            'aria-label': label});
+      inp.addEventListener('input', function() { alertForm[key] = inp.value === '' ? null : Number(inp.value); refresh(); });
+      return inp;
+    };
+    var check = function(key, kids) {
+      var cb = h('input', {type: 'checkbox', checked: alertForm[key] ? true : null});
+      cb.addEventListener('change', function() { alertForm[key] = cb.checked; refresh(); });
+      return h('label', {class: 'vl-alert-row'}, [cb].concat(kids));
+    };
+    var auto = probe.autoWindow || vlAutoAlertWindow((a.metrics || {}).requests, hours, HEALTH_RULES.minRequestsForRates);
+    var winSel = h('select', {class: 'vl-alert-sel', 'aria-label': 'Evaluation window'}, [
+      h('option', {value: 'auto'}, ['Auto: ' + windowName(auto.seconds) + (auto.perWindow !== null ? ' (about ' + intText(auto.perWindow) +
+                                     ' requests per window at the observed rate)' : ' (no traffic measured)')]),
+    ].concat(ALERT_WINDOWS.map(function(sec) { return h('option', {value: String(sec)}, [windowName(sec)]); })));
+    winSel.value = String(alertForm.windowS);
+    winSel.addEventListener('change', function() { alertForm.windowS = winSel.value === 'auto' ? 'auto' : Number(winSel.value); refresh(); });
+    var chan = h('input', {type: 'text', class: 'vl-alert-chan', value: alertForm.channel, spellcheck: 'false', autocomplete: 'off',
+                           placeholder: 'Channel ID or projects/PROJECT/notificationChannels/ID', 'aria-label': 'Notification channel'});
+    chan.addEventListener('input', function() { alertForm.channel = chan.value; refresh(); });
+    copyBtn.addEventListener('click', function() { if (current && current.ok) copyText(current.script, copyBtn); });
+    if (askBtn) {
+      askBtn.addEventListener('click', function() {
+        if (current && current.ok) askAssistant('Review these Cloud Monitoring alert policies for the Gemini Enterprise agent "' +
+          oneLine(a.display_name || id) + '" before I run them. Are the thresholds and windows sensible?\n\n' + current.script, askBtn);
+      });
+    }
+    var form = h('div', {class: 'vl-alert-form' + (alertForm.open ? '' : ' hidden')}, [
+      check('errors', [' Server errors (5xx) above ', numInput('errorPct', '0.5', '0.1', '100', 'Server error threshold, percent'),
+                       ' % of requests, with at least ' + HEALTH_RULES.minRequestsForRates + ' requests in the window']),
+      check('latency', [' p95 latency above ', numInput('latencyS', '1', '1', '3600', 'Latency threshold, seconds'), ' s']),
+      check('absence', [' No requests for ', numInput('absenceMin', '5', '5', '1440', 'No-traffic time, minutes'), ' minutes']),
+      h('div', {class: 'vl-alert-row'}, [h('span', {class: 'vl-alert-lbl'}, ['Window']), winSel]),
+      h('div', {class: 'vl-alert-row'}, [h('span', {class: 'vl-alert-lbl'}, ['Notify']), chan]),
+      err, out,
+      h('div', {class: 'vl-d-row'}, [h('span', {class: 'vl-d-note'}, [
+        'Defaults are the dashboard\u2019s health rules. Nothing is created until you run the commands with gcloud ' +
+        '(roles/monitoring.alertPolicyEditor).']), h('span', {class: 'vl-links'}, [askBtn, copyBtn])]),
+    ]);
+    var toggle = h('button', {type: 'button', class: 'btn btn-xs', 'aria-expanded': alertForm.open ? 'true' : 'false'},
+                   [alertForm.open ? 'Hide' : 'Create alert policy\u2026']);
+    toggle.addEventListener('click', function() {
+      alertForm.open = !alertForm.open;
+      form.classList.toggle('hidden', !alertForm.open);
+      toggle.textContent = alertForm.open ? 'Hide' : 'Create alert policy\u2026';
+      toggle.setAttribute('aria-expanded', alertForm.open ? 'true' : 'false');
+      resized();
+    });
+    refresh();
+    var sec = section('Alert policy', [
+      h('div', {class: 'vl-d-row'}, [h('span', {class: 'vl-d-note'}, ['Cloud Monitoring alerts on ' + probe.target.describe +
+        ', built from the metrics this dashboard reads, as copy-and-run gcloud commands.']), toggle]),
+      form,
+    ], 'vl-alert-sec');
+    return sec;
+  }
+
   // ---- Drawer / inline detail ------------------------------------------------------------------------
   var openState = null;  // {id, mode, opener}
   var pendingAgentId = null;
@@ -1239,15 +1478,20 @@ var VL = (function() {
   }
   function scopedFleet() { try { return lastFleet || geRawFleet; } catch (e) { return null; } }
 
-  function openAgent(a, opener) {
+  function openAgent(a, opener, opts) {
     if (!a) return;
     var id = a.agent_id || a.resource_name;
     var fresh = findAgent(id) || a;
     var mode = useDrawer() ? 'drawer' : 'inline';
-    if (openState && openState.id === id && openState.mode === 'inline' && mode === 'inline') { closeAgent(); return; }
+    var wantAlert = !!(opts && opts.alert);
+    if (!wantAlert && openState && openState.id === id && openState.mode === 'inline' && mode === 'inline') { closeAgent(); return; }
     closeAgent(true);
-    openState = {id: id, mode: mode, opener: opener || document.activeElement};
+    openState = {id: id, mode: mode, opener: opener || document.activeElement, alert: wantAlert};
     renderOpenAgent(fresh);
+    if (wantAlert) {
+      var sec = document.querySelector('.vl-alert-sec');
+      if (sec && sec.scrollIntoView) sec.scrollIntoView({block: 'start'});
+    }
     syncUrl();
     var m = fresh.metrics || {};
     syncContextSoon('VibeLift dashboard: the user is viewing agent "' + (fresh.display_name || id) + '" (' +
@@ -1725,6 +1969,7 @@ var VL = (function() {
 
   function setupKeys() {
     document.addEventListener('keydown', function(ev) {
+      if (ev.key === 'Escape' && paletteOpen()) { closePalette(); return; }
       if (ev.key === 'Escape' && openState) { closeAgent(); return; }
       var tag = ev.target && ev.target.tagName;
       var typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (ev.target && ev.target.isContentEditable);
@@ -1740,6 +1985,362 @@ var VL = (function() {
     if (back) back.addEventListener('click', function() { closeAgent(); });
   }
 
+  // ---- Theme (light / dark) --------------------------------------------------------------------------
+  // The saved choice wins; otherwise the MCP host's theme (when embedded); otherwise the OS setting.
+  // The <head> script applies the same rule before first paint, so dark mode never flashes light.
+  var THEME_KEY = 'vibelift.theme';
+  var themeChoice = null;  // 'light' | 'dark' | null (follow the host or the OS)
+  var hostTheme = null;
+  function vlResolveTheme(choice, host, system) {
+    if (choice === 'light' || choice === 'dark') return choice;
+    if (host === 'light' || host === 'dark') return host;
+    return system === 'dark' ? 'dark' : 'light';
+  }
+  function systemTheme() {
+    try { return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; } catch (e) { return 'light'; }
+  }
+  function currentTheme() { return vlResolveTheme(themeChoice, embedded() ? hostTheme : null, systemTheme()); }
+  function applyTheme() {
+    var theme = currentTheme();
+    document.documentElement.setAttribute('data-theme', theme);
+    var btn = byId('vlThemeBtn');
+    if (btn) {
+      var dark = theme === 'dark';
+      btn.setAttribute('aria-pressed', dark ? 'true' : 'false');
+      btn.textContent = dark ? '\u2600' : '\u263E';
+      btn.title = dark ? 'Switch to the light theme' : 'Switch to the dark theme';
+    }
+  }
+  function setTheme(choice) {
+    themeChoice = choice === 'light' || choice === 'dark' ? choice : null;
+    try {
+      if (themeChoice) localStorage.setItem(THEME_KEY, themeChoice); else localStorage.removeItem(THEME_KEY);
+    } catch (e) { /* storage blocked: the choice lasts for this page only */ }
+    applyTheme();
+  }
+  function toggleTheme() { setTheme(currentTheme() === 'dark' ? 'light' : 'dark'); }
+  function setHostTheme(theme) {
+    hostTheme = theme === 'light' || theme === 'dark' ? theme : null;
+    applyTheme();
+  }
+  function setupTheme() {
+    try {
+      var saved = localStorage.getItem(THEME_KEY);
+      themeChoice = saved === 'light' || saved === 'dark' ? saved : null;
+    } catch (e) { themeChoice = null; }
+    applyTheme();
+    var btn = byId('vlThemeBtn');
+    if (btn) btn.addEventListener('click', toggleTheme);
+    try {
+      var mq = window.matchMedia('(prefers-color-scheme: dark)');
+      var follow = function() { if (!themeChoice) applyTheme(); };
+      if (mq.addEventListener) mq.addEventListener('change', follow); else if (mq.addListener) mq.addListener(follow);
+    } catch (e) { /* no matchMedia */ }
+  }
+
+  // ===================================================================================================
+  // Part 11: command palette (Cmd/Ctrl+K): jump to agents, users, sessions, apps, time ranges, actions
+  // ===================================================================================================
+  // Ranks text against a query: exact > prefix > word start > substring > all words > letters in order.
+  // Returns null when the text does not match.
+  function vlPaletteScore(query, text) {
+    var q = String(query === null || query === undefined ? '' : query).trim().toLowerCase();
+    var t = String(text === null || text === undefined ? '' : text).toLowerCase();
+    if (!q) return 0;
+    if (!t) return null;
+    if (t === q) return 1000;
+    if (t.indexOf(q) === 0) return 800 - Math.min(t.length, 100) / 10;
+    var spaced = ' ' + t.replace(/[^a-z0-9@]+/g, ' ');
+    if (spaced.indexOf(' ' + q) >= 0) return 600 - spaced.indexOf(' ' + q) / 10;
+    var at = t.indexOf(q);
+    if (at >= 0) return 400 - Math.min(at, 100) / 10;
+    var words = q.split(/\s+/).filter(Boolean);
+    if (words.length > 1 && words.every(function(w) { return t.indexOf(w) >= 0; })) return 300;
+    var pos = -1;
+    var gaps = 0;
+    for (var k = 0; k < q.length; k++) {
+      if (q[k] === ' ') continue;
+      var next = t.indexOf(q[k], pos + 1);
+      if (next < 0) return null;
+      if (pos >= 0) gaps += next - pos - 1;
+      pos = next;
+    }
+    return Math.max(1, 200 - gaps);
+  }
+  // items: [{title, keywords?, boost?, hideWhenEmpty?}]; returns the matching items, best first.
+  function vlPaletteFilter(items, query, limit) {
+    var q = String(query === null || query === undefined ? '' : query).trim();
+    var scored = [];
+    (items || []).forEach(function(it, idx) {
+      if (!q && it.hideWhenEmpty) return;
+      var best = null;
+      [it.title].concat(it.keywords || []).forEach(function(text) {
+        var sc = vlPaletteScore(q, text);
+        if (sc !== null && (best === null || sc > best)) best = sc;
+      });
+      if (best === null) return;
+      scored.push({item: it, base: best, score: best + (q ? (it.boost || 0) : 0), idx: idx});
+    });
+    // Letters-in-order matches only help with typos: drop them when something matches directly.
+    var direct = scored.some(function(x) { return x.base >= 300; });
+    if (direct) scored = scored.filter(function(x) { return x.base >= 300; });
+    scored.sort(function(a, b) { return (b.score - a.score) || (a.idx - b.idx); });
+    return scored.slice(0, pick(limit, 60)).map(function(x) { return x.item; });
+  }
+
+  var palette = null;  // {root, input, list, items, shown, active, opener}
+  function isMac() { try { return /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || ''); } catch (e) { return false; } }
+  function clickById(id) { var b = byId(id); if (b) b.click(); }
+  function visible(node) { return !!(node && node.offsetParent !== null); }
+  function selectOption(id, value) {
+    var sel = byId(id);
+    if (!sel) return;
+    sel.value = value;
+    sel.dispatchEvent(new Event('change', {bubbles: true}));
+  }
+  function revealTable(tbodyId) {
+    var body = byId(tbodyId);
+    var panel = body && body.closest('.panel');
+    if (panel && panel.scrollIntoView) panel.scrollIntoView({block: 'start'});
+  }
+
+  function paletteItems() {
+    var items = [];
+    var st = state() || {};
+    var fl = rawFleet() || {};
+    // Tabs that are visible right now (advanced and simulator tabs only when shown).
+    Array.prototype.forEach.call(document.querySelectorAll('.tabs-bar .tab-btn'), function(btn) {
+      if (!visible(btn) || btn.classList.contains('active')) return;
+      var idx = Number(String(btn.id || '').replace('tabBtn', ''));
+      var label = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+      items.push({kind: 'Go to', group: 'Go to', title: label, keywords: ['tab ' + label, 'go ' + label], boost: 40,
+                  run: function() { try { switchTab(idx); } catch (e) { /* not ready */ } }});
+    });
+    var agents = Array.isArray(fl.agents) ? fl.agents.slice() : [];
+    var counts = vlHealthCounts(agents);
+    HEALTH_LEVELS.forEach(function(l) {
+      if (!counts[l.id]) return;
+      items.push({kind: 'Show', group: 'Show', title: 'Show ' + l.label.toLowerCase() + ' agents',
+                  sub: counts[l.id] + (counts[l.id] === 1 ? ' agent' : ' agents'), keywords: ['health ' + l.label, 'filter ' + l.label],
+                  dot: l.id, boost: l.rank <= 2 ? 20 : 0, hideWhenEmpty: l.rank > 2,  // problems first; the rest on search
+                  run: function() { focusAgents({health: l.id}); }});
+    });
+    agents.sort(function(a, b) { return vlHealth(a).rank - vlHealth(b).rank; });
+    agents.forEach(function(a) {
+      var hl = vlHealth(a);
+      var b = a.backend || {};
+      items.push({kind: 'Agent', group: 'Agents', title: String(a.display_name || a.agent_id || DASH), dot: hl.id,
+                  sub: [hl.label, a.engine_display_name || a.engine_id, TYPE_LABELS[a.type] || a.type].filter(Boolean).join(' \u00b7 '),
+                  keywords: [a.agent_id, a.engine_display_name, a.type_label, b.service, b.reasoning_engine_id].concat(b.models || []),
+                  boost: 30, run: function() { openAgent(a); }});
+    });
+    agents.forEach(function(a) {
+      if (!vlAlertTarget(a, fl.project_id)) return;
+      items.push({kind: 'Alert', group: 'Alerts', title: 'Create alert policy: ' + String(a.display_name || a.agent_id || DASH),
+                  sub: 'Cloud Monitoring · gcloud commands', keywords: ['alert', 'alerting', 'monitoring', 'policy', 'notify'],
+                  hideWhenEmpty: true, run: function() { openAgent(a, null, {alert: true}); }});
+    });
+    var scope = byId('geScopeSelect');
+    if (scope) {
+      Array.prototype.forEach.call(scope.options, function(opt) {
+        if (opt.value === scope.value) return;
+        items.push({kind: 'App', group: 'Apps & regions', title: opt.textContent, sub: 'Show only this scope',
+                    keywords: ['scope', 'app', 'region'], run: function() { selectOption('geScopeSelect', opt.value); }});
+      });
+    }
+    var win = byId('fleetWindow');
+    if (win) {
+      Array.prototype.forEach.call(win.options, function(opt) {
+        if (opt.value === win.value) return;
+        items.push({kind: 'Time range', group: 'Time range', title: opt.textContent, keywords: ['time range', 'window', 'period'],
+                    run: function() { selectOption('fleetWindow', opt.value); }});
+      });
+    }
+    var uc = st.user_centric || {};
+    (Array.isArray(uc.power_users_ldap) ? uc.power_users_ldap : []).forEach(function(u) {
+      var ldap = u.user_ldap || vlUserLabel(u.user_email);
+      if (!ldap || ldap === DASH) return;
+      items.push({kind: 'User', group: 'Users', title: ldap, sub: u.primary_agent ? 'Mostly ' + u.primary_agent : 'Top user',
+                  keywords: [u.department, u.primary_agent], hideWhenEmpty: true,
+                  run: function() { try { switchTab(4); } catch (e) { return; } setTableQuery('powerUsersBody', ldap); revealTable('powerUsersBody'); }});
+    });
+    (Array.isArray(uc.ge_sessions) ? uc.ge_sessions : []).slice(0, 80).forEach(function(se) {
+      var sid = String(se.session_id || '');
+      if (!sid) return;
+      items.push({kind: 'Session', group: 'Sessions', title: 'Session \u2026' + sid.slice(-8),
+                  sub: [vlUserLabel(se.user_email), se.agent_name, se.session_end ? fmtAgo(se.session_end) : null].filter(function(x) { return x && x !== DASH; }).join(' \u00b7 '),
+                  keywords: [sid, vlUserLabel(se.user_email), se.agent_name], hideWhenEmpty: true,
+                  run: function() { try { switchTab(4); } catch (e) { return; } setTableQuery('geSessionsBody', sid); revealTable('geSessionsBody'); }});
+    });
+    var dark = currentTheme() === 'dark';
+    var actions = [
+      {title: 'Refresh data', keywords: ['reload', 'sync'], run: function() { clickById('syncGcpBtn'); }},
+      embedded() ? null : {title: 'Copy link to this view', keywords: ['share', 'url'], run: function() { clickById('vlCopyLinkBtn'); }},
+      {title: 'Export PDF', keywords: ['print', 'report', 'download'], run: function() { clickById('exportPdfBtn'); }},
+      {title: dark ? 'Use the light theme' : 'Use the dark theme', keywords: ['theme', 'dark mode', 'light mode', 'appearance'],
+       run: function() { setTheme(dark ? 'light' : 'dark'); }},
+      themeChoice ? {title: embedded() ? 'Match the Gemini Enterprise theme' : 'Match the system theme', keywords: ['theme', 'auto'],
+                     run: function() { setTheme(null); }} : null,
+      tables.fleetAgentsBody && tables.fleetAgentsBody.compactBtn ? {
+        title: tables.fleetAgentsBody.compactBtn.getAttribute('aria-pressed') === 'true' ? 'Show full agent rows' : 'Use compact agent rows',
+        keywords: ['compact', 'density', 'rows'], run: function() { tables.fleetAgentsBody.compactBtn.click(); }} : null,
+      byId('advancedToggleBtn') ? {title: byId('advancedToggleBtn').getAttribute('aria-pressed') === 'true' ? 'Hide advanced tabs' : 'Show advanced tabs',
+                                   keywords: ['advanced', 'optimizer', 'sdk'], run: function() { clickById('advancedToggleBtn'); }} : null,
+      embedded() && byId('btnModeFullscreen') ? {title: 'Toggle fullscreen', keywords: ['side panel', 'expand'], run: function() { clickById('btnModeFullscreen'); }} : null,
+      byId('vlSpendPanel') ? {title: 'Set the monthly AI budget', keywords: ['budget', 'cost', 'spend'],
+                              run: function() { try { switchTab(3); } catch (e) { return; } toggleBudgetForm(true); revealTable('vlSpendKpis'); }} : null,
+    ];
+    actions.forEach(function(a) {
+      if (!a) return;
+      items.push({kind: 'Action', group: 'Actions', title: a.title, keywords: a.keywords, boost: 10, run: a.run});
+    });
+    return items;
+  }
+
+  var PALETTE_GROUPS = ['Go to', 'Show', 'Actions', 'Agents', 'Apps & regions', 'Time range'];
+  function paletteVisibleItems(query) {
+    var items = palette.items;
+    if (String(query || '').trim()) return vlPaletteFilter(items, query, 60);
+    // Empty query: a few items per group, in a fixed group order.
+    var out = [];
+    PALETTE_GROUPS.forEach(function(g) {
+      var groupItems = items.filter(function(it) { return it.group === g && !it.hideWhenEmpty; });
+      out = out.concat(groupItems.slice(0, g === 'Agents' ? 8 : 6));
+    });
+    return out;
+  }
+  function renderPaletteList() {
+    var q = palette.input.value;
+    var shown = paletteVisibleItems(q);
+    palette.shown = shown;
+    palette.active = shown.length ? Math.min(palette.active, shown.length - 1) : -1;
+    var kids = [];
+    var lastGroup = null;
+    var grouped = !String(q).trim();
+    shown.forEach(function(it, i) {
+      if (grouped && it.group !== lastGroup) {
+        kids.push(h('li', {class: 'vl-pal-group', role: 'presentation'}, [it.group]));
+        lastGroup = it.group;
+      }
+      var li = h('li', {id: 'vlPalOpt' + i, class: 'vl-pal-item' + (i === palette.active ? ' vl-pal-active' : ''), role: 'option',
+                        'aria-selected': i === palette.active ? 'true' : 'false'}, [
+        it.dot ? h('span', {class: 'vl-dot vl-dot-' + it.dot, 'aria-hidden': 'true'}) : h('span', {class: 'vl-pal-bullet', 'aria-hidden': 'true'}),
+        h('span', {class: 'vl-pal-title'}, [it.title]),
+        it.sub ? h('span', {class: 'vl-pal-sub'}, [it.sub]) : null,
+        h('span', {class: 'vl-pal-kind'}, [it.kind]),
+      ]);
+      li.addEventListener('mousemove', function() { if (palette.active !== i) { palette.active = i; markActive(); } });
+      li.addEventListener('click', function() { runPaletteItem(i); });
+      kids.push(li);
+    });
+    if (!shown.length) kids.push(h('li', {class: 'vl-pal-empty', role: 'presentation'}, ['No matches for \u201c' + String(q).trim() + '\u201d.']));
+    setKids(palette.list, kids);
+    markActive();
+  }
+  function markActive() {
+    Array.prototype.forEach.call(palette.list.querySelectorAll('.vl-pal-item'), function(li) {
+      var on = li.id === 'vlPalOpt' + palette.active;
+      li.classList.toggle('vl-pal-active', on);
+      li.setAttribute('aria-selected', on ? 'true' : 'false');
+      if (on && li.scrollIntoView) li.scrollIntoView({block: 'nearest'});
+    });
+    if (palette.active >= 0) palette.input.setAttribute('aria-activedescendant', 'vlPalOpt' + palette.active);
+    else palette.input.removeAttribute('aria-activedescendant');
+  }
+  function runPaletteItem(i) {
+    var it = palette && palette.shown[i];
+    if (!it) return;
+    closePalette(true);
+    try { it.run(); } catch (e) { /* the target view is not ready */ }
+  }
+  function buildPalette() {
+    var root = byId('vlPalette');
+    if (!root) return null;
+    var input = h('input', {id: 'vlPaletteInput', class: 'vl-pal-input', type: 'text', role: 'combobox', autocomplete: 'off',
+                            spellcheck: 'false', 'aria-expanded': 'true', 'aria-controls': 'vlPaletteList', 'aria-autocomplete': 'list',
+                            'aria-label': 'Search agents, users, sessions, apps and commands',
+                            placeholder: 'Search agents, users, sessions, apps or commands\u2026'});
+    var list = h('ul', {id: 'vlPaletteList', class: 'vl-pal-list', role: 'listbox', 'aria-label': 'Results'});
+    setKids(root, [
+      h('div', {class: 'vl-pal-head'}, [h('span', {class: 'vl-pal-icon', 'aria-hidden': 'true'}, ['\u2315']), input,
+                                        h('kbd', {class: 'vl-kbd'}, ['Esc'])]),
+      list,
+      h('div', {class: 'vl-pal-foot', 'aria-hidden': 'true'}, ['\u2191\u2193 move \u00b7 \u21b5 open \u00b7 Esc close \u00b7 ' +
+                                                                 (isMac() ? '\u2318K' : 'Ctrl+K') + ' anywhere']),
+    ]);
+    input.addEventListener('input', function() { palette.active = 0; renderPaletteList(); });
+    input.addEventListener('keydown', function(ev) {
+      var n = palette.shown.length;
+      if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        if (!n) return;
+        palette.active = (palette.active + (ev.key === 'ArrowDown' ? 1 : n - 1)) % n;
+        markActive();
+      } else if (ev.key === 'Home' || ev.key === 'End') {
+        if (!n) return;
+        ev.preventDefault();
+        palette.active = ev.key === 'Home' ? 0 : n - 1;
+        markActive();
+      } else if (ev.key === 'Enter') {
+        ev.preventDefault();
+        runPaletteItem(palette.active);
+      } else if (ev.key === 'Escape') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        closePalette();
+      } else if (ev.key === 'Tab') {
+        ev.preventDefault();  // keep focus in the dialog; the list is driven from the input
+      }
+    });
+    var back = byId('vlPaletteBackdrop');
+    if (back) back.addEventListener('click', function() { closePalette(); });
+    return {root: root, input: input, list: list, items: [], shown: [], active: 0, opener: null};
+  }
+  function openPalette(initialQuery) {
+    if (!palette) palette = buildPalette();
+    if (!palette) return;
+    palette.opener = document.activeElement;
+    palette.items = paletteItems();
+    palette.input.value = initialQuery || '';
+    palette.active = 0;
+    var inline = embedded() && !useDrawer();  // side panel: the iframe is as tall as the page, so no fixed overlay
+    palette.root.classList.toggle('vl-pal-inline', inline);
+    palette.root.classList.remove('hidden');
+    var back = byId('vlPaletteBackdrop');
+    if (back) back.classList.toggle('hidden', inline);
+    var btn = byId('vlPaletteBtn');
+    if (btn) btn.setAttribute('aria-expanded', 'true');
+    renderPaletteList();
+    if (inline && palette.root.scrollIntoView) palette.root.scrollIntoView({block: 'start'});
+    palette.input.focus();
+    resized();
+  }
+  function closePalette(keepFocus) {
+    if (!palette || palette.root.classList.contains('hidden')) return;
+    palette.root.classList.add('hidden');
+    var back = byId('vlPaletteBackdrop');
+    if (back) back.classList.add('hidden');
+    var btn = byId('vlPaletteBtn');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+    if (!keepFocus && palette.opener && palette.opener.focus) palette.opener.focus();
+    resized();
+  }
+  function paletteOpen() { return !!(palette && !palette.root.classList.contains('hidden')); }
+  function setupPalette() {
+    var btn = byId('vlPaletteBtn');
+    if (btn) {
+      var kbd = btn.querySelector('kbd');
+      if (kbd) kbd.textContent = isMac() ? '\u2318K' : 'Ctrl K';
+      btn.addEventListener('click', function() { if (paletteOpen()) closePalette(); else openPalette(); });
+    }
+    document.addEventListener('keydown', function(ev) {
+      if ((ev.metaKey || ev.ctrlKey) && !ev.altKey && !ev.shiftKey && String(ev.key).toLowerCase() === 'k') {
+        ev.preventDefault();
+        if (paletteOpen()) closePalette(); else openPalette();
+      }
+    });
+  }
+
   // ===================================================================================================
   // Part 10: hooks called by the main script, and mount
   // ===================================================================================================
@@ -1750,7 +2351,8 @@ var VL = (function() {
       if (target) openAgent(target, null);
     } else if (openState) {
       var a = findAgent(openState.id);
-      if (a) renderOpenAgent(a);
+      var typing = document.activeElement && document.activeElement.closest && document.activeElement.closest('.vl-alert-form');
+      if (a && !typing) renderOpenAgent(a);
     }
     renderFreshness();
     var st = state();
@@ -1764,6 +2366,8 @@ var VL = (function() {
   }
 
   function mount() {
+    setupTheme();
+    setupPalette();
     setupAria();
     setupKeys();
     var p = urlParams();
@@ -1821,12 +2425,17 @@ var VL = (function() {
     healthRulesText: healthRulesText, parseSortValue: vlParseSortValue, compare: vlCompare, toCsv: vlToCsv,
     costSummary: vlCostSummary, cacheSavings: vlCacheSavings, spendDelta: vlSpendDelta, adoption: vlAdoption,
     trendTotals: vlTrendTotals, runtimeKey: vlRuntimeKey, agentPrompt: vlAgentPrompt, safeExternalUrl: safeExternalUrl, userLabel: vlUserLabel,
+    resolveTheme: vlResolveTheme,
+    paletteScore: vlPaletteScore, paletteFilter: vlPaletteFilter,
+    alertPolicies: vlAlertPolicies, alertTarget: vlAlertTarget, autoAlertWindow: vlAutoAlertWindow,
     // DOM (browser only)
     mount: mount, smartTable: smartTable, setTableQuery: setTableQuery, setTableFacet: setTableFacet,
     renderHealthStrip: renderHealthStrip, agentRowDecorate: agentRowDecorate, healthCell: healthCell, typeCell: typeCell, agentSpark: agentSpark,
     openAgent: openAgent, closeAgent: closeAgent, decorateAttention: decorateAttention, attentionSummary: attentionSummary,
     spendDeltaNode: spendDeltaNode, requestsSparkNode: requestsSparkNode, usersSparkNode: usersSparkNode,
     setHostCapabilities: setHostCapabilities, urlWindowHours: urlWindowHours, syncUrl: syncUrl, onTab: onTab,
+    setTheme: setTheme, toggleTheme: toggleTheme, setHostTheme: setHostTheme, currentTheme: currentTheme,
+    openPalette: openPalette, closePalette: closePalette,
     onFleet: onFleet, onState: onState, onTraceRow: onTraceRow, focusAgents: focusAgents,
   };
   return api;
