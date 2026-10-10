@@ -71,7 +71,7 @@ class DashboardAssetInliningTest(unittest.TestCase):
   def test_new_dashboard_elements_exist(self):
     for element_id in ('vlFreshChip', 'vlCopyLinkBtn', 'vlHealthStrip', 'vlAttentionBadge', 'vlSpendPanel',
                        'vlSpendKpis', 'vlSpendKpisEst', 'vlSpendChart', 'vlAdoptionPanel', 'vlAdoptionKpis',
-                       'vlAdoptionChart', 'vlDrawer', 'vlDrawerBackdrop'):
+                       'vlAdoptionChart', 'vlDrawer', 'vlDrawerBackdrop', 'vlThemeBtn'):
       self.assertIn(f'id="{element_id}"', self.html, element_id)
 
   def test_live_only_panels_stay_hidden_in_demo_mode(self):
@@ -93,9 +93,56 @@ class DashboardEnhancementSafetyTest(unittest.TestCase):
     self.assertIn("window.open(url, '_blank', 'noopener,noreferrer')", _JS)
 
   def test_local_storage_holds_only_preferences(self):
-    # Only the monthly budget (per project) and the compact-rows toggle; never tokens or user data.
+    # Only the monthly budget (per project), the compact-rows toggle and the theme; never tokens or user data.
     keys = set(re.findall(r"'(vibelift\.[A-Za-z_.]+)", _JS))
-    self.assertEqual(keys, {'vibelift.budget.', 'vibelift.agentsCompact'})
+    self.assertEqual(keys, {'vibelift.budget.', 'vibelift.agentsCompact', 'vibelift.theme'})
+
+
+def _block(css: str, opener: str) -> str:
+  """Returns the body of the first `opener { ... }` block, matching nested braces."""
+  start = css.index(opener) + len(opener)
+  depth = 1
+  for i in range(start, len(css)):
+    depth += {'{': 1, '}': -1}.get(css[i], 0)
+    if depth == 0:
+      return css[start:i]
+  raise AssertionError(f'unbalanced block: {opener}')
+
+
+class DashboardThemeTest(unittest.TestCase):
+  """Dark mode: applied before first paint, screen-only, follows the MCP host."""
+
+  @classmethod
+  def setUpClass(cls):
+    cls.html = ui_template.render_dashboard_html()
+
+  def test_theme_is_applied_before_first_paint(self):
+    head = self.html[:self.html.index('<body>')]
+    self.assertIn('<script>', head)
+    self.assertIn("localStorage.getItem('vibelift.theme')", head)
+    self.assertIn("setAttribute('data-theme'", head)
+
+  def test_dark_theme_is_screen_only(self):
+    css = re.sub(r'/\*.*?\*/', '', _CSS, flags=re.S)
+    screen = _block(css, '@media screen {')
+    self.assertEqual(css.count('html[data-theme="dark"]'), screen.count('html[data-theme="dark"]'))
+    self.assertIn('color-scheme: dark;', screen)
+    for var in ('--bg', '--surface', '--surface-2', '--border', '--input-border', '--text-primary', '--text-secondary'):
+      self.assertIn(f'{var}:', _block(screen, 'html[data-theme="dark"] {'), var)
+
+  def test_light_values_of_new_theme_variables(self):
+    root = _block(self.html, ':root {')
+    for decl in ('--surface-2: #f8fafc;', '--input-border: #cbd5e1;', '--chip-bg: #f1f5f9;'):
+      self.assertIn(decl, root)
+
+  def test_follows_the_mcp_host_theme(self):
+    self.assertIn('VL.setHostTheme(res && res.hostContext && res.hostContext.theme);', self.html)
+    self.assertIn('if (data.params.theme) VL.setHostTheme(data.params.theme);', self.html)
+
+  def test_static_markup_uses_theme_variables(self):
+    body = self.html[self.html.index('<body>'):self.html.index('var VL = (function() {')]
+    for literal in ('background:#f8fafc', 'background:#ffffff', 'border:1px solid #cbd5e1', 'color:#475569'):
+      self.assertNotIn(literal, body, literal)
 
 
 def _run_node(script: str) -> dict:
@@ -224,6 +271,8 @@ out.trendMissing = VL.trendTotals(CASES.trend, ['missing']);
 out.runtimeKeys = CASES.runtime_agents.map(VL.runtimeKey);
 out.urls = CASES.urls.map(VL.safeExternalUrl);
 out.users = CASES.users.map(VL.userLabel);
+out.theme = [VL.resolveTheme('dark', 'light', 'light'), VL.resolveTheme(null, 'dark', 'light'),
+             VL.resolveTheme(null, null, 'dark'), VL.resolveTheme(null, null, 'light'), VL.resolveTheme('x', 'y', 'z')];
 out.prompt = VL.agentPrompt({display_name: 'Code Review Copilot', engine_display_name: 'Acme Intranet Assistant',
                              metrics: CASES.agents.failing_5xx.metrics},
                             VL.health(CASES.agents.failing_5xx), 'last 24 hours');
@@ -342,6 +391,10 @@ class DashboardEnhancementLogicTest(unittest.TestCase):
 
   def test_users_are_shown_by_ldap(self):
     self.assertEqual(self.out['users'], ['dev.patel', 'maria.lopez', '\u2014', '\u2014', '@x'])
+
+  def test_theme_resolution_order(self):
+    # Saved choice, then the MCP host theme, then the OS setting; anything unknown falls back to light.
+    self.assertEqual(self.out['theme'], ['dark', 'dark', 'dark', 'light', 'light'])
 
   def test_investigation_prompt_quotes_measured_facts(self):
     prompt = self.out['prompt']

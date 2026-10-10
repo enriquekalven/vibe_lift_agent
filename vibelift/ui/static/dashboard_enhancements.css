@@ -5,7 +5,7 @@
 .vl-tt-row { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; }
 .vl-tt .btn[aria-pressed="true"] { background: #0f172a; color: #fff; border-color: #0f172a; }
 .vl-tt-search { flex: 0 1 340px; min-width: 200px; font: inherit; font-size: 12.5px; padding: 6px 10px;
-  border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; color: var(--text-primary); }
+  border: 1px solid var(--input-border); border-radius: 6px; background: var(--surface); color: var(--text-primary); }
 .vl-tt-search:focus { outline: 2px solid #93c5fd; outline-offset: 0; border-color: #60a5fa; }
 .vl-tt-facets { display: flex; gap: 8px 16px; flex-wrap: wrap; align-items: center; }
 .vl-tt-facets:empty { display: none; }
@@ -29,7 +29,7 @@
 .vl-facet { display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; }
 .vl-facet-label { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--text-secondary); margin-right: 2px; }
 .vl-chip { display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 11.5px; font-weight: 600;
-  padding: 3px 9px; border-radius: 99px; border: 1px solid var(--border); background: #fff; color: #334155; cursor: pointer; }
+  padding: 3px 9px; border-radius: 99px; border: 1px solid var(--border); background: var(--surface); color: var(--g-blue); cursor: pointer; }
 .vl-chip:hover { background: #f1f5f9; }
 .vl-chip[aria-pressed="true"] { background: #0f172a; border-color: #0f172a; color: #fff; }
 .vl-chip-n { font-family: var(--font-mono); font-size: 10.5px; padding: 0 5px; border-radius: 99px; background: rgba(15,23,42,.07); }
@@ -43,7 +43,7 @@ th.vl-sortable:focus-visible { outline: 2px solid #93c5fd; outline-offset: -2px;
 .vl-row-filtered, .vl-row-paged { display: none; }
 .vl-col-hidden { display: none; }
 .vl-pager { display: flex; align-items: center; gap: 8px; justify-content: flex-end; margin: 8px 0 2px; font-size: 12px; color: var(--text-secondary); }
-.vl-pager-size { font: inherit; font-size: 12px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; background: #fff; }
+.vl-pager-size { font: inherit; font-size: 12px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
 tr.vl-row-click { cursor: pointer; }
 tr.vl-row-click:hover > td { background: #f8fafc; }
 tr.vl-row-click:focus-visible { outline: 2px solid #93c5fd; outline-offset: -2px; }
@@ -88,7 +88,7 @@ td .vl-spark { margin-top: 3px; }
 .vl-progress-proj { position: absolute; top: -3px; width: 2px; height: 14px; background: #0f172a; border-radius: 1px; }
 .vl-budget-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: #f8fafc; border: 1px solid var(--border);
   border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; font-size: 12.5px; }
-.vl-budget-form input { font: inherit; font-size: 12.5px; width: 130px; padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 6px; margin-left: 6px; }
+.vl-budget-form input { font: inherit; font-size: 12.5px; width: 130px; padding: 5px 8px; border: 1px solid var(--input-border); border-radius: 6px; margin-left: 6px; }
 .vl-chart { width: 100%; height: 210px; display: block; }
 .vl-chart text { font-size: 10px; fill: #64748b; font-family: var(--font-mono); }
 .vl-chart text.vl-axis-r { fill: #059669; }
@@ -108,7 +108,7 @@ td .vl-spark { margin-top: 3px; }
 
 /* ---- Agent detail (drawer and inline) ---- */
 .vl-backdrop { position: fixed; inset: 0; background: rgba(15,23,42,.32); z-index: 60; }
-.vl-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(640px, 100vw); background: #fff; z-index: 61;
+.vl-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(640px, 100vw); background: var(--surface); z-index: 61;
   box-shadow: -12px 0 32px rgba(15,23,42,.18); overflow-y: auto; padding: 18px 20px 28px; outline: none; }
 body.vl-drawer-open { overflow: hidden; }
 tr.vl-agent-detail-row > td { background: #f8fafc; padding: 14px 16px; border-bottom: 2px solid #bfdbfe; }
@@ -134,7 +134,7 @@ tr.vl-agent-detail-row .vl-agent-detail { position: sticky; left: 0; max-width: 
 .vl-d-note { font-size: 11.5px; color: var(--text-secondary); margin-top: 6px; line-height: 1.5; }
 .vl-d-row { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-top: 8px; }
 .vl-minis { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
-.vl-mini { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: #fff; }
+.vl-mini { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--surface); }
 .vl-mini-label { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; color: var(--text-secondary); }
 .vl-mini-value { font-size: 16px; font-weight: 700; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .vl-mini-sub { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
@@ -159,4 +159,130 @@ tr.vl-agent-detail-row .vl-agent-detail { position: sticky; left: 0; max-width: 
 @media print {
   .vl-tt, .vl-pager, .vl-drawer, .vl-backdrop, .vl-strip-rules, .vl-att-go, .vl-fresh { display: none !important; }
   .vl-row-paged { display: table-row !important; }
+}
+
+/* ---- Theme toggle ---- */
+.vl-theme-btn { min-width: 34px; padding-left: 9px; padding-right: 9px; font-size: 14px; line-height: 1; }
+
+/* ======================================================================================================
+   Dark theme: html[data-theme="dark"]. Screen only, so Export PDF and printing always use the light theme.
+   The variables restyle most of the UI; the rules below fix components with hardcoded light colors and
+   SVG presentation attributes (a CSS rule beats an attribute, so the charts follow the theme too).
+   ====================================================================================================== */
+@media screen {
+  html[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0b1120;
+    --surface: #111a2c;
+    --surface-2: #172238;
+    --border: #26334b;
+    --input-border: #3a4a66;
+    --chip-bg: #1c2740;
+    --text-primary: #e2e8f0;
+    --text-secondary: #9aabc4;
+    --g-blue: #cbd5e1;
+    --g-blue-bg: #1c2740;
+    --g-green: #86efac;
+    --g-green-bg: rgba(34, 197, 94, .14);
+    --g-yellow: #fcd34d;
+    --g-yellow-bg: rgba(234, 179, 8, .14);
+    --g-red: #fca5a5;
+    --g-red-bg: rgba(239, 68, 68, .15);
+  }
+
+  /* Primary actions are inverted (light on dark) so they keep the strongest contrast. */
+  html[data-theme="dark"] .btn-primary, html[data-theme="dark"] .btn-green, html[data-theme="dark"] .btn-fullscreen-toggle,
+  html[data-theme="dark"] .subview-btn.active, html[data-theme="dark"] .adv-toggle[aria-pressed="true"],
+  html[data-theme="dark"] .px-seg-btn.active, html[data-theme="dark"] .vl-tt .btn[aria-pressed="true"],
+  html[data-theme="dark"] .vl-chip[aria-pressed="true"], html[data-theme="dark"] .tab-btn.active .tab-step-pill,
+  html[data-theme="dark"] .vl-theme-btn[aria-pressed="true"] {
+    background: #e2e8f0; color: #0b1120; border-color: #e2e8f0;
+  }
+  html[data-theme="dark"] .btn-primary:hover, html[data-theme="dark"] .btn-green:hover,
+  html[data-theme="dark"] .btn-fullscreen-toggle:hover { background: #ffffff; border-color: #ffffff; }
+  html[data-theme="dark"] .btn:hover, html[data-theme="dark"] .btn-danger:hover, html[data-theme="dark"] .vl-chip:hover { background: var(--chip-bg); }
+  html[data-theme="dark"] .btn-danger { border-color: var(--input-border); }
+  html[data-theme="dark"] .tab-step-pill { background: var(--chip-bg); color: var(--g-blue); }
+  html[data-theme="dark"] .live-dot { background: #22c55e; }
+
+  /* Tables, form controls, code */
+  html[data-theme="dark"] th { background: var(--surface-2); }
+  html[data-theme="dark"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  html[data-theme="dark"] select, html[data-theme="dark"] textarea {
+    background-color: var(--surface-2); color: var(--text-primary); border-color: var(--input-border);
+  }
+  html[data-theme="dark"] code, html[data-theme="dark"] .cleanup-cmd code { background: var(--surface-2); color: var(--text-primary); }
+  html[data-theme="dark"] pre, html[data-theme="dark"] .diff-pre { background: #070c17; color: #e2e8f0; border: 1px solid var(--border); }
+
+  /* Badges, chips and notices */
+  html[data-theme="dark"] .badge-blue { background: var(--g-blue-bg); color: var(--g-blue); border-color: var(--border); }
+  html[data-theme="dark"] .badge-green, html[data-theme="dark"] .chip-ok, html[data-theme="dark"] .live-pill {
+    background: var(--g-green-bg); color: var(--g-green); border-color: rgba(34, 197, 94, .32);
+  }
+  html[data-theme="dark"] .badge-yellow { background: var(--g-yellow-bg); color: var(--g-yellow); border-color: rgba(234, 179, 8, .35); }
+  html[data-theme="dark"] .badge-red, html[data-theme="dark"] .chip-error, html[data-theme="dark"] .fleet-error {
+    background: var(--g-red-bg); color: var(--g-red); border-color: rgba(239, 68, 68, .35);
+  }
+  html[data-theme="dark"] .chip-na { background: var(--chip-bg); }
+  html[data-theme="dark"] .fleet-notice { background: var(--chip-bg); color: var(--g-blue); }
+  html[data-theme="dark"] .fleet-notice-error, html[data-theme="dark"] .sim-notice, html[data-theme="dark"] .scope-note {
+    background: var(--g-yellow-bg); color: var(--g-yellow); border-color: rgba(234, 179, 8, .35);
+  }
+  html[data-theme="dark"] .trace-bar { background: rgba(59, 130, 246, .12); border-color: rgba(59, 130, 246, .35); }
+  html[data-theme="dark"] .trace-confirm { color: #93c5fd; }
+  html[data-theme="dark"] .trace-msg-ok { color: var(--g-green); }
+  html[data-theme="dark"] .trace-msg-err { color: var(--g-red); }
+  html[data-theme="dark"] .api-notice { background: var(--surface); border-color: rgba(239, 68, 68, .5); color: var(--g-red); }
+  html[data-theme="dark"] .token-na { color: #fbbf24; }
+  html[data-theme="dark"] .time-ranges { color: var(--text-secondary); }
+
+  /* Panels with hardcoded light fills */
+  html[data-theme="dark"] .add-param-form, html[data-theme="dark"] .action-box, html[data-theme="dark"] details.role-disclosure,
+  html[data-theme="dark"] .action-card.baseline { background: var(--surface-2); }
+  html[data-theme="dark"] .action-card, html[data-theme="dark"] .action-card.rejected { background: var(--surface); }
+  html[data-theme="dark"] .weight-bar-bg, html[data-theme="dark"] .hbar-track, html[data-theme="dark"] .vl-progress { background: #1f2a40; }
+  html[data-theme="dark"] .weight-bar-fill { background: #94a3b8; }
+  html[data-theme="dark"] [style*="color: rgb(15, 23, 42)"] { color: var(--text-primary) !important; }
+  html[data-theme="dark"] [style*="color: rgb(71, 85, 105)"] { color: var(--text-secondary) !important; }
+
+  /* Charts (SVG presentation attributes) */
+  html[data-theme="dark"] .trend-svg text, html[data-theme="dark"] .vl-chart text { fill: #8ea0ba; }
+  html[data-theme="dark"] svg line[stroke="#e2e8f0"] { stroke: #26334b; }
+  html[data-theme="dark"] svg circle[stroke="#f1f5f9"] { stroke: #1c2740; }
+  html[data-theme="dark"] svg circle[stroke="#fff"] { stroke: var(--surface); }
+  html[data-theme="dark"] svg text[fill="#0f172a"] { fill: #e2e8f0; }
+  html[data-theme="dark"] svg text[fill="#475569"], html[data-theme="dark"] svg text[fill="#64748b"] { fill: #9aabc4; }
+  html[data-theme="dark"] .vl-chart text.vl-axis-r { fill: #34d399; }
+  html[data-theme="dark"] .vl-chart text.vl-ref { fill: #fbbf24; }
+
+  /* Prompt Cache X-Ray highlights keep their light fills, so their text stays dark. */
+  html[data-theme="dark"] .px-cached, html[data-theme="dark"] .px-dynamic, html[data-theme="dark"] .px-recoverable,
+  html[data-theme="dark"] .px-appended, html[data-theme="dark"] .px-latent { color: #0f172a; }
+
+  /* Dashboard enhancement components */
+  html[data-theme="dark"] .vl-chip, html[data-theme="dark"] .vl-mini { background: var(--surface); color: var(--text-primary); }
+  html[data-theme="dark"] .vl-chip-n { background: rgba(226, 232, 240, .1); }
+  html[data-theme="dark"] tr.vl-row-click:hover > td, html[data-theme="dark"] .attention-list li.vl-att-click:hover,
+  html[data-theme="dark"] .attention-list li.vl-att-click:focus-visible { background: var(--surface-2); }
+  html[data-theme="dark"] tr.vl-row-open > td { background: rgba(59, 130, 246, .12); }
+  html[data-theme="dark"] .vl-h-failing { background: rgba(239, 68, 68, .15); color: #fca5a5; border-color: rgba(239, 68, 68, .35); }
+  html[data-theme="dark"] .vl-h-broken { background: rgba(244, 63, 94, .15); color: #fda4af; border-color: rgba(244, 63, 94, .35); }
+  html[data-theme="dark"] .vl-h-degraded { background: rgba(245, 158, 11, .15); color: #fcd34d; border-color: rgba(245, 158, 11, .35); }
+  html[data-theme="dark"] .vl-h-healthy { background: rgba(34, 197, 94, .14); color: #86efac; border-color: rgba(34, 197, 94, .32); }
+  html[data-theme="dark"] .vl-h-idle, html[data-theme="dark"] .vl-h-disabled, html[data-theme="dark"] .vl-h-unknown {
+    background: var(--chip-bg); color: var(--text-secondary); border-color: var(--border);
+  }
+  html[data-theme="dark"] .vl-dot-unknown, html[data-theme="dark"] .vl-fresh-wait .vl-fresh-dot { background: #475569; }
+  html[data-theme="dark"] .vl-delta-up { background: var(--g-yellow-bg); color: var(--g-yellow); }
+  html[data-theme="dark"] .vl-delta-down { background: var(--g-green-bg); color: var(--g-green); }
+  html[data-theme="dark"] .vl-delta-flat { background: var(--chip-bg); color: var(--text-secondary); }
+  html[data-theme="dark"] .vl-progress-proj { background: #e2e8f0; }
+  html[data-theme="dark"] .vl-budget-form { background: var(--surface-2); }
+  html[data-theme="dark"] .vl-att-go { color: #93c5fd; }
+  html[data-theme="dark"] .vl-drawer { background: var(--surface); box-shadow: -12px 0 32px rgba(0, 0, 0, .55); }
+  html[data-theme="dark"] .vl-backdrop { background: rgba(2, 6, 23, .6); }
+  html[data-theme="dark"] tr.vl-agent-detail-row > td { background: var(--surface-2); border-bottom-color: #1e3a8a; }
+  html[data-theme="dark"] .vl-sec-failing, html[data-theme="dark"] .vl-sec-broken { background: rgba(239, 68, 68, .1); border-color: rgba(239, 68, 68, .3); }
+  html[data-theme="dark"] .vl-sec-degraded { background: rgba(245, 158, 11, .1); border-color: rgba(245, 158, 11, .3); }
+  html[data-theme="dark"] .vl-sec-healthy { background: rgba(34, 197, 94, .08); border-color: rgba(34, 197, 94, .28); }
 }

@@ -1740,6 +1740,59 @@ var VL = (function() {
     if (back) back.addEventListener('click', function() { closeAgent(); });
   }
 
+  // ---- Theme (light / dark) --------------------------------------------------------------------------
+  // The saved choice wins; otherwise the MCP host's theme (when embedded); otherwise the OS setting.
+  // The <head> script applies the same rule before first paint, so dark mode never flashes light.
+  var THEME_KEY = 'vibelift.theme';
+  var themeChoice = null;  // 'light' | 'dark' | null (follow the host or the OS)
+  var hostTheme = null;
+  function vlResolveTheme(choice, host, system) {
+    if (choice === 'light' || choice === 'dark') return choice;
+    if (host === 'light' || host === 'dark') return host;
+    return system === 'dark' ? 'dark' : 'light';
+  }
+  function systemTheme() {
+    try { return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; } catch (e) { return 'light'; }
+  }
+  function currentTheme() { return vlResolveTheme(themeChoice, embedded() ? hostTheme : null, systemTheme()); }
+  function applyTheme() {
+    var theme = currentTheme();
+    document.documentElement.setAttribute('data-theme', theme);
+    var btn = byId('vlThemeBtn');
+    if (btn) {
+      var dark = theme === 'dark';
+      btn.setAttribute('aria-pressed', dark ? 'true' : 'false');
+      btn.textContent = dark ? '\u2600' : '\u263E';
+      btn.title = dark ? 'Switch to the light theme' : 'Switch to the dark theme';
+    }
+  }
+  function setTheme(choice) {
+    themeChoice = choice === 'light' || choice === 'dark' ? choice : null;
+    try {
+      if (themeChoice) localStorage.setItem(THEME_KEY, themeChoice); else localStorage.removeItem(THEME_KEY);
+    } catch (e) { /* storage blocked: the choice lasts for this page only */ }
+    applyTheme();
+  }
+  function toggleTheme() { setTheme(currentTheme() === 'dark' ? 'light' : 'dark'); }
+  function setHostTheme(theme) {
+    hostTheme = theme === 'light' || theme === 'dark' ? theme : null;
+    applyTheme();
+  }
+  function setupTheme() {
+    try {
+      var saved = localStorage.getItem(THEME_KEY);
+      themeChoice = saved === 'light' || saved === 'dark' ? saved : null;
+    } catch (e) { themeChoice = null; }
+    applyTheme();
+    var btn = byId('vlThemeBtn');
+    if (btn) btn.addEventListener('click', toggleTheme);
+    try {
+      var mq = window.matchMedia('(prefers-color-scheme: dark)');
+      var follow = function() { if (!themeChoice) applyTheme(); };
+      if (mq.addEventListener) mq.addEventListener('change', follow); else if (mq.addListener) mq.addListener(follow);
+    } catch (e) { /* no matchMedia */ }
+  }
+
   // ===================================================================================================
   // Part 10: hooks called by the main script, and mount
   // ===================================================================================================
@@ -1764,6 +1817,7 @@ var VL = (function() {
   }
 
   function mount() {
+    setupTheme();
     setupAria();
     setupKeys();
     var p = urlParams();
@@ -1821,12 +1875,14 @@ var VL = (function() {
     healthRulesText: healthRulesText, parseSortValue: vlParseSortValue, compare: vlCompare, toCsv: vlToCsv,
     costSummary: vlCostSummary, cacheSavings: vlCacheSavings, spendDelta: vlSpendDelta, adoption: vlAdoption,
     trendTotals: vlTrendTotals, runtimeKey: vlRuntimeKey, agentPrompt: vlAgentPrompt, safeExternalUrl: safeExternalUrl, userLabel: vlUserLabel,
+    resolveTheme: vlResolveTheme,
     // DOM (browser only)
     mount: mount, smartTable: smartTable, setTableQuery: setTableQuery, setTableFacet: setTableFacet,
     renderHealthStrip: renderHealthStrip, agentRowDecorate: agentRowDecorate, healthCell: healthCell, typeCell: typeCell, agentSpark: agentSpark,
     openAgent: openAgent, closeAgent: closeAgent, decorateAttention: decorateAttention, attentionSummary: attentionSummary,
     spendDeltaNode: spendDeltaNode, requestsSparkNode: requestsSparkNode, usersSparkNode: usersSparkNode,
     setHostCapabilities: setHostCapabilities, urlWindowHours: urlWindowHours, syncUrl: syncUrl, onTab: onTab,
+    setTheme: setTheme, toggleTheme: toggleTheme, setHostTheme: setHostTheme, currentTheme: currentTheme,
     onFleet: onFleet, onState: onState, onTraceRow: onTraceRow, focusAgents: focusAgents,
   };
   return api;

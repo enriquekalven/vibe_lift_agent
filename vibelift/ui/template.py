@@ -28,6 +28,9 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       --g-yellow-bg: #fefce8;
       --g-red: #991b1b;
       --g-red-bg: #fef2f2;
+      --surface-2: #f8fafc;
+      --input-border: #cbd5e1;
+      --chip-bg: #f1f5f9;
       --font-sans: 'Inter', 'Google Sans', 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif;
       --font-mono: 'Roboto Mono', monospace;
     }
@@ -652,6 +655,17 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     @media (max-width: 800px) { .px-grid { grid-template-columns: 1fr; } }
     /*__VIBELIFT_ENHANCEMENTS_CSS__*/
   </style>
+  <script>
+    /* Theme before first paint: saved choice, else the OS setting. The MCP host theme and later changes are applied by
+       dashboard_enhancements.js. */
+    (function () {
+      try {
+        var saved = localStorage.getItem('vibelift.theme');
+        var dark = saved === 'dark' || (saved !== 'light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+      } catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
+    })();
+  </script>
 </head>
 <body>
   <div id="printExportHeader" style="display:none;"></div>
@@ -669,14 +683,14 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           Agent Health, Speed, Cost &amp; Quality &bull; <span class="mono">@vibelift_telemetry</span>
         </div>
       </div>
-      <div style="display:inline-flex;align-items:center;gap:8px;padding:4px 10px;background:#f1f5f9;border-radius:6px;border:1px solid #e2e8f0;font-size:11.5px;font-weight:600;color:#334155;">
+      <div style="display:inline-flex;align-items:center;gap:8px;padding:4px 10px;background:var(--chip-bg);border-radius:6px;border:1px solid var(--border);font-size:11.5px;font-weight:600;color:var(--g-blue);">
         <span>GCP: <strong id="gcpProjectText" class="mono">&#x2026;</strong> (<span id="gcpRegionText" class="mono">&#x2026;</span>)</span>
       </div>
-      <label for="geScopeSelect" style="font-size:11.5px;font-weight:600;color:#475569;">Gemini Enterprise app</label>
+      <label for="geScopeSelect" style="font-size:11.5px;font-weight:600;color:var(--text-secondary);">Gemini Enterprise app</label>
       <select id="geScopeSelect" class="scope-select" onchange="onGeScopeChange(this.value)" title="Filter by region and Gemini Enterprise app">
         <option value="all">All apps &middot; all regions</option>
       </select>
-      <label for="fleetWindow" style="font-size:11.5px;font-weight:600;color:#475569;">Time range</label>
+      <label for="fleetWindow" style="font-size:11.5px;font-weight:600;color:var(--text-secondary);">Time range</label>
       <select id="fleetWindow" class="scope-select" onchange="onFleetWindowChange()" title="Time range for agent traffic, errors, tokens and model spend">
         <option value="1">Last hour</option>
         <option value="6">Last 6 hours</option>
@@ -701,6 +715,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <button class="btn" id="exportPdfBtn" onclick="exportDashboardPdf()" title="Export filtered view to executive PDF report">
         <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" style="vertical-align:text-bottom;margin-right:4px;"><path d="M19 8H5c-1.66 0-3 1.34-3 3v6h4v4h12v-4h4v-6c0-1.66-1.34-3-3-3zm-3 11H8v-5h8v5zm3-7c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1zm-1-9H6v4h12V3z"/></svg> Export PDF
       </button>
+      <button type="button" class="btn vl-theme-btn" id="vlThemeBtn" aria-pressed="false" title="Switch to the dark theme" aria-label="Dark theme">&#9790;</button>
       <button type="button" class="btn" id="vlCopyLinkBtn" title="Copy a link to this view (tab, app, time range, search and open agent)">Copy link</button>
       <button class="btn" id="syncGcpBtn" onclick="syncGcpTelemetry()" title="Sync GCP Telemetry (Cloud Monitoring, BigQuery, Gemini Enterprise)">
         Refresh
@@ -772,7 +787,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           <div id="smePersonaPlaybookCard" class="action-box" style="margin-bottom:10px;"></div>
           <div id="workflowStepsRibbon" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;margin-bottom:12px;"></div>
 
-          <div id="smeEvalScorecardPanel" style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px;">
+          <div id="smeEvalScorecardPanel" style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px;">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
               <div>
                 <div style="font-size:12.5px;font-weight:700;color:var(--text-primary);">
@@ -803,12 +818,12 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
               </table>
             </div>
 
-            <div style="background:#ffffff;border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:10px;">
+            <div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:10px;">
               <div style="font-size:11.5px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">
                 Submit SME Persona Evaluation &amp; Sign-Off Rating (Stored in Live Session Ledger)
               </div>
               <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-                <select id="smeEvalPersonaSelect" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;">
+                <select id="smeEvalPersonaSelect" style="padding:6px 8px;border:1px solid var(--input-border);border-radius:6px;font-size:12px;">
                   <option value="finops_lead">FinOps &amp; Cloud Economics Lead</option>
                   <option value="sre_platform">SRE &amp; Agent Platform Engineer</option>
                   <option value="ai_engineer">AI / Prompt &amp; ADK Agent Engineer</option>
@@ -816,20 +831,20 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
                   <option value="security_governance">Security, Governance &amp; Data Privacy Auditor</option>
                   <option value="cfo_exec">VP Engineering / Executive Sponsor</option>
                 </select>
-                <input id="smeEvalReviewerInput" type="text" placeholder="SME Reviewer (e.g. reviewer@example.com)" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;min-width:190px;" />
-                <select id="smeEvalRatingSelect" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;">
+                <input id="smeEvalReviewerInput" type="text" placeholder="SME Reviewer (e.g. reviewer@example.com)" style="padding:6px 8px;border:1px solid var(--input-border);border-radius:6px;font-size:12px;min-width:190px;" />
+                <select id="smeEvalRatingSelect" style="padding:6px 8px;border:1px solid var(--input-border);border-radius:6px;font-size:12px;">
                   <option value="5">5 / 5 &mdash; Exceeds Expectations</option>
                   <option value="4">4 / 5 &mdash; Meets Expectations</option>
                   <option value="3">3 / 5 &mdash; Acceptable with Minor Gaps</option>
                   <option value="2">2 / 5 &mdash; Friction / Missing Metric</option>
                   <option value="1">1 / 5 &mdash; Blocks Workflow</option>
                 </select>
-                <select id="smeEvalVerdictSelect" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;">
+                <select id="smeEvalVerdictSelect" style="padding:6px 8px;border:1px solid var(--input-border);border-radius:6px;font-size:12px;">
                   <option value="APPROVED">APPROVED</option>
                   <option value="APPROVED_WITH_NOTES">APPROVED_WITH_NOTES</option>
                   <option value="NEEDS_WORK">NEEDS_WORK</option>
                 </select>
-                <input id="smeEvalNotesInput" type="text" placeholder="Evaluation notes / CUJ feedback..." style="flex:1;min-width:200px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;" />
+                <input id="smeEvalNotesInput" type="text" placeholder="Evaluation notes / CUJ feedback..." style="flex:1;min-width:200px;padding:6px 8px;border:1px solid var(--input-border);border-radius:6px;font-size:12px;" />
                 <button id="smeEvalSubmitBtn" class="btn btn-primary" style="padding:6px 12px;font-size:12px;" onclick="submitSmePersonaRating()">Submit SME Rating</button>
               </div>
             </div>
@@ -853,7 +868,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </details>
 
-      <div id="nl2sqlCopilotDrawer" class="hidden" style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px;">
+      <div id="nl2sqlCopilotDrawer" class="hidden" style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px;">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
           <div style="font-size:12px;font-weight:700;color:var(--text-primary);">
             Ask a Question in Plain English (Generates BigQuery SQL on <span class="mono">aive_logs</span> &amp; Agent Logs)
@@ -866,7 +881,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           </div>
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
-          <input id="nl2sqlQuestionInput" type="text" style="flex:1;min-width:260px;padding:7px 11px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;" value="Compare cost per 1k turns and prompt cache savings across agents" />
+          <input id="nl2sqlQuestionInput" type="text" style="flex:1;min-width:260px;padding:7px 11px;border:1px solid var(--input-border);border-radius:6px;font-size:13px;" value="Compare cost per 1k turns and prompt cache savings across agents" />
           <button class="btn btn-primary" onclick="runNl2SqlQuery()">Run Search</button>
         </div>
         <div id="nl2sqlSummaryText" style="font-size:12.5px;font-weight:600;color:var(--g-green);margin-bottom:8px;"></div>
@@ -886,7 +901,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     </section>
 
     <section id="telemetryValidatorSection">
-      <div id="telemetryValidatorDrawer" class="hidden" style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px;">
+      <div id="telemetryValidatorDrawer" class="hidden" style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px;">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
           <div>
             <div style="font-size:12.5px;font-weight:700;color:var(--text-primary);">
@@ -960,7 +975,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         <div style="font-size:12px;color:var(--text-secondary);display:flex;gap:16px;flex-wrap:wrap;">
           <span><strong>Model:</strong> <span id="agentModelText" class="mono"></span></span>
           <span><strong>Active Method:</strong> <span id="activeOptimizerText" class="mono" style="color:var(--text-primary);font-weight:700;">AlphaEvolve (Balanced Cost, Speed &amp; Accuracy)</span></span>
-          <span><strong>Data:</strong> <span style="color:#854d0e;font-weight:600;">simulated</span></span>
+          <span><strong>Data:</strong> <span style="color:var(--g-yellow);font-weight:600;">simulated</span></span>
         </div>
       </div>
     </section>
@@ -1082,7 +1097,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
         <div id="traceBulkBar" class="trace-bar hidden" role="status" aria-live="polite"></div>
         <div id="fleetNotice" class="fleet-notice hidden"></div>
-        <div id="agentObsDrawer" class="hidden" style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin:8px 0 12px;">
+        <div id="agentObsDrawer" class="hidden" style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin:8px 0 12px;">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
             <div>
               <div style="font-size:12.5px;font-weight:700;color:var(--text-primary);" id="agentObsDrawerTitle">
@@ -7318,6 +7333,7 @@ __VIBELIFT_ENHANCEMENTS_JS__
       }
 
       if (data.method === 'ui/notifications/host-context-changed' && data.params) {
+        if (data.params.theme) VL.setHostTheme(data.params.theme);
         if (data.params.displayMode) {
           currentDisplayMode = data.params.displayMode;
           syncDisplayModeButton();
@@ -7374,6 +7390,7 @@ __VIBELIFT_ENHANCEMENTS_JS__
     }).then(function(res) {
       emitAppInitialized();
       VL.setHostCapabilities(res && res.hostCapabilities);
+      VL.setHostTheme(res && res.hostContext && res.hostContext.theme);
       const hostMode = res && res.hostContext && res.hostContext.displayMode;
       if (hostMode) {
         currentDisplayMode = hostMode;

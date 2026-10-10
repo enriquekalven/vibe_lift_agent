@@ -95,9 +95,10 @@ class PreviewFixtureDataTest(unittest.TestCase):
 class PreviewWiringTest(unittest.TestCase):
 
   def test_banner_is_added_once_right_after_body(self):
-    html = preview.add_banner('<html><body class="x"><main></main></body></html>')
+    html = preview.add_banner('<html><head><title>VibeLift</title></head><body class="x"><main></main></body></html>')
     self.assertEqual(html.count(preview.BANNER_ID), 1)
-    self.assertTrue(html.startswith('<html><body class="x"><div id="vlPreviewBanner" role="status"'))
+    self.assertIn('<title>[Preview] VibeLift</title>', html)
+    self.assertIn('<body class="x"><div id="vlPreviewBanner" role="status"', html)
     self.assertEqual(preview.add_banner(html), html)
     self.assertIn('fictional', preview.BANNER_TEXT)
 

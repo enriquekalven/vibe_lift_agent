@@ -556,15 +556,16 @@ def billing_daily(non_blocking: bool = False, window_days: int = 30) -> dict[str
 # Wiring
 # ---------------------------------------------------------------------------------------------------
 def add_banner(html: str) -> str:
-  """Puts the "fictional data" banner right after <body ...>, once."""
+  """Marks the page as fictional, once: a banner right after <body ...> and a "[Preview]" title prefix."""
   if BANNER_ID in html:
     return html
+  html = html.replace('<title>', '<title>[Preview] ', 1)
   start = html.find('<body')
   end = html.find('>', start) if start >= 0 else -1
   if end < 0:
     return html
-  banner = (f'<div id="{BANNER_ID}" role="status" style="position:sticky;top:0;z-index:2000;background:#7c2d12;'
-            'color:#fff;padding:7px 14px;font:600 12.5px/1.4 system-ui,sans-serif;text-align:center;">'
+  banner = (f'<div id="{BANNER_ID}" role="status" style="background:#7c2d12;color:#fff;padding:7px 14px;'
+            'font:600 12.5px/1.4 system-ui,sans-serif;text-align:center;">'
             f'{BANNER_TEXT}</div>')
   return html[:end + 1] + banner + html[end + 1:]
 
