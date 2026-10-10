@@ -149,9 +149,13 @@ def _compact_state_for_mcp_open(state: dict[str, Any]) -> dict[str, Any]:
   `get_vibelift_state`. Keeping `open_dashboard`'s `structuredContent.state`
   compact avoids feeding ~330k tokens into the host LLM on the post-tool turn.
   """
-  fleet = state.get('ge_fleet') if isinstance(state.get('ge_fleet'), dict) else {}
-  active = state.get('active_agent') if isinstance(state.get('active_agent'), dict) else {}
-  all_agents_raw = state.get('all_agents') if isinstance(state.get('all_agents'), dict) else {}
+  # Bind each value once so the isinstance check narrows the type (a repeated .get() does not).
+  fleet_value = state.get('ge_fleet')
+  fleet: dict[str, Any] = fleet_value if isinstance(fleet_value, dict) else {}
+  active_value = state.get('active_agent')
+  active: dict[str, Any] = active_value if isinstance(active_value, dict) else {}
+  all_agents_value = state.get('all_agents')
+  all_agents_raw: dict[str, Any] = all_agents_value if isinstance(all_agents_value, dict) else {}
   compact_all_agents: dict[str, Any] = {}
   for agent_id, agent_val in all_agents_raw.items():
     if isinstance(agent_val, dict):

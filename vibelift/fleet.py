@@ -2813,14 +2813,15 @@ class GeminiEnterpriseFleetService:
       b = a.get('backend') or {}
       m = a.get('metrics') or {}
       svc_name = str(b.get('service') or '')
-      sinfo = run_catalog.get(svc_name) if svc_name else None
-      if sinfo:
-        b.setdefault('min_instances', int(sinfo.get('min_instances') or 0))
-        b.setdefault('max_instances', sinfo.get('max_instances'))
-        b.setdefault('cpu', sinfo.get('cpu'))
-        b.setdefault('memory', sinfo.get('memory'))
+      # Not `sinfo`: that name is bound to a non-optional dict by the Cloud Run loop above.
+      conn_info = run_catalog.get(svc_name) if svc_name else None
+      if conn_info:
+        b.setdefault('min_instances', int(conn_info.get('min_instances') or 0))
+        b.setdefault('max_instances', conn_info.get('max_instances'))
+        b.setdefault('cpu', conn_info.get('cpu'))
+        b.setdefault('memory', conn_info.get('memory'))
         if not m.get('last_activity'):
-          m['last_activity'] = sinfo.get('updated') or a.get('updated')
+          m['last_activity'] = conn_info.get('updated') or a.get('updated')
       req_cnt = int(m.get('requests') or 0)
       trace_skills_mcp.append({
           'name': a.get('display_name') or b.get('collection_id') or svc_name or a.get('agent_id'),

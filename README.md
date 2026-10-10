@@ -187,7 +187,6 @@ vibe_lift_agent/
 │   ├── GE_MART.md               # Gemini Enterprise curated views and reporting mart
 │   ├── LOOKER_STUDIO_GUIDE.md   # 4-page Looker Studio L1/L2 IT Support Dashboard guide
 │   ├── SME_EVALUATION_REPORT.md # 6-Persona x 5-Dimension (30-check) SME evaluation report
-│   ├── HACKATHON_DEMO_SCRIPT.md # 3-minute high-impact demo script & Q&A cheat sheet
 │   ├── TESTING.md               # Requirement -> test map, CI gates
 │   ├── SKILL.md                 # Agent skill reference
 │   └── mcp_spec.json            # MCP tool catalog
