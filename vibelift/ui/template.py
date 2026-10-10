@@ -1,4 +1,6 @@
+import functools
 import json
+import pathlib
 from collections.abc import Mapping
 
 from vibelift.ui import logo_asset
@@ -648,6 +650,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .px-rewrite-head { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; flex-wrap: wrap; }
     .px-notes { font-size: 12px; color: var(--text-secondary); margin: 8px 0 0 18px; }
     @media (max-width: 800px) { .px-grid { grid-template-columns: 1fr; } }
+    /*__VIBELIFT_ENHANCEMENTS_CSS__*/
   </style>
 </head>
 <body>
@@ -691,12 +694,14 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg> Fullscreen
       </button>
       <span id="activeGenBadge" class="badge badge-blue adv-only">ACTIVE CONFIG</span>
+      <button type="button" class="btn vl-fresh vl-fresh-wait" id="vlFreshChip" title="How fresh the fleet data is. Click to refresh."><i class="vl-fresh-dot"></i>Loading&hellip;</button>
       <button class="btn verify-chip" onclick="toggleTelemetryValidatorDrawer()" id="toggleTelemetryValidatorBtn" title="See which data source backs each number">
         Data check: <span id="telemetryValidatorSummaryBadge" class="mono">checking&hellip;</span>
       </button>
       <button class="btn" id="exportPdfBtn" onclick="exportDashboardPdf()" title="Export filtered view to executive PDF report">
         <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" style="vertical-align:text-bottom;margin-right:4px;"><path d="M19 8H5c-1.66 0-3 1.34-3 3v6h4v4h12v-4h4v-6c0-1.66-1.34-3-3-3zm-3 11H8v-5h8v5zm3-7c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1zm-1-9H6v4h12V3z"/></svg> Export PDF
       </button>
+      <button type="button" class="btn" id="vlCopyLinkBtn" title="Copy a link to this view (tab, app, time range, search and open agent)">Copy link</button>
       <button class="btn" id="syncGcpBtn" onclick="syncGcpTelemetry()" title="Sync GCP Telemetry (Cloud Monitoring, BigQuery, Gemini Enterprise)">
         Refresh
       </button>
@@ -963,6 +968,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     <!-- TAB 6: EXECUTIVE OVERVIEW (charts computed client-side from live /api/state only) -->
     <section id="tabPanel6">
       <div class="exec-headline" id="execHeadline">Loading live data from Google Cloud&hellip;</div>
+      <div id="vlHealthStrip" class="vl-strip hidden" aria-label="Fleet health"></div>
       <div class="kpi-grid" id="execKpis"></div>
       <div class="panel trend-panel">
         <div class="panel-header"><div class="panel-title"><span>Requests over time</span></div></div>
@@ -1016,7 +1022,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="chart-source" id="execSrcTokens"></div>
       </div>
       <div class="panel" style="margin-top:14px;">
-        <div class="panel-header"><div class="panel-title"><span>Needs attention</span></div></div>
+        <div class="panel-header"><div class="panel-title"><span>Needs attention</span><span class="badge badge-green" id="vlAttentionBadge"></span></div></div>
         <ul class="attention-list" id="execAttention"></ul>
       </div>
       <div class="panel hidden" id="execCleanupPanel" style="margin-top:14px;">
@@ -1109,6 +1115,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
             <thead>
               <tr>
                 <th>Agent</th>
+                <th title="Rule-based status from the measured metrics; see Fleet health on the Overview tab">Health</th>
                 <th>Type</th>
                 <th>Runs on</th>
                 <th>Requests</th>
@@ -1583,6 +1590,23 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- TAB 3: COST & BILLING (WITH FOCUSED SUB-VIEW SELECTOR SO IT IS NEVER BUSY) -->
     <section id="tabPanel3" class="hidden">
+      <div class="panel" id="vlSpendPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Spend overview</span>
+            <span id="vlSpendBadge" class="badge badge-blue">&mdash;</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">Billed AI spend, month to date, run-rate and budget from the Cloud Billing export; model spend and cache savings from observed tokens &times; list price.</div>
+        </div>
+        <div id="vlBudgetForm" class="vl-budget-form hidden"></div>
+        <div class="vl-kpi-group" id="vlSpendBilledTitle">Billed &middot; Cloud Billing export (AI services, project-level)</div>
+        <div class="kpi-grid" id="vlSpendKpis"></div>
+        <div class="vl-kpi-group" id="vlSpendEstTitle">Estimated &middot; observed tokens &times; list price</div>
+        <div class="kpi-grid" id="vlSpendKpisEst"></div>
+        <div id="vlSpendChart"></div>
+        <div class="chart-legend" id="vlSpendLegend"></div>
+        <div class="chart-source" id="vlSpendSource"></div>
+      </div>
       <div class="panel live-only" id="billingStatusPanel">
         <div class="panel-header">
           <div class="panel-title">
@@ -2189,6 +2213,23 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- TAB 4: USERS, TOP SPENDERS & CUSTOMER FEEDBACK -->
     <section id="tabPanel4" class="hidden">
+      <div class="panel live-only" id="vlAdoptionPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Adoption</span>
+            <span class="badge badge-blue">Daily active users &amp; sessions</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">How many people use Gemini Enterprise each day, how deep their sessions go, and how often turns fail.</div>
+        </div>
+        <div class="kpi-grid" id="vlAdoptionKpis"></div>
+        <div id="vlAdoptionChart"></div>
+        <div class="chart-legend">
+          <span><i style="background:#10b981"></i>Active users</span>
+          <span><i style="background:#2563eb"></i>Sessions (right axis)</span>
+          <span id="vlAdoptionPartialKey"><i style="background:#bbf7d0"></i>Today (partial)</span>
+        </div>
+        <div class="chart-source" id="vlAdoptionSource"></div>
+      </div>
       <div class="kpi-grid adv-only" id="userCentricKpis"></div>
 
       <div class="panel adv-only">
@@ -2221,6 +2262,40 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
 
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Top users</span>
+            <span class="badge badge-blue">Tokens &amp; estimated cost per user</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Sessions, turns and tokens per user, with an estimated model cost (each user's tokens &times; list price per model).
+            Estimates only: billed cost is project-level and is never split per user. Click a user to see their sessions below.
+          </div>
+        </div>
+        <div id="powerUsersCostNote" class="kpi-sub" style="margin-bottom:6px;"></div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>User LDAP</th>
+                <th>Department</th>
+                <th>Primary Agent</th>
+                <th>Sessions</th>
+                <th>Total Tokens</th>
+                <th>Thinking Tok</th>
+                <th>Background Tok</th>
+                <th>Cache Hit %</th>
+                <th>Avg CSAT</th>
+                <th>Est. Cost (list price)</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="powerUsersBody"></tbody>
+          </table>
+        </div>
+      </div>
+
       <div class="panel live-only" id="liveGeSessionsPanel">
         <div class="panel-header">
           <div class="panel-title">
@@ -2228,7 +2303,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
             <span id="geSessionsBadge" class="badge badge-blue">vibelift_mart.fct_sessions</span>
           </div>
           <div style="font-size:12px;color:var(--text-secondary);">
-            Session-level rollup from <span class="mono">vibelift_mart.fct_turns</span>. Click a user in <strong>Top users</strong> below to see only their sessions; click <strong>▸</strong> on a session to see turn-by-turn input and output tokens. Click a session row to pre-fill the CSAT feedback form below. Token counts only: prompt and response text stay in BigQuery.
+            Session-level rollup from <span class="mono">vibelift_mart.fct_turns</span>. Click a user in <strong>Top users</strong> above to see only their sessions; click <strong>▸</strong> on a session to see turn-by-turn input and output tokens. Click a session row to pre-fill the CSAT feedback form below. Token counts only: prompt and response text stay in BigQuery.
           </div>
         </div>
         <div id="geSessionsUserFilter" class="kpi-sub" style="display:none;margin:6px 0 10px;gap:10px;align-items:center;flex-wrap:wrap;">
@@ -2254,40 +2329,6 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
               </tr>
             </thead>
             <tbody id="geSessionsBody"></tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-header">
-          <div class="panel-title">
-            <span>Top users</span>
-            <span class="badge badge-blue">Tokens &amp; estimated cost per user</span>
-          </div>
-          <div style="font-size:12px;color:var(--text-secondary);">
-            Sessions, turns and tokens per user, with an estimated model cost (each user's tokens &times; list price per model).
-            Estimates only: billed cost is project-level and is never split per user. Click a user to see their sessions above.
-          </div>
-        </div>
-        <div id="powerUsersCostNote" class="kpi-sub" style="margin-bottom:6px;"></div>
-        <div class="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>User LDAP</th>
-                <th>Department</th>
-                <th>Primary Agent</th>
-                <th>Sessions</th>
-                <th>Total Tokens</th>
-                <th>Thinking Tok</th>
-                <th>Background Tok</th>
-                <th>Cache Hit %</th>
-                <th>Avg CSAT</th>
-                <th>Est. Cost (list price)</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody id="powerUsersBody"></tbody>
           </table>
         </div>
       </div>
@@ -2481,7 +2522,12 @@ async def handle_agent_turn(message_envelope):
     </section>
   </main>
   <div id="apiNotice" class="api-notice hidden" role="status" aria-live="polite"></div>
+  <div id="vlDrawerBackdrop" class="vl-backdrop hidden"></div>
+  <aside id="vlDrawer" class="vl-drawer hidden" role="dialog" aria-modal="true" aria-labelledby="vlDrawerTitle" tabindex="-1"></aside>
 
+  <script>
+__VIBELIFT_ENHANCEMENTS_JS__
+  </script>
   <script>
     const ADVANCED_ONLY_TABS = [1, 2, 5];
     let currentTabIndex = 6;
@@ -2531,6 +2577,7 @@ async def handle_agent_turn(message_envelope):
       const banner = document.getElementById('demoSelectorBanner');
       if (banner) banner.classList.toggle('hidden', tab === 0 || tab === 6 || tab === 3 || tab === 4);
       if (tab === 2) initPromptXray();
+      VL.onTab(tab);
       notifyHostSizeChanged();
     }
 
@@ -2641,7 +2688,7 @@ async def handle_agent_turn(message_envelope):
       }
       if (state.ge_fleet) renderFleet(state.ge_fleet);
       const agent = state.active_agent;
-      if (!agent) return;
+      if (!agent) { VL.onState(state); return; }
       allAgentsCache[agent.agent_id] = agent;
 
       const ts = agent.timeline || [];
@@ -2839,6 +2886,7 @@ async def handle_agent_turn(message_envelope):
       renderIngestDeadLetters(state.ingest_dead_letters);
       try { renderExecOverview(execLastFleet, state.user_centric); } catch (e) { console.warn('overview', e); }
       renderSmeControlPlane(state);
+      VL.onState(state);
       notifyHostSizeChanged();
     }
 
@@ -5115,8 +5163,8 @@ async def handle_agent_turn(message_envelope):
     // ---------------------------------------------------------------------------
     const FLEET_TOOL = 'query_ge_agent_fleet';
     const FLEET_REFRESH_MS = 60000;
-    let fleetWindowHours = 24;
-    let userSelectedWindow = false;
+    let fleetWindowHours = VL.urlWindowHours() || 24;
+    let userSelectedWindow = VL.urlWindowHours() > 0;
     let fleetTimer = null;
     let fleetRefreshMode = 'pending';  // 'host' (MCP App bridge), 'http' (direct API), 'snapshot'
     let lastFleet = null;
@@ -5400,6 +5448,7 @@ async def handle_agent_turn(message_envelope):
     function onGeScopeChange(value) {
       geScope = value || 'all';
       try { localStorage.setItem('vibelift.geScope', geScope); } catch (e) {}
+      VL.syncUrl();
       if (geRawFleet) renderFleet(geRawFleet);
       if (currentState) {
         if (currentState.user_centric) {
@@ -5415,6 +5464,7 @@ async def handle_agent_turn(message_envelope):
 
     const EXEC_PALETTE = ['#2563eb', '#0ea5e9', '#10b981', '#f59e0b', '#8b5cf6', '#14b8a6', '#64748b', '#ef4444'];
     let execLastFleet = null;
+    var execAttentionShowAll = false;
 
     function hbarChart(rows, maxVal, fmt) {
       const wrap = el('div', null, []);
@@ -5611,14 +5661,18 @@ async def handle_agent_turn(message_envelope):
           (fleet.__shared_runtimes ? ' ' + fleet.__shared_runtimes + ' runtime(s) here are also registered in other apps; their traffic cannot be split by app.' : '')]) : ''
       );
 
+      VL.renderHealthStrip(agents);
       const kpis = document.getElementById('execKpis');
       if (kpis) {
         kpis.replaceChildren(
           kpiCard('Agents enabled', fmtInt(totals.enabled) + ' / ' + fmtInt(totals.agents), fmtInt(active.length) + ' with traffic · ' + win),
-          kpiCard('Requests', fmtInt(req), (req ? (100 * e5 / req).toFixed(2) : '0.00') + '% server errors · ' + fmtInt(e4) + ' rejected (4xx)'),
-          kpiCard('Est. model spend', spend == null ? '—' : fmtUsd(spend), fmtInt(muTotals.invocations) + ' model calls · ' + (scoped ? 'project-wide' : 'list price')),
+          kpiCard('Requests', fmtInt(req), (req ? (100 * e5 / req).toFixed(2) : '0.00') + '% server errors · ' + fmtInt(e4) + ' rejected (4xx)',
+            VL.requestsSparkNode(fleet, runtimes.map(function(rt) { return runtimeKey(rt.agent); }))),
+          kpiCard('Est. model spend', spend == null ? '—' : fmtUsd(spend), fmtInt(muTotals.invocations) + ' model calls · ' + (scoped ? 'project-wide' : 'list price'),
+            VL.spendDeltaNode(win)),
           kpiCard('Active people', users.length ? fmtInt(people.length) : '—',
-            users.length ? ('+ ' + fmtInt(sas.length) + ' service accounts · ' + win) : (scoped ? 'no audit-log activity for this scope' : 'loading from BigQuery…'))
+            users.length ? ('+ ' + fmtInt(sas.length) + ' service accounts · ' + win) : (scoped ? 'no audit-log activity for this scope' : 'loading from BigQuery…'),
+            VL.usersSparkNode())
         );
       }
 
@@ -5722,16 +5776,19 @@ async def handle_agent_turn(message_envelope):
         (tokRows.length > 8 ? ' · top 8 of ' + tokRows.length : '') +
         (noTok.length ? ' · no token data from ' + noTok.length + ' agent(s) with traffic: ' + noTok.map(rtLabel).join(', ') : '');
 
-      // Needs attention: rules over the live payload only
+      // Needs attention: rules over the live payload only. Items carry a target (an agent to open or a
+      // panel to scroll to); severity for server errors follows the same health rules as the Agents tab.
       const items = [];
       const broken = agents.filter(isBrokenRegistration);
-      if (broken.length) items.push({sev: 2, text: broken.length + ' agent registration(s) point at a backend that no longer exists, so people who pick them get errors: ' +
+      if (broken.length) items.push({sev: 2, agent: broken.length === 1 ? broken[0] : null, target: 'execCleanupPanel',
+        text: broken.length + ' agent registration(s) point at a backend that no longer exists, so people who pick them get errors: ' +
         broken.slice(0, 4).map(function(a) { return a.display_name || a.agent_id; }).join(', ') + (broken.length > 4 ? '…' : '') + '. See Clean up below.'});
       const rawFl = geRawFleet || fleet;
       const unregSum = (rawFl && rawFl.unregistered_summary) || {};
       if (Number(unregSum.total_unregistered_runtimes || 0) > 0) {
         items.push({
           sev: Number(unregSum.zombie_runtimes_count || 0) > 0 ? 2 : 1,
+          target: 'execUnregisteredPanel',
           text: fmtInt(unregSum.total_unregistered_runtimes) + ' deployed runtime(s) in project (' +
             fmtInt(unregSum.unregistered_reasoning_engines || 0) + ' Agent Engine, ' +
             fmtInt(unregSum.unregistered_cloud_run_services || 0) + ' Cloud Run, ' +
@@ -5744,20 +5801,23 @@ async def handle_agent_turn(message_envelope):
       runtimes.forEach(function(rt) {
         const mm = m(rt.agent);
         const r = Number(mm.requests || 0), c = Number(mm.llm_calls || 0);
-        if (r > 0 && c / r >= 20) items.push({sev: 2, text: rtLabel(rt) + ': ' + fmtInt(c) + ' LLM calls for ' + fmtInt(r) + ' requests (' +
+        if (r > 0 && c / r >= 20) items.push({sev: 2, agent: rt.agent, text: rtLabel(rt) + ': ' + fmtInt(c) + ' LLM calls for ' + fmtInt(r) + ' requests (' +
           fmtTokens(Number(mm.input_tokens || 0) + Number(mm.output_tokens || 0)) + ' tokens) ' + win + '. Possible agent loop; check its traces.'});
       });
-      if (noTok.length) items.push({sev: 0, text: noTok.length + ' agent(s) with traffic export no token data: ' + noTok.map(rtLabel).slice(0, 3).join(', ') +
+      if (noTok.length) items.push({sev: 0, agent: noTok.length === 1 ? noTok[0].agent : null,
+        text: noTok.length + ' agent(s) with traffic export no token data: ' + noTok.map(rtLabel).slice(0, 3).join(', ') +
         (noTok.length > 3 ? '…' : '') + '. For Agent Engine, deploy with GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=true.'});
       runtimes.forEach(function(rt) {
         const a = rt.agent;
         const mm = m(a);
-        if (Number(mm.errors_5xx || 0) > 0) items.push({sev: 2, text: rtLabel(rt) + ': ' + fmtInt(mm.errors_5xx) + ' server error(s) (5xx) ' + win + '.'});
+        const sev5 = VL.serverErrorSeverity(a);
         const r = Number(mm.requests || 0), x4 = Number(mm.errors_4xx || 0);
-        if (r >= 20 && x4 / r > 0.2) items.push({sev: 1, text: rtLabel(rt) + ': ' + Math.round(100 * x4 / r) + '% of requests rejected (4xx). Usually auth or permission failures; check callers.'});
+        if (Number(mm.errors_5xx || 0) > 0) items.push({sev: sev5, agent: a, text: rtLabel(rt) + ': ' + fmtInt(mm.errors_5xx) + ' server error(s) (5xx) ' + win +
+          (r ? ' (' + (100 * Number(mm.errors_5xx) / r).toFixed(2) + '% of requests)' : '') + '.'});
+        if (r >= 20 && x4 / r > 0.2) items.push({sev: 1, agent: a, text: rtLabel(rt) + ': ' + Math.round(100 * x4 / r) + '% of requests rejected (4xx). Usually auth or permission failures; check callers.'});
       });
       const idle = agents.filter(function(a) { return a.state === 'ENABLED' && m(a).requests === 0 && !Number(m(a).llm_calls || 0); });
-      if (idle.length) items.push({sev: 0, text: idle.length + ' enabled agent(s) had zero requests ' + win + ': ' +
+      if (idle.length) items.push({sev: 0, agent: idle.length === 1 ? idle[0] : null, text: idle.length + ' enabled agent(s) had zero requests ' + win + ': ' +
         idle.slice(0, 3).map(function(a) { return a.display_name || a.agent_id; }).join(', ') + (idle.length > 3 ? '…' : '') + '.'});
       const disabled = agents.filter(function(a) { return a.state && a.state !== 'ENABLED'; });
       if (disabled.length) items.push({sev: 0, text: disabled.length + ' agent(s) are disabled or private.'});
@@ -5765,16 +5825,26 @@ async def handle_agent_turn(message_envelope):
       if (noCard.length) items.push({sev: 1, text: 'Spend for ' + noCard.join(', ') + ' is not included (no list price on file).'});
       (fleet.errors || []).slice(0, 2).forEach(function(er) { items.push({sev: 1, text: 'Data source warning: ' + String(er)}); });
       items.sort(function(a, b) { return b.sev - a.sev; });
+      VL.attentionSummary(items);
       const att = document.getElementById('execAttention');
       if (att) {
         const colors = ['#94a3b8', '#f59e0b', '#ef4444'];
         att.replaceChildren();
         if (!items.length) att.appendChild(el('li', null, [el('span', 'sev-dot', []), 'Nothing needs attention right now.']));
-        items.slice(0, 8).forEach(function(it) {
+        const shown = execAttentionShowAll ? items : items.slice(0, 8);
+        shown.forEach(function(it) {
           const dot = el('span', 'sev-dot', []);
           dot.style.background = colors[it.sev];
-          att.appendChild(el('li', null, [dot, el('span', null, [it.text])]));
+          const li = el('li', null, [dot, el('span', null, [it.text])]);
+          VL.decorateAttention(li, it);
+          att.appendChild(li);
         });
+        if (items.length > 8) {
+          const more = el('button', 'btn btn-xs', [execAttentionShowAll ? 'Show fewer' : 'Show all ' + items.length]);
+          more.type = 'button';
+          more.addEventListener('click', function() { execAttentionShowAll = !execAttentionShowAll; renderExecOverview(execLastFleet, currentState ? currentState.user_centric : null); });
+          att.appendChild(el('li', null, [more]));
+        }
       }
       const cleanupPanel = document.getElementById('execCleanupPanel');
       if (cleanupPanel) {
@@ -6226,11 +6296,12 @@ async def handle_agent_turn(message_envelope):
       box.appendChild(el('div', 'live-note', ['Assumptions: ' + (res.assumptions || []).join(' ')]));
     }
 
-    function kpiCard(label, value, sub) {
+    function kpiCard(label, value, sub, extra) {
       return el('div', 'kpi-card', [
         el('div', 'kpi-label', [label]),
         el('div', 'kpi-value mono', [value]),
         el('div', 'kpi-sub', [sub]),
+        extra || null,
       ]);
     }
 
@@ -6312,7 +6383,7 @@ async def handle_agent_turn(message_envelope):
       const body = document.getElementById('fleetAgentsBody');
       body.replaceChildren();
       traceRowEls = {};
-      if (!fleet.agents.length) body.appendChild(emptyRow(10, 'No agents found on this Gemini Enterprise app.'));
+      if (!fleet.agents.length) body.appendChild(emptyRow(11, 'No agents found on this Gemini Enterprise app.'));
       fleet.agents.forEach(function(a) {
         const m = a.metrics || {};
         const b = a.backend || {};
@@ -6346,28 +6417,47 @@ async def handle_agent_turn(message_envelope):
           traceRowEls[String(a.resource_name)] = {wrap: obsActionRow, agent: a};
           fillTraceRow(obsActionRow, a);
         }
-        body.appendChild(el('tr', a.telemetry_scope === 'none' ? 'fleet-row-muted' : null, [
-          el('td', null, [
+        const nameCell = el('td', null, [
             el('div', 'fleet-agent-name', [a.display_name || a.agent_id]),
             el('div', 'fleet-agent-app', [geRegionLabel(agentLocation(a)) + ' · ' + (a.engine_display_name || a.engine_id || '—')]),
             a.description ? el('div', 'fleet-agent-desc', [a.description]) : null,
             el('div', 'fleet-agent-tags', [
               badge(a.state || 'UNKNOWN', a.state === 'ENABLED' ? 'badge-green' : 'badge-yellow'),
-              a.sharing_scope ? badge(String(a.sharing_scope).replace(/_/g, ' ').toLowerCase(), 'badge-blue') : null,
+              // vl-scope-all: compact rows hide the default scope (still shown in the agent detail).
+              a.sharing_scope ? badge(String(a.sharing_scope).replace(/_/g, ' ').toLowerCase(),
+                                      'badge-blue' + (String(a.sharing_scope).toUpperCase() === 'ALL_USERS' ? ' vl-scope-all' : '')) : null,
               registrationBadge(a),
             ]),
             obsActionRow,
-          ]),
-          el('td', null, [badge(a.type_label || a.type, 'badge-blue')]),
-          el('td', null, [el('div', null, [runsOn]), el('div', 'fleet-agent-desc', [[runsOnSub, scope].filter(Boolean).join(' · ')])]),
-          el('td', 'mono', [fmtInt(m.requests)]),
-          el('td', 'mono', [m.requests == null ? '—' : fmtInt(m.errors_4xx) + ' / ' + fmtInt(m.errors_5xx)]),
-          el('td', 'mono', [m.latency_p50_ms == null && m.latency_p95_ms == null ? '—' : fmtMs(m.latency_p50_ms) + ' / ' + fmtMs(m.latency_p95_ms)]),
+          ]);
+        nameCell.dataset.csv = a.display_name || a.agent_id || '';
+        nameCell.dataset.sort = String(a.display_name || a.agent_id || '').toLowerCase();
+        const reqCell = el('td', 'mono', [fmtInt(m.requests), VL.agentSpark(fleet, a)]);
+        if (m.requests != null) reqCell.dataset.sort = String(m.requests);
+        const errCell = el('td', 'mono', [m.requests == null ? '—' : fmtInt(m.errors_4xx) + ' / ' + fmtInt(m.errors_5xx)]);
+        if (m.errors_5xx != null) errCell.dataset.sort = String(m.errors_5xx);
+        const latCell = el('td', 'mono', [m.latency_p50_ms == null && m.latency_p95_ms == null ? '—' : fmtMs(m.latency_p50_ms) + ' / ' + fmtMs(m.latency_p95_ms)]);
+        if (m.latency_p95_ms != null) latCell.dataset.sort = String(m.latency_p95_ms);
+        const tokCell = tokenCell(a);
+        if (m.input_tokens != null) tokCell.dataset.sort = String(Number(m.input_tokens) + Number(m.output_tokens || 0));
+        if (m.last_activity && !isNaN(Date.parse(m.last_activity))) lastCell.dataset.sort = String(Date.parse(m.last_activity));
+        const runsOnCell = el('td', 'vl-runs-on', [el('div', null, [runsOn]), el('div', 'fleet-agent-desc', [[runsOnSub, scope].filter(Boolean).join(' · ')])]);
+        runsOnCell.title = [runsOn, runsOnSub, scope].filter(Boolean).join(' · ');
+        const row = el('tr', a.telemetry_scope === 'none' ? 'fleet-row-muted' : null, [
+          nameCell,
+          VL.healthCell(VL.health(a)),
+          VL.typeCell(a),
+          runsOnCell,
+          reqCell,
+          errCell,
+          latCell,
           el('td', 'mono', [fmtInt(m.llm_calls)]),
-          tokenCell(a),
+          tokCell,
           el('td', 'mono', [fmtInt(m.conversations)]),
           lastCell,
-        ]));
+        ]);
+        VL.agentRowDecorate(row, a);
+        body.appendChild(row);
       });
 
       const errBox = document.getElementById('fleetErrors');
@@ -6407,6 +6497,7 @@ async def handle_agent_turn(message_envelope):
         notes.appendChild(el('li', null, ['Trace scan reached its page cap (' + fleet.token_log_scan.traces_scanned
           + ' traces); trace-based token totals are lower bounds for this window.']));
       }
+      VL.onFleet(fleet);
     }
 
     function buildClientObsScript(resourceName, enabled, onlyLowCode, agentObj) {
@@ -6635,6 +6726,7 @@ async def handle_agent_turn(message_envelope):
       if (st) traceRowState[res] = st; else delete traceRowState[res];
       const ref = traceRowEls[res];
       if (ref) fillTraceRow(ref.wrap, ref.agent);
+      if (typeof VL !== 'undefined') VL.onTraceRow(res);
       notifyHostSizeChanged();
     }
 
@@ -6836,6 +6928,7 @@ async def handle_agent_turn(message_envelope):
       fleetWindowHours = Number(sel && sel.value) || 24;
       userSelectedWindow = true;
       try { localStorage.setItem('vibelift.fleetWindowHours', String(fleetWindowHours)); } catch (e) {}
+      VL.syncUrl();
       if (fleetRefreshMode === 'snapshot') fleetRefreshMode = 'pending';
       const targetHours = fleetWindowHours;
       const ok = await refreshFleet(false);
@@ -7280,6 +7373,7 @@ async def handle_agent_turn(message_envelope):
       return callHost('initialize', initPayload, 1500).catch(function() { return {}; });
     }).then(function(res) {
       emitAppInitialized();
+      VL.setHostCapabilities(res && res.hostCapabilities);
       const hostMode = res && res.hostContext && res.hostContext.displayMode;
       if (hostMode) {
         currentDisplayMode = hostMode;
@@ -7352,6 +7446,29 @@ async def handle_agent_turn(message_envelope):
 """
 
 
+_STATIC_DIR = pathlib.Path(__file__).resolve().parent / 'static'
+ENHANCEMENTS_JS_FILE = 'dashboard_enhancements.js'
+ENHANCEMENTS_CSS_FILE = 'dashboard_enhancements.css'
+
+
+@functools.lru_cache(maxsize=1)
+def _base_dashboard_html() -> str:
+  """The template with the enhancement assets and the logo inlined (everything but the per-request state).
+
+  New dashboard features live in vibelift/ui/static/dashboard_enhancements.{js,css}. They are inlined here
+  so the page stays one self-contained document, which the Gemini Enterprise MCP App requires.
+  """
+  js = (_STATIC_DIR / ENHANCEMENTS_JS_FILE).read_text(encoding='utf-8')
+  css = (_STATIC_DIR / ENHANCEMENTS_CSS_FILE).read_text(encoding='utf-8')
+  if '</script' in js.lower() or '</style' in css.lower():
+    raise ValueError('Dashboard assets must not contain a closing </script> or </style> tag.')
+  return (
+      _DASHBOARD_HTML.replace('/*__VIBELIFT_ENHANCEMENTS_CSS__*/', css)
+      .replace('__VIBELIFT_ENHANCEMENTS_JS__', js)
+      .replace('__VIBELIFT_GOOGLEY_LOGO_DATA_URI__', logo_asset.VIBELIFT_GOOGLEY_LOGO_DATA_URI)
+  )
+
+
 def render_dashboard_html(
     initial_state: Mapping[str, object] | None = None,
 ) -> str:
@@ -7368,10 +7485,5 @@ def render_dashboard_html(
       )
     except (TypeError, ValueError):
       state_json = 'null'
-  return (
-      _DASHBOARD_HTML.replace(
-          '__VIBELIFT_GOOGLEY_LOGO_DATA_URI__',
-          logo_asset.VIBELIFT_GOOGLEY_LOGO_DATA_URI,
-      )
-      .replace('__VIBELIFT_INITIAL_STATE_JSON__', state_json)
-  )
+  # The state JSON is substituted last, so nothing inside it is ever treated as a placeholder.
+  return _base_dashboard_html().replace('__VIBELIFT_INITIAL_STATE_JSON__', state_json)
