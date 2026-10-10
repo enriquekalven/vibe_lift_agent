@@ -356,6 +356,149 @@ var VL = (function() {
     return parts.join(' ');
   }
 
+  // ---- Cloud Monitoring alert policies (pure) ---------------------------------------------------------
+  // Builds alert policies for one agent from the same Cloud Monitoring metrics VibeLift reads, with the
+  // dashboard's health thresholds as defaults. Nothing is created here: the user copies the commands,
+  // reviews them and runs `gcloud monitoring policies create --policy-from-file` (GA) themselves.
+  var ALERT_WINDOWS = [300, 900, 3600];
+  var PROJECT_ID_RE = /^(?:\d{6,20}|[a-z][a-z0-9-]{4,28}[a-z0-9]|[a-z][a-z0-9.-]{0,62}:[a-z][a-z0-9-]{4,28}[a-z0-9])$/;
+  var ENGINE_ID_RE = /^\d{1,30}$/;
+  var SERVICE_NAME_RE = /^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+  var CHANNEL_ID_RE = /^\d{1,30}$/;
+  var CHANNEL_NAME_RE = /^projects\/([^\/\s]+)\/notificationChannels\/(\d{1,30})$/;
+
+  function oneLine(v) { return String(v === null || v === undefined ? '' : v).replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, ' ').trim(); }
+  function alertSlug(name) {
+    var slug = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/g, '');
+    return slug || 'agent';
+  }
+  // The monitored resource behind an agent, or null when it has no per-project runtime metrics.
+  function vlAlertTarget(a, fleetProject) {
+    var b = (a && a.backend) || {};
+    var project = String(b.project || fleetProject || '');
+    if (b.kind === 'agent_engine') {
+      var m = /\/reasoningEngines\/(\d+)$/.exec(String(b.resource || ''));
+      var id = String(b.reasoning_engine_id || (m ? m[1] : ''));
+      return {kind: 'agent_engine', project: project, id: id, label: 'resource.label.reasoning_engine_id',
+              resourceType: 'aiplatform.googleapis.com/ReasoningEngine',
+              requests: 'aiplatform.googleapis.com/reasoning_engine/request_count',
+              latencies: 'aiplatform.googleapis.com/reasoning_engine/request_latencies',
+              describe: 'Agent Engine ' + id + (b.location ? ' (' + oneLine(b.location) + ')' : '')};
+    }
+    if (b.kind === 'cloud_run' && b.service) {
+      return {kind: 'cloud_run', project: project, id: String(b.service), label: 'resource.label.service_name',
+              resourceType: 'cloud_run_revision', requests: 'run.googleapis.com/request_count',
+              latencies: 'run.googleapis.com/request_latencies',
+              describe: 'Cloud Run service ' + oneLine(b.service) + (b.region ? ' (' + oneLine(b.region) + ')' : '')};
+    }
+    return null;
+  }
+  // Smallest evaluation window in which the agent's observed traffic gives at least minRequests requests.
+  function vlAutoAlertWindow(requests, windowHours, minRequests) {
+    var r = num(requests);
+    var hours = num(windowHours);
+    if (r === null || hours === null || hours <= 0) return {seconds: 3600, perWindow: null};
+    var perMinute = r / (hours * 60);
+    for (var i = 0; i < ALERT_WINDOWS.length; i++) {
+      var per = perMinute * ALERT_WINDOWS[i] / 60;
+      if (per >= minRequests) return {seconds: ALERT_WINDOWS[i], perWindow: per};
+    }
+    return {seconds: 3600, perWindow: perMinute * 60};
+  }
+  function vlAlertPolicies(a, opts) {
+    var o = opts || {};
+    var R = HEALTH_RULES;
+    var target = vlAlertTarget(a, o.project);
+    if (!target) {
+      return {ok: false, reason: 'This agent type has no per-project runtime metrics (no-code, Google-managed or Dialogflow agents), so there is nothing to alert on.'};
+    }
+    var include = o.include || {errors: true, latency: true, absence: false};
+    var errorPct = num(o.errorPct);
+    if (errorPct === null) errorPct = R.failing5xxPct;
+    var latencyS = num(o.latencyS);
+    if (latencyS === null) latencyS = R.degradedP95Ms / 1000;
+    var absenceMin = num(o.absenceMin);
+    if (absenceMin === null) absenceMin = 60;
+    var problems = [];
+    if (!PROJECT_ID_RE.test(target.project)) problems.push('The Google Cloud project is unknown or not a valid project ID.');
+    if (target.kind === 'agent_engine' && !ENGINE_ID_RE.test(target.id)) problems.push('The Agent Engine ID is missing or invalid.');
+    if (target.kind === 'cloud_run' && !SERVICE_NAME_RE.test(target.id)) problems.push('The Cloud Run service name is invalid.');
+    if (!include.errors && !include.latency && !include.absence) problems.push('Pick at least one condition.');
+    if (include.errors && !(errorPct > 0 && errorPct <= 100)) problems.push('The server error threshold must be above 0% and at most 100%.');
+    if (include.latency && !(latencyS > 0 && latencyS <= 3600)) problems.push('The latency threshold must be above 0 s and at most 3600 s.');
+    if (include.absence && !(absenceMin >= 5 && absenceMin <= 1440 && Math.round(absenceMin) === absenceMin)) {
+      problems.push('The no-traffic time must be a whole number of minutes from 5 to 1440.');
+    }
+    var channel = null;
+    var ch = String(o.channel === null || o.channel === undefined ? '' : o.channel).trim();
+    if (ch) {
+      var named = CHANNEL_NAME_RE.exec(ch);
+      if (CHANNEL_ID_RE.test(ch)) channel = 'projects/' + target.project + '/notificationChannels/' + ch;
+      else if (named && PROJECT_ID_RE.test(named[1])) channel = ch;
+      else problems.push('The notification channel must be a channel ID or projects/PROJECT/notificationChannels/ID.');
+    }
+    var auto = vlAutoAlertWindow(((a && a.metrics) || {}).requests, o.windowHours, R.minRequestsForRates);
+    var windowS = ALERT_WINDOWS.indexOf(Number(o.windowS)) >= 0 ? Number(o.windowS) : auto.seconds;
+    if (problems.length) return {ok: false, reason: problems.join(' '), problems: problems, target: target, autoWindow: auto};
+
+    var name = oneLine((a && (a.display_name || a.agent_id)) || 'agent');
+    var slug = alertSlug(name);
+    var where = target.describe + ' in project ' + target.project;
+    var winText = windowS >= 3600 ? '1-hour' : (windowS / 60) + '-minute';
+    var base = 'resource.type="' + target.resourceType + '" AND ' + target.label + '="' + target.id + '"';
+    var reqFilter = 'metric.type="' + target.requests + '" AND ' + base;
+    var agg = function(reducer, seconds) {
+      return [{alignmentPeriod: seconds + 's', perSeriesAligner: 'ALIGN_DELTA', crossSeriesReducer: reducer, groupByFields: [target.label]}];
+    };
+    var policies = [];
+    var add = function(key, title, severity, combiner, conditions, doc) {
+      var p = {displayName: 'VibeLift: ' + name + ' \u00b7 ' + title, documentation: {content: doc, mimeType: 'text/markdown'},
+               userLabels: {source: 'vibelift', vibelift_agent: slug}, conditions: conditions, combiner: combiner, enabled: true,
+               severity: severity};
+      if (channel) p.notificationChannels = [channel];
+      policies.push({key: key, file: 'vibelift-' + slug + '-' + key + '.json', policy: p});
+    };
+    if (include.errors) {
+      add('5xx', 'server errors', 'CRITICAL', 'AND', [
+        {displayName: 'Server errors (5xx) above ' + errorPct + '% of requests', conditionThreshold: {
+          filter: reqFilter + ' AND metric.label.response_code_class=starts_with("5")', aggregations: agg('REDUCE_SUM', windowS),
+          denominatorFilter: reqFilter, denominatorAggregations: agg('REDUCE_SUM', windowS),
+          comparison: 'COMPARISON_GT', thresholdValue: errorPct / 100, duration: '0s', trigger: {count: 1},
+          evaluationMissingData: 'EVALUATION_MISSING_DATA_INACTIVE'}},
+        {displayName: 'At least ' + R.minRequestsForRates + ' requests in the window', conditionThreshold: {
+          filter: reqFilter, aggregations: agg('REDUCE_SUM', windowS), comparison: 'COMPARISON_GE',
+          thresholdValue: R.minRequestsForRates, duration: '0s', trigger: {count: 1},
+          evaluationMissingData: 'EVALUATION_MISSING_DATA_INACTIVE'}},
+      ], 'Server errors (5xx) on **' + name + '** (' + where + ') were above ' + errorPct + '% of requests in a ' + winText +
+         ' window with at least ' + R.minRequestsForRates + ' requests. That is the rule VibeLift uses to mark an agent Failing. ' +
+         'Created from the VibeLift dashboard.');
+    }
+    if (include.latency) {
+      add('p95', 'slow responses', 'WARNING', 'OR', [
+        {displayName: 'p95 latency above ' + latencyS + ' s', conditionThreshold: {
+          filter: 'metric.type="' + target.latencies + '" AND ' + base, aggregations: agg('REDUCE_PERCENTILE_95', windowS),
+          comparison: 'COMPARISON_GT', thresholdValue: latencyS * 1000, duration: '0s', trigger: {count: 1},
+          evaluationMissingData: 'EVALUATION_MISSING_DATA_INACTIVE'}},
+      ], 'The 95th percentile latency of **' + name + '** (' + where + ') was above ' + latencyS + ' s in a ' + winText +
+         ' window. VibeLift marks an agent Degraded at ' + (R.degradedP95Ms / 1000) + ' s. Created from the VibeLift dashboard.');
+    }
+    if (include.absence) {
+      add('no-traffic', 'no traffic', 'WARNING', 'OR', [
+        {displayName: 'No requests for ' + absenceMin + ' minutes', conditionAbsent: {
+          filter: reqFilter, aggregations: agg('REDUCE_SUM', 300), duration: (absenceMin * 60) + 's', trigger: {count: 1}}},
+      ], '**' + name + '** (' + where + ') received no requests for ' + absenceMin + ' minutes. Created from the VibeLift dashboard.');
+    }
+    var lines = ['# VibeLift alert policies for "' + name + '": ' + where + '.',
+                 '# Review, then run with gcloud (needs roles/monitoring.alertPolicyEditor). Nothing is created until you run it.'];
+    if (!channel) lines.push('# No notification channel: incidents only show in Cloud Monitoring until you add one.');
+    if (target.kind === 'cloud_run') lines.push('# Cloud Run metrics are per service, so these alerts cover all traffic to ' + target.id + '.');
+    policies.forEach(function(p) {
+      lines.push('', 'cat > ' + p.file + " <<'VIBELIFT_POLICY'", JSON.stringify(p.policy, null, 2), 'VIBELIFT_POLICY',
+                 "gcloud monitoring policies create --project='" + target.project + "' --policy-from-file=" + p.file);
+    });
+    return {ok: true, target: target, windowS: windowS, autoWindow: auto, policies: policies, script: lines.join('\n') + '\n'};
+  }
+
   // ===================================================================================================
   // Part 2: DOM helpers
   // ===================================================================================================
@@ -1177,6 +1320,8 @@ var VL = (function() {
       ])]));
     }
 
+    wrap.appendChild(alertSection(a, fl));
+
     var sess = relatedSessions(a);
     if (sess.length) {
       var byUser = {};
@@ -1222,6 +1367,99 @@ var VL = (function() {
     return wrap;
   }
 
+  // ---- Alert policy section (agent detail) -----------------------------------------------------------
+  // The form state lives here so a background refresh of the detail never wipes what the user typed.
+  var alertForm = {agentId: null};
+  function resetAlertForm(id) {
+    alertForm = {agentId: id, open: false, errors: true, latency: true, absence: false,
+                 errorPct: HEALTH_RULES.failing5xxPct, latencyS: HEALTH_RULES.degradedP95Ms / 1000, absenceMin: 60,
+                 windowS: 'auto', channel: ''};
+  }
+  function windowName(seconds) { return seconds >= 3600 ? '1 hour' : (seconds / 60) + ' min'; }
+  function alertSection(a, fl) {
+    var id = a.agent_id || a.resource_name;
+    if (alertForm.agentId !== id) resetAlertForm(id);
+    if (openState && openState.alert) { alertForm.open = true; openState.alert = false; }
+    var hours = num(fl.window_hours);
+    var probe = vlAlertPolicies(a, {project: fl.project_id, windowHours: hours});
+    if (!probe.target) {
+      return section('Alert policy', [h('div', {class: 'vl-d-note'}, [probe.reason])]);
+    }
+    var out = h('pre', {class: 'vl-cmd', tabindex: '0', 'aria-label': 'gcloud commands'});
+    var err = h('div', {class: 'vl-alert-err', role: 'alert'});
+    var copyBtn = h('button', {type: 'button', class: 'btn btn-xs btn-primary'}, ['Copy commands']);
+    var askBtn = hostCan('message') ? h('button', {type: 'button', class: 'btn btn-xs'}, ['Ask Gemini to review']) : null;
+    var current = null;
+    var refresh = function() {
+      current = vlAlertPolicies(a, {project: fl.project_id, windowHours: hours, include: {errors: alertForm.errors, latency: alertForm.latency,
+                                    absence: alertForm.absence}, errorPct: alertForm.errorPct, latencyS: alertForm.latencyS,
+                                    absenceMin: alertForm.absenceMin, windowS: alertForm.windowS, channel: alertForm.channel});
+      out.textContent = current.ok ? current.script : '';
+      out.classList.toggle('hidden', !current.ok);
+      err.textContent = current.ok ? '' : current.reason;
+      err.classList.toggle('hidden', current.ok);
+      copyBtn.disabled = !current.ok;
+      if (askBtn) askBtn.disabled = !current.ok;
+      resized();
+    };
+    var numInput = function(key, step, min, max, label) {
+      var inp = h('input', {type: 'number', class: 'vl-alert-num', step: step, min: min, max: max, value: String(alertForm[key]),
+                            'aria-label': label});
+      inp.addEventListener('input', function() { alertForm[key] = inp.value === '' ? null : Number(inp.value); refresh(); });
+      return inp;
+    };
+    var check = function(key, kids) {
+      var cb = h('input', {type: 'checkbox', checked: alertForm[key] ? true : null});
+      cb.addEventListener('change', function() { alertForm[key] = cb.checked; refresh(); });
+      return h('label', {class: 'vl-alert-row'}, [cb].concat(kids));
+    };
+    var auto = probe.autoWindow || vlAutoAlertWindow((a.metrics || {}).requests, hours, HEALTH_RULES.minRequestsForRates);
+    var winSel = h('select', {class: 'vl-alert-sel', 'aria-label': 'Evaluation window'}, [
+      h('option', {value: 'auto'}, ['Auto: ' + windowName(auto.seconds) + (auto.perWindow !== null ? ' (about ' + intText(auto.perWindow) +
+                                     ' requests per window at the observed rate)' : ' (no traffic measured)')]),
+    ].concat(ALERT_WINDOWS.map(function(sec) { return h('option', {value: String(sec)}, [windowName(sec)]); })));
+    winSel.value = String(alertForm.windowS);
+    winSel.addEventListener('change', function() { alertForm.windowS = winSel.value === 'auto' ? 'auto' : Number(winSel.value); refresh(); });
+    var chan = h('input', {type: 'text', class: 'vl-alert-chan', value: alertForm.channel, spellcheck: 'false', autocomplete: 'off',
+                           placeholder: 'Channel ID or projects/PROJECT/notificationChannels/ID', 'aria-label': 'Notification channel'});
+    chan.addEventListener('input', function() { alertForm.channel = chan.value; refresh(); });
+    copyBtn.addEventListener('click', function() { if (current && current.ok) copyText(current.script, copyBtn); });
+    if (askBtn) {
+      askBtn.addEventListener('click', function() {
+        if (current && current.ok) askAssistant('Review these Cloud Monitoring alert policies for the Gemini Enterprise agent "' +
+          oneLine(a.display_name || id) + '" before I run them. Are the thresholds and windows sensible?\n\n' + current.script, askBtn);
+      });
+    }
+    var form = h('div', {class: 'vl-alert-form' + (alertForm.open ? '' : ' hidden')}, [
+      check('errors', [' Server errors (5xx) above ', numInput('errorPct', '0.5', '0.1', '100', 'Server error threshold, percent'),
+                       ' % of requests, with at least ' + HEALTH_RULES.minRequestsForRates + ' requests in the window']),
+      check('latency', [' p95 latency above ', numInput('latencyS', '1', '1', '3600', 'Latency threshold, seconds'), ' s']),
+      check('absence', [' No requests for ', numInput('absenceMin', '5', '5', '1440', 'No-traffic time, minutes'), ' minutes']),
+      h('div', {class: 'vl-alert-row'}, [h('span', {class: 'vl-alert-lbl'}, ['Window']), winSel]),
+      h('div', {class: 'vl-alert-row'}, [h('span', {class: 'vl-alert-lbl'}, ['Notify']), chan]),
+      err, out,
+      h('div', {class: 'vl-d-row'}, [h('span', {class: 'vl-d-note'}, [
+        'Defaults are the dashboard\u2019s health rules. Nothing is created until you run the commands with gcloud ' +
+        '(roles/monitoring.alertPolicyEditor).']), h('span', {class: 'vl-links'}, [askBtn, copyBtn])]),
+    ]);
+    var toggle = h('button', {type: 'button', class: 'btn btn-xs', 'aria-expanded': alertForm.open ? 'true' : 'false'},
+                   [alertForm.open ? 'Hide' : 'Create alert policy\u2026']);
+    toggle.addEventListener('click', function() {
+      alertForm.open = !alertForm.open;
+      form.classList.toggle('hidden', !alertForm.open);
+      toggle.textContent = alertForm.open ? 'Hide' : 'Create alert policy\u2026';
+      toggle.setAttribute('aria-expanded', alertForm.open ? 'true' : 'false');
+      resized();
+    });
+    refresh();
+    var sec = section('Alert policy', [
+      h('div', {class: 'vl-d-row'}, [h('span', {class: 'vl-d-note'}, ['Cloud Monitoring alerts on ' + probe.target.describe +
+        ', built from the metrics this dashboard reads, as copy-and-run gcloud commands.']), toggle]),
+      form,
+    ], 'vl-alert-sec');
+    return sec;
+  }
+
   // ---- Drawer / inline detail ------------------------------------------------------------------------
   var openState = null;  // {id, mode, opener}
   var pendingAgentId = null;
@@ -1240,15 +1478,20 @@ var VL = (function() {
   }
   function scopedFleet() { try { return lastFleet || geRawFleet; } catch (e) { return null; } }
 
-  function openAgent(a, opener) {
+  function openAgent(a, opener, opts) {
     if (!a) return;
     var id = a.agent_id || a.resource_name;
     var fresh = findAgent(id) || a;
     var mode = useDrawer() ? 'drawer' : 'inline';
-    if (openState && openState.id === id && openState.mode === 'inline' && mode === 'inline') { closeAgent(); return; }
+    var wantAlert = !!(opts && opts.alert);
+    if (!wantAlert && openState && openState.id === id && openState.mode === 'inline' && mode === 'inline') { closeAgent(); return; }
     closeAgent(true);
-    openState = {id: id, mode: mode, opener: opener || document.activeElement};
+    openState = {id: id, mode: mode, opener: opener || document.activeElement, alert: wantAlert};
     renderOpenAgent(fresh);
+    if (wantAlert) {
+      var sec = document.querySelector('.vl-alert-sec');
+      if (sec && sec.scrollIntoView) sec.scrollIntoView({block: 'start'});
+    }
     syncUrl();
     var m = fresh.metrics || {};
     syncContextSoon('VibeLift dashboard: the user is viewing agent "' + (fresh.display_name || id) + '" (' +
@@ -1891,6 +2134,12 @@ var VL = (function() {
                   keywords: [a.agent_id, a.engine_display_name, a.type_label, b.service, b.reasoning_engine_id].concat(b.models || []),
                   boost: 30, run: function() { openAgent(a); }});
     });
+    agents.forEach(function(a) {
+      if (!vlAlertTarget(a, fl.project_id)) return;
+      items.push({kind: 'Alert', group: 'Alerts', title: 'Create alert policy: ' + String(a.display_name || a.agent_id || DASH),
+                  sub: 'Cloud Monitoring · gcloud commands', keywords: ['alert', 'alerting', 'monitoring', 'policy', 'notify'],
+                  hideWhenEmpty: true, run: function() { openAgent(a, null, {alert: true}); }});
+    });
     var scope = byId('geScopeSelect');
     if (scope) {
       Array.prototype.forEach.call(scope.options, function(opt) {
@@ -2102,7 +2351,8 @@ var VL = (function() {
       if (target) openAgent(target, null);
     } else if (openState) {
       var a = findAgent(openState.id);
-      if (a) renderOpenAgent(a);
+      var typing = document.activeElement && document.activeElement.closest && document.activeElement.closest('.vl-alert-form');
+      if (a && !typing) renderOpenAgent(a);
     }
     renderFreshness();
     var st = state();
@@ -2177,6 +2427,7 @@ var VL = (function() {
     trendTotals: vlTrendTotals, runtimeKey: vlRuntimeKey, agentPrompt: vlAgentPrompt, safeExternalUrl: safeExternalUrl, userLabel: vlUserLabel,
     resolveTheme: vlResolveTheme,
     paletteScore: vlPaletteScore, paletteFilter: vlPaletteFilter,
+    alertPolicies: vlAlertPolicies, alertTarget: vlAlertTarget, autoAlertWindow: vlAutoAlertWindow,
     // DOM (browser only)
     mount: mount, smartTable: smartTable, setTableQuery: setTableQuery, setTableFacet: setTableFacet,
     renderHealthStrip: renderHealthStrip, agentRowDecorate: agentRowDecorate, healthCell: healthCell, typeCell: typeCell, agentSpark: agentSpark,

@@ -315,3 +315,14 @@ tr.vl-agent-detail-row .vl-agent-detail { position: sticky; left: 0; max-width: 
 .vl-pal-foot { padding: 7px 14px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-secondary); }
 @media screen { html[data-theme="dark"] .vl-palette { box-shadow: 0 24px 64px rgba(0, 0, 0, .6); } }
 @media print { .vl-palette, .vl-palette-backdrop, .vl-palette-btn { display: none !important; } }
+
+/* ---- Alert policy section (agent detail) ---- */
+.vl-alert-form { margin-top: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+.vl-alert-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12.5px; margin-bottom: 8px; }
+.vl-alert-lbl { width: 56px; color: var(--text-secondary); font-weight: 600; font-size: 12px; }
+.vl-alert-num { width: 70px; font: inherit; font-size: 12.5px; padding: 3px 6px; border: 1px solid var(--input-border); border-radius: 6px;
+  background: var(--surface); color: var(--text-primary); }
+.vl-alert-sel, .vl-alert-chan { font: inherit; font-size: 12.5px; padding: 4px 8px; border: 1px solid var(--input-border); border-radius: 6px;
+  background: var(--surface); color: var(--text-primary); min-width: 0; flex: 1 1 260px; }
+.vl-alert-err { font-size: 12px; color: var(--g-red); background: var(--g-red-bg); border-radius: 6px; padding: 6px 10px; margin: 6px 0; }
+.vl-cmd { max-height: 280px; overflow: auto; white-space: pre; font-size: 11px; margin: 8px 0 0; }
