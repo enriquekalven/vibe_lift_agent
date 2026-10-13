@@ -388,7 +388,7 @@ You do **not** need to install anything on your laptop. Google Cloud Shell alrea
 3. A terminal panel will open at the bottom of your browser. If prompted, click **Continue** / **Authorize**.
 
 **Step 2 — Get the code into Cloud Shell (pick ONE of the two options below)**
-- **If you have the `.zip` file (`finops-mcp-zscaler.zip` or `finops_dashboard_mcp_app.zip`) on your computer:**
+- **If you have the `.zip` file (`finops_dashboard_mcp_app.zip`) on your computer:**
   1. In the top-right corner of the Cloud Shell panel, click the **three vertical dots (`⋮`)** → **Upload** → **Choose File**.
   2. Select the `.zip` file from your computer and click **Upload**.
   3. Paste this command into the Cloud Shell window and press **Enter**:
@@ -521,7 +521,7 @@ An OAuth client is only needed if you change FinOps Dashboard to act *as the sig
 | Domain restricted sharing (`iam.allowedPolicyMemberDomains`) | IAM grants to accounts outside your org fail | Put only principals from your Argolis domain in `FINOPS_INVOKERS` (for example `user:admin@YOUR_LDAP.altostrat.com`), not `@google.com` accounts. |
 
 > [!NOTE]
-> These scripts were run end to end in `project-maui` (a `google.com` project). The Argolis rows above come from Google's documentation and have not yet been run in an Argolis project. If a step fails there, the error names the missing permission or policy.
+> These scripts were run end to end in `example-gcp-project` (a `google.com` project). The Argolis rows above come from Google's documentation and have not yet been run in an Argolis project. If a step fails there, the error names the missing permission or policy.
 
 ### 1. Turn on Gemini Enterprise and audit logging (console, one time)
 
@@ -618,7 +618,7 @@ What `./deploy/register_ge_agent.sh GE_APP_ID` does:
 3. **Stage 4b — Registers the GE Data Store to the Gemini Enterprise App Instance:** Renames the data store (`finops-analytics-mcp_mcp_data`) to `FinOps Analytics`, links it into `engines/GE_APP_ID.dataStoreIds` while keeping the app instance's existing connected data stores, and verifies the registration with a follow-up `GET`.
 4. **Optional A2A agent card registration:** only with `FINOPS_PUBLISH_A2A=1` and `agents-cli` installed (`--registration-type a2a`, no OAuth). Off by default because the A2A endpoint named in the card is not served.
 
-Safe to re-run. Remove a connector with `python3 deploy/setup_mcp_connector.py --delete --collection-id=ID`. You need **Discovery Engine Editor** (`roles/discoveryengine.editor`). Some orgs also block custom MCP servers with an org policy (see step 0); in `project-maui` creation worked without an override.
+Safe to re-run. Remove a connector with `python3 deploy/setup_mcp_connector.py --delete --collection-id=ID`. You need **Discovery Engine Editor** (`roles/discoveryengine.editor`). Some orgs also block custom MCP servers with an org policy (see step 0); in `example-gcp-project` creation worked without an override.
 
 > [!WARNING]
 > `setup_mcp_connector.py` uses Discovery Engine v1alpha methods (`setUpDataConnectorV2`, `refreshDataConnectorTools`) that are not publicly documented and may change. If it fails, use the two-stage Console fallback steps below.

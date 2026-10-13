@@ -1,6 +1,6 @@
 # FinOps Dashboard: hackathon submission
 
-Submission overview and verification summary. Every file, route and resource named here exists in this repository; `tests/test_docs_integrity.py` checks that the docs' links, anchors, file paths and URLs resolve, that the tool, test and tab counts match the code, and that every documented endpoint and `FINOPS_*` variable exists. `tests/test_no_invented_values.py` fails if the dashboard substitutes a hardcoded number for missing data. The numbers under "How it saves effort" were measured in `project-maui`, and each one is labeled as either a measurement or a projection.
+Submission overview and verification summary. Every file, route and resource named here exists in this repository; `tests/test_docs_integrity.py` checks that the docs' links, anchors, file paths and URLs resolve, that the tool, test and tab counts match the code, and that every documented endpoint and `FINOPS_*` variable exists. `tests/test_no_invented_values.py` fails if the dashboard substitutes a hardcoded number for missing data. The numbers under "How it saves effort" were measured in `example-gcp-project`, and each one is labeled as either a measurement or a projection.
 
 ---
 
@@ -27,21 +27,21 @@ What it does, by source file:
 2. **BigQuery mart** ([deploy/setup_bigquery_sink.sh](../deploy/setup_bigquery_sink.sh), [deploy/bigquery/provision_ge_mart.py](../deploy/bigquery/provision_ge_mart.py), [deploy/setup_mart_refresh.sh](../deploy/setup_mart_refresh.sh)): 7 Cloud Logging sinks feed raw datasets, then curated views, then `finops_mart` (`fct_turns`, `fct_sessions`, `agg_daily_usage`). An hourly BigQuery Data Transfer scheduled query fully rebuilds `fct_turns`.
 3. **Cost, cache analysis and AlphaEvolve rewriter** ([finops_dashboard/finops.py](../finops_dashboard/finops.py), [finops_dashboard/prompt_xray.py](../finops_dashboard/prompt_xray.py), [finops_dashboard/billing_export.py](../finops_dashboard/billing_export.py), [experiments/prompt_cache_evolve/](../experiments/prompt_cache_evolve/)): measured token counts times the list prices in `RATE_CARDS`, per model, user and session. A model without a rate card is left unpriced and counted, never priced with another model's card. The Prompt Cache X-Ray shows the exact line and column where a prompt prefix stops being cacheable and runs the **AlphaEvolve-evolved `propose_cache_friendly_rewrite` algorithm** (`0.7321 -> 0.9957` composite score across 12 multi-turn enterprise prompt benchmarks, handling multi-line JSON objects, fenced ````json` blocks, and mixed static/volatile key partitioning). The Cloud Billing export reader is built (`FINOPS_BILLING_EXPORT_TABLE`) and clearly labels every number as a list-price estimate when unconfigured.
 4. **Grounding validator** ([finops_dashboard/validator.py](../finops_dashboard/validator.py)): deterministic checks on the dashboard numbers, plus an optional Vertex AI Gemini judge.
-5. **Validated ingest and Cloud Pub/Sub DLQ** ([finops_dashboard/telemetry.py](../finops_dashboard/telemetry.py)): `@finops_telemetry` and `POST /api/decorator_ingest`. Invalid bodies get HTTP 422, a values-free dead-letter record (`GET /api/dead_letters`), and durable publishing to the Cloud Pub/Sub dead-letter topic (`FINOPS_DLQ_PUBSUB_TOPIC`, `projects/project-maui/topics/finops-ingest-dlq`).
+5. **Validated ingest and Cloud Pub/Sub DLQ** ([finops_dashboard/telemetry.py](../finops_dashboard/telemetry.py)): `@finops_telemetry` and `POST /api/decorator_ingest`. Invalid bodies get HTTP 422, a values-free dead-letter record (`GET /api/dead_letters`), and durable publishing to the Cloud Pub/Sub dead-letter topic (`FINOPS_DLQ_PUBSUB_TOPIC`, `projects/example-gcp-project/topics/finops-ingest-dlq`).
 6. **Plain-English search** ([finops_dashboard/optimizer.py](../finops_dashboard/optimizer.py), [finops_dashboard/server.py](../finops_dashboard/server.py)): a question is matched by keyword to one of 5 fixed read-only SELECT templates over `finops_mart`; the question text never enters the SQL. `verify_nl2sql_sql` re-checks the SQL and fails closed, and the query runs on BigQuery with a 100 MB `maximumBytesBilled` cap. A question asking to change data returns `BLOCKED`.
 7. **Live A2A task execution and live-mode simulator gating** ([finops_dashboard/server.py](../finops_dashboard/server.py), [finops_dashboard/ui/template.py](../finops_dashboard/ui/template.py)): serves both the A2A agent card (`GET /.well-known/agent.json`) and live A2A JSON-RPC 2.0 task execution (`POST /a2a/app` for `message/send` and `tasks/send`). In live GCP mode on `main`, simulator UI panels and endpoints (`inject_anomaly`, `step_turn`, `evolve_generation`, `simulate_what_if`, `recompute_finops`) are hidden and blocked with `DISABLED_IN_LIVE_MODE` (`HTTP 403`), while the full interactive What-If Simulator is preserved on `feature/what-if-simulator`.
 
 ## 5. How It Saves Effort
 **Effort replaced.** One view and one MCP tool call replace separate queries to 8 Google Cloud APIs: Discovery Engine (per location, engine and assistant), Vertex AI, Cloud Monitoring, Cloud Logging, Cloud Trace, Cloud Run, GKE and BigQuery. Today an operator joins those by hand. We have not timed the manual process, so we don't claim hours saved.
 
-**Measured in `project-maui`** (`finops_mart.fct_turns`, the 30 days ending 2026-10-07 03:42 UTC):
+**Measured in `example-gcp-project`** (`finops_mart.fct_turns`, the 30 days ending 2026-10-07 03:42 UTC):
 - 194 turns; 20,177,951 input tokens, 7,564,372 of them served from the prompt cache, so the **cache hit rate is 37.5%**.
 - `gemini-3.5-flash` accounts for 95% of input tokens. At its list price, **uncached input makes up about 92.5% of that model's estimated token cost**, and output is under 2%.
 - Estimated 30-day token cost at list price: about **$20.05** (the 114 turns with no logged model are left unpriced). This is a small demo project.
 
 **Measured AlphaEvolve prompt-cache benchmark & cost projection:**
 - On the 12-case multi-turn enterprise prompt benchmark in `experiments/prompt_cache_evolve/`, the evolved `propose_cache_friendly_rewrite` algorithm raises the prefix cacheable ratio from **10.9% to 99.6%** (`composite_cache_savings_score`: `0.732105` -> `0.995733`, `+36.0%` relative improvement over the single-line baseline).
-- **Projection on `project-maui` traffic:** raising `gemini-3.5-flash`'s cache hit rate from 37.5% to 90% cuts its list-price token cost by about **70%** ($19.49 to $5.85 for the same tokens).
+- **Projection on `example-gcp-project` traffic:** raising `gemini-3.5-flash`'s cache hit rate from 37.5% to 90% cuts its list-price token cost by about **70%** ($19.49 to $5.85 for the same tokens).
 
 ## 6. How It Was Happening Previously
 1. **Inventory:** each Gemini Enterprise location (`global`, `us`, `eu`), app and assistant has to be listed separately in the console or through the Discovery Engine API. Agent Engine regions, Cloud Run services and GKE workloads are listed in other consoles.
@@ -49,9 +49,9 @@ What it does, by source file:
 3. **Caching:** nothing shows *why* a prompt prefix misses the cache. Engineers compare prompts by eye.
 
 ## 7. Deployment Readiness
-**Enterprise-ready architecture deployed in `project-maui` with automated customer-org security and governance scripts.**
+**Enterprise-ready architecture deployed in `example-gcp-project` with automated customer-org security and governance scripts.**
 
-Deployed and verified in `project-maui`:
+Deployed and verified in `example-gcp-project`:
 - `deploy/deploy_cloud_run.sh` runs `compileall`, `ruff` and the offline test suite, and aborts on failure. It then creates the runtime SA `finops-dashboard-runtime-sa` and the custom role `finopsGeFleetReader`, and deploys the private service (`--no-allow-unauthenticated`, 1 vCPU / 1 GiB, 1–10 instances) with `FINOPS_DLQ_PUBSUB_TOPIC` and `FINOPS_PII_REDACT`. Finally it grants the Discovery Engine service agent `roles/run.invoker`. A request without a token gets HTTP 403.
 - `deploy/setup_enterprise_perimeter.sh` provisions:
   - **Cloud Armor WAF policy `finops-waf-policy`** (Rule 1000: OWASP SQLi + XSS `deny(403)`; Rule 2000: `120 req/min` IP rate-based ban) and **Serverless NEG `finops-dashboard-neg`** for the `finops-tokenomics-dashboard` surface (`FINOPS_SURFACE` / `FINOPS_SPLIT_EDGE=1`).
@@ -64,4 +64,4 @@ Deployed and verified in `project-maui`:
 - CI (`.github/workflows/tests.yml`) runs `ruff`, `codespell`, `mypy`, a secret scan, the 344-test offline suite with a >90% coverage gate, and a smoke test on every push.
 
 Known gaps (also in [docs/ARCHITECTURE.md](ARCHITECTURE.md#known-gaps)):
-- In `project-maui`, organization-level `accesscontextmanager` permissions and Cloud Billing export dataset configuration are not enabled on the shared demo billing account, so `deploy/setup_enterprise_perimeter.sh` skips the org-level VPC-SC creation step unless `ACCESS_POLICY_ID` is passed, and FinOps uses `RATE_CARDS` list prices unless `FINOPS_BILLING_EXPORT_TABLE` is set.
+- In `example-gcp-project`, organization-level `accesscontextmanager` permissions and Cloud Billing export dataset configuration are not enabled on the shared demo billing account, so `deploy/setup_enterprise_perimeter.sh` skips the org-level VPC-SC creation step unless `ACCESS_POLICY_ID` is passed, and FinOps uses `RATE_CARDS` list prices unless `FINOPS_BILLING_EXPORT_TABLE` is set.

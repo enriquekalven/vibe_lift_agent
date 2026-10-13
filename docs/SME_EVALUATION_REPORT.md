@@ -2,7 +2,7 @@
 
 ## 1. Executive Summary & Evaluation Strategy
 
-To verify that the FinOps & Tokenomics Analytics Dashboard meets the operational expectations of every stakeholder persona—without ever fabricating telemetry, user identities, cost figures, or SME ratings—we implemented a **Two-Tier Evaluation Framework** in [`finops_dashboard/sme_eval.py`](file:///Users/enriq/.gemini/jetski/scratch/finops-dashboard-mcp-app/finops_dashboard/sme_eval.py):
+To verify that the FinOps & Tokenomics Analytics Dashboard meets the operational expectations of every stakeholder persona—without ever fabricating telemetry, user identities, cost figures, or SME ratings—we implemented a **Two-Tier Evaluation Framework** in [`finops_dashboard/sme_eval.py`](../finops_dashboard/sme_eval.py):
 
 1. **Tier 1: Deterministic 30-Check Persona Rubric (`automated_score_100`)**
    - Evaluates **6 Enterprise Personas × 5 Standardized Rubric Dimensions = 30 deterministic checks** (20 points per dimension = 100 points per persona).
@@ -13,9 +13,9 @@ To verify that the FinOps & Tokenomics Analytics Dashboard meets the operational
 
 ---
 
-## 2. Live `project-maui` Compliance Scorecard Summary
+## 2. Live `example-gcp-project` Compliance Scorecard Summary
 
-| Metric | Simulator / Offline Mode | Live `project-maui` Mode | Status |
+| Metric | Simulator / Offline Mode | Live `example-gcp-project` Mode | Status |
 | :--- | :---: | :---: | :---: |
 | **Overall Compliance Status** | `COMPLIANT` | `COMPLIANT` | **PASS** |
 | **Persona Rubric Checks Passed** | **30 / 30** (100%) | **30 / 30** (100%) | **PASS** |
@@ -40,14 +40,14 @@ Every persona is scored across the same 5 dimensions (20 points each):
 
 ---
 
-## 4. Per-Persona Evaluation Matrix (30 / 30 Checks on Live `project-maui`)
+## 4. Per-Persona Evaluation Matrix (30 / 30 Checks on Live `example-gcp-project`)
 
 ### Persona 1: FinOps Lead / Cloud Economist (`finops_lead`)
 - **Primary Tab & Panel**: Cost & Billing (Tab 3) — `#liveGeMartDailyPanel`, `#billingReconciliationPanel`, `#liveTokenEconomicsPanel`
 - **Critical User Journey (CUJ)**: Inspect daily turns, sessions, tokens, and joined Cloud Billing AI spend in `finops_mart.agg_daily_usage`, verify token economics reconciliation, and trigger a mart refresh.
 - **Automated Score**: **100 / 100 (`COMPLIANT`)**
-  - `FINOPS-D1-INSIGHT` (**20/20 PASS**): Live `ge_daily_usage` loaded (`9` daily rows, `9` app/agent/model rows, `8` sessions from `project-maui.finops_mart`).
-  - `FINOPS-D2-CONTROL` (**20/20 PASS**): Refresh CLI (`python3 deploy/bigquery/provision_ge_mart.py --project project-maui --refresh`) and `POST /api/ge_mart/refresh` wired; billing status reported honestly (`NOT_CONNECTED` until `FINOPS_BILLING_EXPORT_TABLE` is set).
+  - `FINOPS-D1-INSIGHT` (**20/20 PASS**): Live `ge_daily_usage` loaded (`9` daily rows, `9` app/agent/model rows, `8` sessions from `example-gcp-project.finops_mart`).
+  - `FINOPS-D2-CONTROL` (**20/20 PASS**): Refresh CLI (`python3 deploy/bigquery/provision_ge_mart.py --project example-gcp-project --refresh`) and `POST /api/ge_mart/refresh` wired; billing status reported honestly (`NOT_CONNECTED` until `FINOPS_BILLING_EXPORT_TABLE` is set).
   - `FINOPS-D3-TRUST` (**20/20 PASS**): `TAB4-TOKEN-ECONOMICS-RECONCILES`, `TAB4-SPEND-CHANGE-ADDITIVE`, and `TAB4-GE-MART-DAILY-USAGE` all pass with zero invented cost figures (`ai_net_usd = None` when billing export is unconfigured).
   - `FINOPS-D4-ERGONOMICS` (**20/20 PASS**): Verified all 6 target DOM containers (`liveGeMartDailyPanel`, `geMartDailyBody`, `geMartByAppBody`, `geMartRefreshBtn`, `billingReconciliationPanel`, `liveTokenEconomicsPanel`).
   - `FINOPS-D5-GUARDRAIL` (**20/20 PASS**): `LIVE-NO-SIMULATOR-PAYLOADS` verified; `tokenomics_cockpit` and `what_if_default` are suppressed (`None`) in live mode.
@@ -87,7 +87,7 @@ Every persona is scored across the same 5 dimensions (20 points each):
 - **Critical User Journey (CUJ)**: Verify NL2SQL enforces read-only `SELECT` queries with dataset allowlisting (`finops_mart`, `ds_ge_curated_staging`), confirm zero PII/prompt leakage in live payloads, and run the telemetry grounding validator.
 - **Automated Score**: **100 / 100 (`COMPLIANT`)**
   - `SEC-D1-INSIGHT` (**20/20 PASS**): NL2SQL Copilot and Telemetry Validator active (`overall_status = VERIFIED_GROUNDED`).
-  - `SEC-D2-CONTROL` (**20/20 PASS**): NL2SQL allowlist includes `project-maui.finops_mart` and `project-maui.ds_ge_curated_staging`; `POST /api/validate_telemetry` active.
+  - `SEC-D2-CONTROL` (**20/20 PASS**): NL2SQL allowlist includes `example-gcp-project.finops_mart` and `example-gcp-project.ds_ge_curated_staging`; `POST /api/validate_telemetry` active.
   - `SEC-D3-TRUST` (**20/20 PASS**): Telemetry grounding validator passed (`14/14` checks in live mode, `11/11` in simulator mode).
   - `SEC-D4-ERGONOMICS` (**20/20 PASS**): Verified all 5 target DOM containers (`nl2sqlCopilotDrawer`, `nl2sqlQuestionInput`, `nl2sqlSqlPre`, `telemetryValidatorDrawer`, `apigeePoliciesBody`).
   - `SEC-D5-GUARDRAIL` (**20/20 PASS**): Read-only `SELECT` guardrail blocks all DML/DDL (`DROP`, `DELETE`, `UPDATE`, `INSERT`, `ALTER`, `TRUNCATE`, `GRANT`) and live `usage_logs` contain zero raw prompt/response text or caller IPs.

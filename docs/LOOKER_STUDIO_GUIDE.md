@@ -1,6 +1,6 @@
 # Gemini Enterprise L1/L2 IT Support Dashboard — Looker Studio Guide
 
-This guide covers the deployed **`finops_mart.v_looker_l1_l2_support`** BigQuery view (live in both `gemini-enterprise-stage` and `project-maui`), **1-click Looker Studio creation links**, the **zero-fan-out & sub-second latency architecture**, and the exact field mappings for each chart, filter control, and drill-down table so it reaches 100% parity with the Zscaler IT Support Console MCP App.
+This guide covers the deployed **`finops_mart.v_looker_l1_l2_support`** BigQuery view (live in both `example-staging-project` and `example-gcp-project`), **1-click Looker Studio creation links**, the **zero-fan-out & sub-second latency architecture**, and the exact field mappings for each chart, filter control, and drill-down table so it reaches 100% parity with the IT Support Console MCP App.
 
 ---
 
@@ -10,8 +10,8 @@ This guide covers the deployed **`finops_mart.v_looker_l1_l2_support`** BigQuery
 
 ### Option A (Recommended — 2 Clicks via BigQuery Console):
 1. Click the BigQuery Console link for your environment to open `v_looker_l1_l2_support` directly:
-   - **[Open `gemini-enterprise-stage.finops_mart.v_looker_l1_l2_support` in BigQuery Console](https://console.cloud.google.com/bigquery?project=gemini-enterprise-stage&ws=!1m5!1m4!4m3!1sgemini-enterprise-stage!2sfinops_mart!3sv_looker_l1_l2_support)**
-   - **[Open `project-maui.finops_mart.v_looker_l1_l2_support` in BigQuery Console](https://console.cloud.google.com/bigquery?project=project-maui&ws=!1m5!1m4!4m3!1sproject-maui!2sfinops_mart!3sv_looker_l1_l2_support)**
+   - **[Open `example-staging-project.finops_mart.v_looker_l1_l2_support` in BigQuery Console](https://console.cloud.google.com/bigquery?project=example-staging-project&ws=!1m5!1m4!4m3!1sexample-staging-project!2sfinops_mart!3sv_looker_l1_l2_support)**
+   - **[Open `example-gcp-project.finops_mart.v_looker_l1_l2_support` in BigQuery Console](https://console.cloud.google.com/bigquery?project=example-gcp-project&ws=!1m5!1m4!4m3!1sexample-gcp-project!2sfinops_mart!3sv_looker_l1_l2_support)**
 2. In the BigQuery Console toolbar at the top of the view tab, click **Export → Explore with Looker Studio**.
 3. Once Looker Studio opens with the view loaded, click **Save and Share** (top right) → **Acknowledge and save** to unlock full multi-page report editing.
 
@@ -19,7 +19,7 @@ This guide covers the deployed **`finops_mart.v_looker_l1_l2_support`** BigQuery
 1. Open **[Looker Studio Home (`lookerstudio.google.com`)](https://lookerstudio.google.com/)**.
 2. Click **Create** (top-left) → **Report**.
 3. In the *Add data to report* panel, select **BigQuery** → choose:
-   - **Project**: `gemini-enterprise-stage` *(or `project-maui`)*
+   - **Project**: `example-staging-project` *(or `example-gcp-project`)*
    - **Dataset**: `finops_mart`
    - **Table / View**: `v_looker_l1_l2_support`
    - Click **Add** → **Add to report**.
@@ -222,7 +222,7 @@ Reconstructs the exact chronological flow (`Step 1 → Step 2 → Step 3...`) of
 
 ## 5. Page 3: Users, Agents & MCP Tool Performance
 
-Maps directly to the **Users** and **Agents** tabs of the MCP App (`zscaler-it-support`), enabling L1/L2 engineers to spot whether an issue is isolated to one user's ACLs/OAuth token or systemic to a specific Agent / MCP connector.
+Maps directly to the **Users** and **Agents** tabs of the MCP App (`it-support-dashboard-mcp`), enabling L1/L2 engineers to spot whether an issue is isolated to one user's ACLs/OAuth token or systemic to a specific Agent / MCP connector.
 
 ### A. Top Filter Controls (Page 3)
 - **Date range control**: `event_date`
@@ -268,7 +268,7 @@ Maps directly to the **Users** and **Agents** tabs of the MCP App (`zscaler-it-s
 
 ## 6. Page 4: Model Armor & Sensitive Data Protection (SDP) Security Audit
 
-Maps directly to the **Model Armor & SDP** tab of the MCP App (`zscaler-it-support`).
+Maps directly to the **Model Armor & SDP** tab of the MCP App (`it-support-dashboard-mcp`).
 
 ### A. Top Filter Controls (Page 4)
 - **Date range control**: `event_date`
@@ -306,7 +306,7 @@ Maps directly to the **Model Armor & SDP** tab of the MCP App (`zscaler-it-suppo
 
 ---
 
-## 7. Usability Features & Parity with the MCP App (`zscaler-it-support`)
+## 7. Usability Features & Parity with the MCP App (`it-support-dashboard-mcp`)
 
 | MCP App Tab / Feature | Looker Studio Equivalent | How It Works in Looker Studio |
 |---|---|---|

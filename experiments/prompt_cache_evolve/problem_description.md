@@ -2,7 +2,7 @@
 
 ## Problem Statement
 
-Gemini 2.5 and Gemini 3.x implicit and explicit context caching reuse only a **byte-identical leading prefix** across consecutive turns. In enterprise agent deployments (such as `project-maui`, where measured prompt cache hit rate across 194 turns and 20.18M input tokens was `37.5%`), volatile per-request values injected near the top of a system prompt or tool schema invalidate the entire downstream static prefix.
+Gemini 2.5 and Gemini 3.x implicit and explicit context caching reuse only a **byte-identical leading prefix** across consecutive turns. In enterprise agent deployments (such as `example-gcp-project`, where measured prompt cache hit rate across 194 turns and 20.18M input tokens was `37.5%`), volatile per-request values injected near the top of a system prompt or tool schema invalidate the entire downstream static prefix.
 
 Given an input prompt string `prompt: str`, `propose_cache_friendly_rewrite(prompt: str) -> dict[str, Any]` must canonicalize and reorder the prompt so that:
 1. All static instructions, runbooks, and static JSON schema fields remain in a deterministic, byte-stable leading prefix.

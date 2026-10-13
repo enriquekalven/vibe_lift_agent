@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-$(gcloud config get-value project 2>/dev/null || echo "project-maui")}"
+PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-$(gcloud config get-value project 2>/dev/null || echo "example-gcp-project")}"
 REGION="${GOOGLE_CLOUD_REGION:-us-central1}"
 BQ_LOCATION="${FINOPS_BQ_LOCATION:-US}"
 MART_DATASET="${FINOPS_GE_MART_DATASET:-finops_mart}"

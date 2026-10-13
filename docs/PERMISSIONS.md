@@ -39,7 +39,7 @@ The Cloud Run service reads every metric as this account, never with the end use
 | :--- | :--- | :--- |
 | Person running the scripts | Project **Owner** is simplest. Otherwise roughly: Service Usage Admin, Service Account Admin, Role Administrator, Project IAM Admin, Cloud Run Admin, Cloud Build Editor, Artifact Registry Admin, Storage Admin, Service Account User on the runtime SA, Logs Configuration Writer, BigQuery Admin, Discovery Engine Admin. Not tested as a minimal set. | Deploy |
 | Person registering in Gemini Enterprise | **Discovery Engine Editor** (`roles/discoveryengine.editor` — deploys the Custom MCP Server to the Gemini Enterprise Data Store `finops-analytics-mcp` [`BYO_MCP`, not Agent Registry] and registers `finops-analytics-mcp_mcp_data` onto the Gemini Enterprise App instance via `register_ge_agent.sh` / `setup_mcp_connector.py` or the console), **Gemini Enterprise Admin** (optional A2A agent registration) | Step 4 |
-| Org admin (only if needed) | **Organization Policy Administrator**, if creating the MCP data store fails because of *Disable custom MCP server connector for Gemini Enterprise*. In `project-maui` the policy showed as enforced but creation still worked. | MCP connector |
+| Org admin (only if needed) | **Organization Policy Administrator**, if creating the MCP data store fails because of *Disable custom MCP server connector for Gemini Enterprise*. In `example-gcp-project` the policy showed as enforced but creation still worked. | MCP connector |
 | Billing account admin | **Billing Account Administrator** (or Billing Account Costs Manager) on the billing account | Turning on the BigQuery billing export |
 | Dashboard viewers | `roles/run.invoker` on the service (`FINOPS_INVOKERS` in `deploy_cloud_run.sh`) | Opening the dashboard through `gcloud run services proxy` |
 
@@ -65,7 +65,7 @@ Enabled by `deploy_cloud_run.sh`: `run`, `cloudbuild`, `artifactregistry`, `logg
 
 | Policy | Effect | Fix |
 | :--- | :--- | :--- |
-| *Disable custom MCP server connector for Gemini Enterprise* | May block creating the Custom MCP Server data store (it did not in `project-maui`) | Try first; if creation fails with a policy error, override for the project with enforcement **Off** |
+| *Disable custom MCP server connector for Gemini Enterprise* | May block creating the Custom MCP Server data store (it did not in `example-gcp-project`) | Try first; if creation fails with a policy error, override for the project with enforcement **Off** |
 | `iam.automaticIamGrantsForDefaultServiceAccounts` | Source build fails | Handled by `deploy_cloud_run.sh` (`roles/run.builder`) |
 | Domain restricted sharing (`iam.allowedPolicyMemberDomains`) | Grants to outside accounts fail | Use only principals from your own domain in `FINOPS_INVOKERS` |
 | VPC-SC / data connector restrictions | MCP data store blocked | Allow `custom_mcp` and the `*.run.app` host (see README step 0) |

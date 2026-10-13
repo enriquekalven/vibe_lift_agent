@@ -215,14 +215,14 @@ class EnterpriseControlsAndA2ATest(unittest.TestCase):
 
   def test_incremental_merge_dml_and_pii_policy_tag_ddl(self) -> None:
     from finops_dashboard import ge_mart
-    dml = ge_mart.build_incremental_merge_fct_turns_dml('project-maui', lookback_days=3)
-    self.assertIn('MERGE `project-maui.finops_mart.fct_turns` AS T', dml)
+    dml = ge_mart.build_incremental_merge_fct_turns_dml('example-gcp-project', lookback_days=3)
+    self.assertIn('MERGE `example-gcp-project.finops_mart.fct_turns` AS T', dml)
     self.assertIn('INTERVAL 3 DAY', dml)
     self.assertIn('WHEN NOT MATCHED THEN', dml)
 
     ddl = ge_mart.build_pii_policy_tag_ddl(
-        'project-maui',
-        'projects/project-maui/locations/us/taxonomies/123/policyTags/456',
+        'example-gcp-project',
+        'projects/example-gcp-project/locations/us/taxonomies/123/policyTags/456',
     )
     self.assertIn('ALTER COLUMN user_email SET OPTIONS', ddl)
     self.assertIn('policy_tags', ddl)
@@ -239,14 +239,14 @@ class EnterpriseControlsAndA2ATest(unittest.TestCase):
 
   def test_pubsub_dlq_record_and_dead_letters_endpoint(self) -> None:
     telemetry.reset_decorator_events()
-    with mock.patch.dict('os.environ', {'FINOPS_DLQ_PUBSUB_TOPIC': 'projects/project-maui/topics/finops-ingest-dlq'}):
+    with mock.patch.dict('os.environ', {'FINOPS_DLQ_PUBSUB_TOPIC': 'projects/example-gcp-project/topics/finops-ingest-dlq'}):
       entry = telemetry.record_ingest_dlq('/api/aive_log', {'bad': 1}, ['missing prompt_tokens'])
-      self.assertEqual(entry['dlq_topic'], 'projects/project-maui/topics/finops-ingest-dlq')
+      self.assertEqual(entry['dlq_topic'], 'projects/example-gcp-project/topics/finops-ingest-dlq')
       self.assertFalse(entry['dlq_published'])
       ctrl = server.FinOpsRuntimeController(fleet_service=_FAKE_FLEET)
       dlq = ctrl.dead_letters_payload()
       self.assertEqual(dlq['count'], 1)
-      self.assertEqual(dlq['dlq_pubsub_topic'], 'projects/project-maui/topics/finops-ingest-dlq')
+      self.assertEqual(dlq['dlq_pubsub_topic'], 'projects/example-gcp-project/topics/finops-ingest-dlq')
 
   def test_simulator_actions_disabled_in_live_mode(self) -> None:
     ctrl = server.FinOpsRuntimeController(fleet_service=_FAKE_FLEET)

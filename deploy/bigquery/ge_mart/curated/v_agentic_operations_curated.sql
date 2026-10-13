@@ -1,5 +1,5 @@
 -- Agent inference operations (gen_ai.client.inference.operation.details), one row per LLM call.
--- Ported from gemini-enterprise-stage ds_ge_curated_staging.v_agentic_operations_curated with fixes:
+-- Ported from example-staging-project ds_ge_curated_staging.v_agentic_operations_curated with fixes:
 --   * Tokens stay NULL when the log does not report them (stage coalesced to 0).
 --   * Adds cached-input and reasoning tokens and the model name when the log carries them.
 --   * Reads the OTel attributes from jsonPayload (Discovery Engine sink) or from labels

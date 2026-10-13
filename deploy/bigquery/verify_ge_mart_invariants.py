@@ -8,9 +8,9 @@ Any non-zero violation causes a non-zero exit code so CI/CD or post-provision ch
 immediately on data loss, fan-out, or schema drift.
 
 Usage:
-  python3 deploy/bigquery/verify_ge_mart_invariants.py --project project-maui
+  python3 deploy/bigquery/verify_ge_mart_invariants.py --project example-gcp-project
   python3 deploy/bigquery/verify_ge_mart_invariants.py \\
-    --project project-maui \\
+    --project example-gcp-project \\
     --curated-dataset ge_stage_support_curated \\
     --mart-dataset ge_stage_support_mart
 """

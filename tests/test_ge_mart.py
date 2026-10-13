@@ -46,7 +46,7 @@ class ProvisionerTest(unittest.TestCase):
       provision.render('SELECT {{ 1bad }}', {})
 
   def test_identifier_validation_rejects_injection(self):
-    for bad in ('proj.ds.t`; DROP TABLE x; --', 'proj-ect.ds', 'Project-Maui.ds.t', 'example-project.d s.t'):
+    for bad in ('proj.ds.t`; DROP TABLE x; --', 'proj-ect.ds', 'Example-Project.ds.t', 'example-project.d s.t'):
       with self.assertRaises(ValueError, msg=bad):
         provision.validate_table_ref(bad)
     with self.assertRaises(ValueError):
@@ -118,7 +118,7 @@ class ProvisionerTest(unittest.TestCase):
     for name, body in bodies.items():
       self.assertNotIn('{{', body, name)
       self.assertNotIn('}}', body, name)
-      self.assertNotIn('gemini-enterprise-stage', _sql_code(body), name)  # no hard-coded project ids
+      self.assertNotIn('example-staging-project', _sql_code(body), name)  # no hard-coded project ids
     turns = bodies['finops_mart.v_fct_turns']
     self.assertIn('`example-project.ds_ge_curated_staging.v_user_activity_curated`', turns)
     self.assertIn('`example-project.ds_ge_curated_staging.v_model_armor_curated`', turns)

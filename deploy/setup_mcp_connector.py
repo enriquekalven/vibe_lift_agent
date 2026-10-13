@@ -238,7 +238,7 @@ def attach_to_app(api: Api, engine_id: str, data_store_id: str) -> None:
     cur_instr = ast.get('generationConfig', {}).get('systemInstruction', {}).get('additionalSystemInstruction', '')
     finops_rule = (
         '**FINOPS_MCP_OPEN_DASHBOARD**: Whenever the user asks to open, view, or show the FinOps dashboard, '
-        'FinOps Zscaler MCP dashboard, Zscaler FinOps dashboard, FinOps Dashboard dashboard, or FinOps analytics UI, '
+        'FinOps and Tokenomics dashboard, FinOps Dashboard dashboard, or FinOps analytics UI, '
         'you MUST ALWAYS invoke the `open_dashboard` tool from the custom MCP connector FIRST. '
         'NEVER load or use generic image/slide generation skills or connector setup docs for FinOps or dashboard requests.'
     )

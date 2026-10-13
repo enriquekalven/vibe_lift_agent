@@ -34,7 +34,7 @@ make eval
 # Or run the two stages explicitly:
 TOKEN=$(gcloud auth print-identity-token)
 agents-cli eval generate \
-  --url https://finops-dashboard-mcp-app-697625214430.us-central1.run.app \
+  --url https://finops-dashboard-mcp-app-123456789012.us-central1.run.app \
   --app-name app \
   -H "Authorization: Bearer $TOKEN"
 

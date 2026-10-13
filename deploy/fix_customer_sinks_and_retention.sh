@@ -2,7 +2,7 @@
 # fix_customer_sinks_and_retention.sh — Patch existing customer Cloud Logging sinks & raw BQ retention
 #
 # Use this script when deploying FinOps Dashboard into an existing customer project (such as
-# gemini-enterprise-stage) where the 5 ds_*_raw datasets and Generation-2 sinks already exist:
+# example-staging-project) where the 5 ds_*_raw datasets and Generation-2 sinks already exist:
 #   1. Patches `sink-platform-audit` so it captures File Uploads (UploadSessionFile,
 #      DownloadSessionFile, ListSessionFileMetadata), Widget actions (ExecuteUiWidgetAction),
 #      Async Assist calls (AsyncAssist, ReadAsyncAssist), Connector OAuth token calls
@@ -17,7 +17,7 @@
 #
 # Usage:
 #   ./deploy/fix_customer_sinks_and_retention.sh [PROJECT_ID]
-#   FINOPS_RETENTION_DAYS=90 ./deploy/fix_customer_sinks_and_retention.sh gemini-enterprise-stage
+#   FINOPS_RETENTION_DAYS=90 ./deploy/fix_customer_sinks_and_retention.sh example-staging-project
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

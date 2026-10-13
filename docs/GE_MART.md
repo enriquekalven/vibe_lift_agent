@@ -46,7 +46,7 @@ flowchart LR
 
 | Layer | Objects | Purpose |
 |---|---|---|
-| Curated | `v_user_activity_curated`, `v_agentic_operations_curated`, `v_consolidated_audit_log`, `v_model_armor_curated` | Cleaned, typed views over each raw sink. Ported from `gemini-enterprise-stage.ds_ge_curated_staging`, with its defects fixed. |
+| Curated | `v_user_activity_curated`, `v_agentic_operations_curated`, `v_consolidated_audit_log`, `v_model_armor_curated` | Cleaned, typed views over each raw sink. Ported from `example-staging-project.ds_ge_curated_staging`, with its defects fixed. |
 | Mart | `v_fct_turns` (view), `fct_turns` (table), `fct_sessions`, `agg_daily_usage`, `v_looker_l1_l2_support` (views over the table) | FinOps Dashboard's own model: one row per turn, per session, per day × app × agent × model, plus a denormalized L1/L2 support triage view for Looker Studio. |
 | Cost | `finops_dashboard/billing_export.py` | Per-day AI spend from the Cloud Billing export, joined to daily usage in the app. It is not stored in BigQuery. |
 
@@ -147,13 +147,13 @@ scope selector (`#geScopeSelect`):
     `v_user_activity_curated`, and `v_fct_turns` falls back to engine + method + time matching
     (`ENGINE_TIME`) so `COALESCE(user_email, audit_principal_email)` recovers the real principal.
 17. Cloud Logging → BigQuery sinks deliver with at-least-once semantics and occasionally write
-    duplicate rows with the same `insertId` (observed in `gemini-enterprise-stage.ds_ge_search_raw`).
+    duplicate rows with the same `insertId` (observed in `example-staging-project.ds_ge_search_raw`).
     All four curated views (`v_user_activity_curated`, `v_agentic_operations_curated`,
     `v_model_armor_curated`, and `v_consolidated_audit_log`) deduplicate by `insertId` so every
     `turn_id` in `fct_turns` is strictly unique.
 18. Reasoning tokens in `discoveryengine_googleapis_com_gen_ai_client_inference_operation_details`
     arrive under `jsonPayload.gen_ai_usage_reasoning_output_tokens` (55,779 tokens across 56 calls
-    in `gemini-enterprise-stage`). `v_agentic_operations_curated` checks
+    in `example-staging-project`). `v_agentic_operations_curated` checks
     `gen_ai_usage_reasoning_output_tokens`, `gen_ai_usage_reasoning_tokens`, and
     `gen_ai_usage_thoughts_tokens` across both sink `RECORD` columns and dotted JSON keys.
 19. When an MCP tool response exceeds ~25 KB, Gemini Enterprise elides `structuredContent` from a
@@ -192,7 +192,7 @@ permission, agent errors) may exist only in the audit log.
 
 Validation results (example runs in two reference projects; your numbers will differ):
 
-| Check | `gemini-enterprise-stage` (90d) | `project-maui` (30d) |
+| Check | `example-staging-project` (90d) | `example-gcp-project` (30d) |
 |---|---|---|
 | Chats matched to audit | 9 of 9 | 11 of 11 (4 `PRINCIPAL_TIME`, 7 `ENGINE_TIME`) |
 | Searches matched to audit | 33 of 41 | 10 of 10 (4 `PRINCIPAL_TIME`, 6 `ENGINE_TIME`) |
@@ -207,7 +207,7 @@ Validation results (example runs in two reference projects; your numbers will di
 - **Tokens need the inference sink.** Per-turn tokens come only from the
   `discoveryengine.googleapis.com/gen_ai.client.inference.operation.details` log, routed to
   `ds_vertex_agents_raw` by the `sink-ge-inference-tokens` sink in `deploy/setup_bigquery_sink.sh`.
-  Projects set up before that sink existed (project-maui at the time of the table above) have
+  Projects set up before that sink existed (example-gcp-project at the time of the table above) have
   sessions but `NULL` tokens until the sink is created; sinks only capture new entries.
 - Model Armor rows need the `sink-model-armor-sdp` sink and Model Armor logging enabled (`ds_security_guardrails_raw.cloud_logging_guardrails`). When absent, the provisioner substitutes an empty typed stub automatically.
 - `sre_triage_agent_telemetry` is in `us-east1` and cannot be joined from the US views. FinOps Dashboard

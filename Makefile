@@ -3,7 +3,7 @@
 
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then echo .venv/bin/python; else echo python3; fi)
 OFFLINE_ENV = GOOGLE_APPLICATION_CREDENTIALS=/nonexistent/offline-test-credentials.json GOOGLE_CLOUD_PROJECT=test-project
-AGENT_EVAL_URL ?= https://finops-dashboard-mcp-app-697625214430.us-central1.run.app
+AGENT_EVAL_URL ?= https://finops-dashboard-mcp-app-123456789012.us-central1.run.app
 AGENT_EVAL_DATASET ?= tests/eval/datasets/basic-dataset.json
 AGENT_EVAL_CONFIG ?= tests/eval/eval_config.yaml
 

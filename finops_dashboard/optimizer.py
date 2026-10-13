@@ -2511,13 +2511,13 @@ class FinOpsAlphaEvolveOptimizer:
             },
             {
                 'layer': '2. OpenTelemetry GenAI Traces',
-                'table_or_stream': 'project-maui.aive_logs.agent_usage_log (@finops_telemetry)',
+                'table_or_stream': 'example-gcp-project.aive_logs.agent_usage_log (@finops_telemetry)',
                 'join_keys': 'trace_id, span_id, event_id',
                 'extracted_fields': 'gen_ai.usage.input_tokens, output_tokens, thinking_tokens, gen_ai.request.model',
             },
             {
                 'layer': '3. GCP Cloud Billing Export',
-                'table_or_stream': 'project-maui.billing_export.gcp_billing_export_resource_v1',
+                'table_or_stream': 'example-gcp-project.billing_export.gcp_billing_export_resource_v1',
                 'join_keys': 'labels.trace_id, labels.agent_id, sku.id, usage_start_time',
                 'extracted_fields': 'cost, credits.amount (CUD / Cache / FSP), net_invoice_usd',
             },
@@ -2530,10 +2530,10 @@ class FinOpsAlphaEvolveOptimizer:
             '  otel.model_name,\n'
             '  SUM(otel.total_tokens) AS total_tokens,\n'
             '  ROUND(SUM(bill.cost + IFNULL(cred.amount, 0)), 2) AS reconciled_net_spend_usd\n'
-            'FROM `project-maui.aive_logs.ge_user_activity` AS ge\n'
-            'JOIN `project-maui.aive_logs.agent_usage_log` AS otel\n'
+            'FROM `example-gcp-project.aive_logs.ge_user_activity` AS ge\n'
+            'JOIN `example-gcp-project.aive_logs.agent_usage_log` AS otel\n'
             '  ON ge.trace_id = otel.trace_id\n'
-            'JOIN `project-maui.billing_export.gcp_billing_export_resource_v1` AS bill\n'
+            'JOIN `example-gcp-project.billing_export.gcp_billing_export_resource_v1` AS bill\n'
             '  ON bill.labels.value = otel.agent_name AND DATE(bill.usage_start_time) = DATE(otel.timestamp)\n'
             'LEFT JOIN UNNEST(bill.credits) AS cred\n'
             'GROUP BY 1, 2, 3, 4\n'
@@ -3125,7 +3125,7 @@ class FinOpsAlphaEvolveOptimizer:
     )
     tco_and_pnl['provenance_legend'] = [
         {'tag': 'MEASURED_OTEL', 'description': 'Direct runtime token, latency, and prefix-hash telemetry from @finops_telemetry'},
-        {'tag': 'RECONCILED_BILLING_EXPORT', 'description': 'Cross-checked against project-maui.billing_export.gcp_billing_export_resource_v1 (±2.0% settlement window)'},
+        {'tag': 'RECONCILED_BILLING_EXPORT', 'description': 'Cross-checked against example-gcp-project.billing_export.gcp_billing_export_resource_v1 (±2.0% settlement window)'},
         {'tag': 'MODELED_SIMULATION', 'description': 'Calculated projection from user-adjustable FinOps & Canary assumptions'},
         {'tag': 'PRE_GA_CONTRACT_BENCHMARK†', 'description': 'Commercial or roadmap pricing tier (PT Burst PayGo, Deferred/Off-Peak -50%, FSP 10%/20%) subject to contract terms'},
     ]

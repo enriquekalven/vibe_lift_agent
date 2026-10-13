@@ -1,5 +1,5 @@
 -- Cloud Audit Logs (admin activity + data access) for Gemini Enterprise.
--- Ported from gemini-enterprise-stage ds_ge_curated_staging.v_consolidated_audit_log with fixes:
+-- Ported from example-staging-project ds_ge_curated_staging.v_consolidated_audit_log with fixes:
 --   * status.code is a google.rpc.Code, not an HTTP status. Stage compared it to 429/403/500,
 --     which never matches; status_class maps the rpc codes (8 = RESOURCE_EXHAUSTED, ...).
 --   * A missing status means OK: status_code stays NULL and status_message is NULL, not 'NONE'.

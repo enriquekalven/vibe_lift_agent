@@ -1,5 +1,5 @@
 -- Gemini Enterprise user activity: assistant (StreamAssist, ModelArmorAudit, ...) and search.
--- Ported from gemini-enterprise-stage ds_ge_curated_staging.v_user_activity_curated with fixes:
+-- Ported from example-staging-project ds_ge_curated_staging.v_user_activity_curated with fixes:
 --   * JSON paths use the sink's real lowercase field names (logmetadata.methodname, not
 --     logMetadata.methodName, which is always NULL and made every row look like StreamAssist).
 --   * No invented defaults: missing values stay NULL (no 'ANONYMOUS_USER', 'Core Assistant',

@@ -515,7 +515,7 @@ _TOOLS: list[dict[str, Any]] = [
         'title': 'Open FinOps & FinOps Analytics MCP Dashboard',
         'description': (
             'CRITICAL: Always call this tool FIRST whenever the user asks to see, open, launch, '
-            'or inspect the FinOps dashboard, FinOps Zscaler MCP dashboard, Zscaler FinOps dashboard, '
+            'or inspect the FinOps dashboard, FinOps and Tokenomics dashboard, '
             'FinOps MCP dashboard, or FinOps & Tokenomics Analytics Dashboard, or asks for the Gemini Enterprise '
             'agent fleet, standalone/unregistered agents (Vertex AI Agent Engine, Cloud Run, GKE), '
             'MCP servers, Skills/tools, agent telemetry, prompt cache economics, user-centric FinOps, '

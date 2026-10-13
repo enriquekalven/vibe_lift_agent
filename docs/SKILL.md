@@ -16,7 +16,7 @@ allowed-tools:
 
 | Pipeline Stage | Tool | Description & Trigger Context |
 | :--- | :--- | :--- |
-| **Interactive UI** | `open_dashboard` | **CRITICAL: Call FIRST** whenever the user asks to see, open, launch, or inspect the FinOps dashboard, FinOps Zscaler MCP dashboard, Zscaler FinOps dashboard, or FinOps Analytics Platform, or asks for interactive agent telemetry in Gemini Enterprise. |
+| **Interactive UI** | `open_dashboard` | **CRITICAL: Call FIRST** whenever the user asks to see, open, launch, or inspect the FinOps dashboard, FinOps and Tokenomics dashboard, or FinOps Analytics Platform, or asks for interactive agent telemetry in Gemini Enterprise. |
 | **GCP Observability** | `query_project_telemetry` | Ingests live Cloud Run agent microservices, BigQuery support logs, and Google Cloud Logging usage metrics. |
 | **GE Agent Fleet** | `query_ge_agent_fleet` | Lists every agent deployed on the Gemini Enterprise app with live requests, errors, latency, LLM calls, tokens, conversations, and last activity, plus project-wide model spend. |
 | **Cost & Token Economics** | `calculate_prompt_cache_economics` | Computes prompt cache hit ratio (%) and net dollar savings ($) at list prices from the rate cards in `finops_dashboard/telemetry.py` (`RATE_CARDS`). |

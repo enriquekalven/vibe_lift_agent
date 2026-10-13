@@ -5,7 +5,7 @@ Layers:
 
 #   <curated dataset>  v_user_activity_curated, v_agentic_operations_curated,
 #                      v_consolidated_audit_log, v_model_armor_curated
-#                      (views, ported from gemini-enterprise-stage ds_ge_curated_staging, bugs fixed)
+#                      (views, ported from example-staging-project ds_ge_curated_staging, bugs fixed)
 #   <mart dataset>     v_fct_turns (turn logic view), fct_turns (its materialized copy, with
 #                      refreshed_at), fct_sessions and agg_daily_usage (views over fct_turns)
 #
@@ -18,14 +18,14 @@ Layers:
 # so the views always build and simply return no rows for what is not logged.
 #
 # Usage:
-#   python3 deploy/bigquery/provision_ge_mart.py --project project-maui --print
-#   python3 deploy/bigquery/provision_ge_mart.py --project project-maui --dry-run
-#   python3 deploy/bigquery/provision_ge_mart.py --project project-maui --apply
-#   python3 deploy/bigquery/provision_ge_mart.py --project project-maui --refresh
+#   python3 deploy/bigquery/provision_ge_mart.py --project example-gcp-project --print
+#   python3 deploy/bigquery/provision_ge_mart.py --project example-gcp-project --dry-run
+#   python3 deploy/bigquery/provision_ge_mart.py --project example-gcp-project --apply
+#   python3 deploy/bigquery/provision_ge_mart.py --project example-gcp-project --refresh
 #
 #   # Validate the SQL against another project's raw logs, into a throwaway dataset pair:
-#   python3 deploy/bigquery/provision_ge_mart.py --project project-maui \
-#       --raw-project gemini-enterprise-stage --curated-dataset finops_port_validation \
+#   python3 deploy/bigquery/provision_ge_mart.py --project example-gcp-project \
+#       --raw-project example-staging-project --curated-dataset finops_port_validation \
 #       --mart-dataset finops_port_validation --lookback-days 90 --apply
 """
 

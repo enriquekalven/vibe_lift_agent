@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "experiment_dir": "/Users/enriq/.gemini/jetski/scratch/finops-dashboard-mcp-app/experiments/prompt_cache_evolve",
+  "experiment_dir": "experiments/prompt_cache_evolve",
   "mappings": [
     {
       "experiment_file": "initial_program.py",

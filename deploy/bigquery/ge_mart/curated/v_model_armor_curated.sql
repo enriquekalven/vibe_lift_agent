@@ -1,5 +1,5 @@
 -- Model Armor sanitize operations, one row per prompt/response check.
--- Ported from gemini-enterprise-stage ds_ge_curated_staging.v_model_armor_curated with fixes:
+-- Ported from example-staging-project ds_ge_curated_staging.v_model_armor_curated with fixes:
 --   * Verdicts arrive as MODEL_ARMOR_SANITIZATION_VERDICT_BLOCK / _ALLOW. Stage tested
 --     IN ('BLOCK','REDACT'), so is_blocked was always FALSE. The prefix is stripped here.
 --   * No 'ALLOW' default for a missing verdict and no 'INTERNAL_NETWORK' default IP.
