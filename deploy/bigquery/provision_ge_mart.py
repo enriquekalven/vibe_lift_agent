@@ -12,7 +12,7 @@ Layers:
 # fct_turns is a table because v_fct_turns joins the curated views over raw JSON and takes minutes to
 # read. Rebuild it with --refresh on a schedule; readers use refreshed_at to show staleness.
 #
-# The raw log-sink tables differ between projects (maui lacks fields stage has, some tables do
+# The raw log-sink tables differ between projects (some projects lack fields others have, and some tables do
 # not exist at all), so every source is read through a small adapter that exposes the record
 # columns as JSON. A missing column becomes NULL and a missing table becomes an empty source,
 # so the views always build and simply return no rows for what is not logged.
