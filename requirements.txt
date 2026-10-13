@@ -1,0 +1,14 @@
+# Top-level runtime dependencies, pinned to the versions verified in the deployed image.
+# Transitive versions are locked in constraints.txt. Install with:
+#   pip install -r requirements.txt -c constraints.txt
+# To upgrade: bump a pin here, rebuild, re-run the test suite, then refresh constraints.txt
+# from the new image (pip freeze --exclude pip --exclude setuptools --exclude wheel).
+google-adk==2.10.0
+google-genai==2.25.0
+fastapi==0.141.1
+uvicorn[standard]==0.54.0
+google-cloud-logging==3.16.3
+google-cloud-monitoring==2.31.0
+google-cloud-bigquery==3.45.2
+python-dotenv==1.2.3
+absl-py==2.5.0

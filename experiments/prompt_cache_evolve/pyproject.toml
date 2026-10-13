@@ -1,0 +1,6 @@
+[project]
+name = "prompt_cache_evolve"
+version = "0.1.0"
+description = "Evolutionary Prompt Cache Prefix Canonicalization & Reordering"
+requires-python = ">=3.10"
+dependencies = ["pytest"]

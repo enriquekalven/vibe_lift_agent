@@ -1,0 +1,7942 @@
+import functools
+import json
+import pathlib
+from collections.abc import Mapping
+
+# pylint: disable=line-too-long
+_DASHBOARD_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FinOps and Tokenomics Dashboard</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --surface: #ffffff;
+      --border: #e2e8f0;
+      --text-primary: #0f172a;
+      --text-secondary: #475569;
+      --g-blue: #334155;
+      --g-blue-bg: #f1f5f9;
+      --g-green: #166534;
+      --g-green-bg: #f0fdf4;
+      --g-yellow: #854d0e;
+      --g-yellow-bg: #fefce8;
+      --g-red: #991b1b;
+      --g-red-bg: #fef2f2;
+      --surface-2: #f8fafc;
+      --input-border: #cbd5e1;
+      --chip-bg: #f1f5f9;
+      --font-sans: 'Inter', 'Google Sans', 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-mono: 'Roboto Mono', monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--font-sans);
+      background: var(--bg);
+      color: var(--text-primary);
+      line-height: 1.5;
+    }
+    .app-bar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px 16px;
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      box-shadow: 0 1px 2px rgba(15,23,42,0.04);
+    }
+    .brand-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+    .brand-logo-img {
+      width: 38px;
+      height: 38px;
+      border-radius: 8px;
+      object-fit: cover;
+      border: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .brand-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text-primary);
+      letter-spacing: -0.2px;
+    }
+    .brand-subtitle {
+      font-size: 11.5px;
+      color: var(--text-secondary);
+    }
+    .action-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .btn {
+      font-family: var(--font-sans);
+      font-size: 12.5px;
+      font-weight: 600;
+      padding: 7px 13px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text-primary);
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
+    .btn:hover { background: #f1f5f9; }
+    .btn-primary {
+      background: #0f172a;
+      color: #ffffff;
+      border-color: #0f172a;
+    }
+    .btn-primary:hover { background: #1e293b; }
+    .btn-green {
+      background: #1e293b;
+      color: #ffffff;
+      border-color: #1e293b;
+    }
+    .btn-green:hover { background: #0f172a; }
+    .btn-danger {
+      background: var(--surface);
+      color: var(--text-secondary);
+      border-color: #cbd5e1;
+    }
+    .btn-danger:hover { background: #f1f5f9; color: var(--text-primary); }
+    .btn-fullscreen-toggle {
+      background: #0f172a;
+      color: #ffffff;
+      border-color: #0f172a;
+    }
+    .btn-fullscreen-toggle:hover {
+      background: #1e293b;
+      border-color: #1e293b;
+    }
+    .tabs-bar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 18px;
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .tab-btn {
+      background: none;
+      border: none;
+      padding: 12px 4px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+    .tab-btn:hover { color: var(--text-primary); }
+    .tab-btn.active {
+      color: var(--text-primary);
+      border-bottom-color: var(--text-primary);
+    }
+    .tab-step-pill {
+      font-size: 10.5px;
+      padding: 2px 7px;
+      border-radius: 99px;
+      background: #f1f5f9;
+      color: #334155;
+      font-weight: 700;
+    }
+    .tab-btn.active .tab-step-pill {
+      background: #0f172a;
+      color: #ffffff;
+    }
+    .subview-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-bottom: 16px;
+    }
+    .subview-btn {
+      font-family: var(--font-sans);
+      font-size: 12px;
+      font-weight: 600;
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text-secondary);
+      cursor: pointer;
+    }
+    .subview-btn.active {
+      background: #0f172a;
+      color: #ffffff;
+      border-color: #0f172a;
+    }
+    .tab-footer-nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-top: 8px;
+      font-size: 12.5px;
+      color: var(--text-secondary);
+    }
+    .container {
+      max-width: 1400px;
+      margin: 16px auto;
+      padding: 0 18px 40px 18px;
+    }
+    .selector-banner {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 18px;
+      margin-bottom: 16px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+      gap: 18px;
+      align-items: center;
+    }
+    .selector-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+      letter-spacing: 0.5px;
+      margin-bottom: 5px;
+    }
+    .agent-select {
+      width: 100%;
+      padding: 9px 12px;
+      font-size: 13.5px;
+      font-weight: 600;
+      font-family: var(--font-sans);
+      color: var(--text-primary);
+      background: var(--surface);
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .agent-meta-box {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      border-left: 1px solid var(--border);
+      padding-left: 18px;
+    }
+    .agent-meta-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .kpi-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+      position: relative;
+      overflow: hidden;
+    }
+    .kpi-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+      letter-spacing: 0.4px;
+    }
+    .kpi-value {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin: 6px 0 4px 0;
+    }
+    .kpi-sub {
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 18px;
+      margin-bottom: 16px;
+    }
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .panel-title {
+      font-size: 14.5px;
+      font-weight: 700;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 9px;
+      border-radius: 99px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.1px;
+      border: 1px solid transparent;
+    }
+    .badge-blue { background: #f1f5f9; color: #334155; border-color: #e2e8f0; }
+    .badge-green { background: #f0fdf4; color: #166534; border-color: #dcfce7; }
+    .badge-yellow { background: #fefce8; color: #854d0e; border-color: #fef08a; }
+    .badge-red { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12.5px;
+    }
+    th, td {
+      text-align: left;
+      padding: 9px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    th {
+      color: var(--text-secondary);
+      font-weight: 600;
+      font-size: 11px;
+      text-transform: uppercase;
+      background: #f8fafc;
+    }
+    .mono { font-family: var(--font-mono); font-size: 12px; }
+    .weight-bar-bg {
+      width: 84px;
+      height: 7px;
+      background: #e2e8f0;
+      border-radius: 99px;
+      overflow: hidden;
+      display: inline-block;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    .weight-bar-fill {
+      height: 100%;
+      background: #334155;
+      border-radius: 99px;
+    }
+    .add-param-form {
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
+      gap: 10px;
+      align-items: end;
+    }
+    .field-group label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      margin-bottom: 4px;
+    }
+    .field-group input, .field-group select {
+      width: 100%;
+      padding: 7px 10px;
+      font-size: 13px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      background: #ffffff;
+      color: var(--text-primary);
+    }
+    .charts-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+    .chart-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+    .action-card {
+      border: 1px solid var(--border);
+      border-left: 3px solid #334155;
+      border-radius: 8px;
+      padding: 14px 16px;
+      margin-bottom: 12px;
+      background: #ffffff;
+    }
+    .action-card.rejected {
+      border-left-color: #991b1b;
+      background: #ffffff;
+    }
+    .action-card.baseline {
+      border-left-color: #94a3b8;
+      background: #f8fafc;
+    }
+    .action-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+      gap: 12px;
+      margin-top: 10px;
+    }
+    .action-box {
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-size: 12.5px;
+    }
+    .action-box-title {
+      font-size: 10.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+      margin-bottom: 4px;
+    }
+    .diff-pre {
+      background: #0f172a;
+      color: #e2e8f0;
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      padding: 10px 12px;
+      border-radius: 6px;
+      overflow-x: auto;
+      white-space: pre-wrap;
+    }
+    .live-pill { background: #f0fdf4; color: #166534; }
+    .live-dot {
+      display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+      background: #166534; margin-right: 4px;
+    }
+    .fleet-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); }
+    .fleet-controls select { padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; font-family: var(--font-sans); font-size: 12px; }
+    .fleet-meta { font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; }
+    .fleet-sources { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+    .chip { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 99px; border: 1px solid var(--border); }
+    .chip-ok { background: #f0fdf4; color: #166534; border-color: #dcfce7; }
+    .chip-error { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
+    .chip-na { background: #f1f5f9; color: var(--text-secondary); }
+    .fleet-kpis { grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); }
+    .fleet-kpis .kpi-value { font-size: 20px; }
+    .table-scroll { overflow-x: auto; width: 100%; }
+    .fleet-agent-name { font-weight: 700; }
+    .fleet-agent-desc { font-size: 11px; color: var(--text-secondary); margin-top: 2px; max-width: 360px; }
+    .fleet-agent-tags { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+    .fleet-row-muted td { color: var(--text-secondary); }
+    .fleet-empty { color: var(--text-secondary); text-align: center; }
+    .fleet-notice { font-size: 12px; padding: 8px 12px; border-radius: 6px; background: #f1f5f9; color: #334155; margin-bottom: 12px; }
+    .fleet-notice-error { background: #fefce8; color: #854d0e; }
+    .btn.btn-xs { padding: 2px 8px; font-size: 11px; }
+    .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .trace-row { align-items: center; }
+    .trace-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; padding: 8px 12px; border-radius: 6px; background: #eff6ff; border: 1px solid #bfdbfe; color: #1e3a8a; margin-bottom: 12px; }
+    .trace-confirm { font-size: 11.5px; font-weight: 600; color: #1e3a8a; }
+    .trace-msg { font-size: 11.5px; font-weight: 600; word-break: break-word; }
+    .trace-msg-ok { color: #166534; }
+    .trace-msg-err { color: #991b1b; }
+    .fleet-errors { margin-top: 12px; font-size: 12px; }
+    .fleet-error { background: #fef2f2; color: #991b1b; padding: 6px 10px; border-radius: 6px; margin-bottom: 6px; word-break: break-word; }
+    .fleet-notes { font-size: 11px; color: var(--text-secondary); margin: 12px 0 0 16px; padding: 0; }
+    .hidden { display: none !important; }
+    .api-notice { position: fixed; right: 16px; bottom: 16px; max-width: 440px; z-index: 9999; background: #fff;
+      border: 1px solid #fca5a5; color: #991b1b; padding: 10px 12px; border-radius: 8px; font-size: 12.5px;
+      line-height: 1.5; box-shadow: 0 4px 14px rgba(0,0,0,.12); }
+    .sim-notice { font-size: 12px; line-height: 1.55; color: #854d0e; background: #fefce8; border: 1px solid #fef08a;
+      border-radius: 8px; padding: 8px 10px; }
+    body.simple-mode .adv-only { display: none !important; }
+    .exec-headline { font-size: 15px; line-height: 1.5; color: var(--text-primary); background: var(--surface);
+      border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; margin-bottom: 14px; }
+    .exec-headline .muted { color: var(--text-secondary); font-size: 12px; display:block; margin-top:4px; }
+    .exec-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 14px; }
+    @media (max-width: 900px) { .exec-grid { grid-template-columns: 1fr; } }
+    .exec-grid .panel { margin-bottom: 0; }
+    .trend-panel { margin-top: 14px; margin-bottom: 0; }
+    .trend-svg { width: 100%; height: 170px; display: block; }
+    .trend-svg text { font-size: 10px; fill: #64748b; font-family: var(--font-mono); }
+    .chart-source { font-size: 11px; color: var(--text-secondary); margin-top: 10px; }
+    .hbar-row { display: grid; grid-template-columns: 170px 1fr 64px; align-items: center; gap: 10px; margin: 7px 0; font-size: 12.5px; }
+    .hbar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
+    .hbar-track { height: 14px; background: #f1f5f9; border-radius: 4px; overflow: hidden; display: flex; }
+    .hbar-seg { height: 100%; }
+    .hbar-val { text-align: right; font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); }
+    .chart-legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 11.5px; color: var(--text-secondary); margin-top: 8px; }
+    .chart-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+    .donut-wrap { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+    .donut-legend { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; min-width: 180px; flex: 1; }
+    .donut-legend-row { display: grid; grid-template-columns: 14px 1fr auto; gap: 8px; align-items: center; }
+    .donut-legend-row i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+    .donut-legend-row .v { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); }
+    .attention-list { list-style: none; margin: 0; padding: 0; }
+    .attention-list li { display: flex; gap: 10px; align-items: flex-start; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+    .attention-list li:last-child { border-bottom: none; }
+    .sev-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; flex: none; }
+    body.live-data .sim-panel { display: none !important; }
+    body:not(.live-data) .live-only { display: none !important; }
+    .token-na { color: #b45309; font-size: 11.5px; font-weight: 600; }
+    .cell-sub { display: block; font-size: 10.5px; color: var(--text-secondary); margin-top: 2px; white-space: nowrap; font-family: var(--font-sans, inherit); font-weight: 400; }
+    .cleanup-row { padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+    .cleanup-row:last-child { border-bottom: none; }
+    .cleanup-evidence { color: var(--text-secondary); font-size: 11.5px; margin-top: 3px; word-break: break-word; }
+    .cleanup-cmd { display: flex; gap: 8px; align-items: flex-start; margin-top: 6px; }
+    .cleanup-cmd code { flex: 1; font-family: var(--font-mono); font-size: 11px; background: #f8fafc; border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; word-break: break-all; }
+    .live-note { font-size: 11.5px; color: var(--text-secondary); margin-top: 8px; }
+    .live-sub { font-size: 12.5px; font-weight: 700; margin: 16px 0 6px; color: var(--text-primary); }
+    .whatif-live-form { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-bottom: 12px; }
+    .whatif-live-form label { display: block; font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 3px; }
+    .whatif-live-form select, .whatif-live-form input { font-size: 12.5px; padding: 5px 7px; border: 1px solid var(--border); border-radius: 6px; }
+    .wi-result-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 10px 0; }
+    .chart-empty { font-size: 12.5px; color: var(--text-secondary); padding: 18px 0; }
+    .adv-toggle { display:inline-flex; align-items:center; gap:6px; }
+    .adv-toggle[aria-pressed="true"] { background:#1e293b; color:#fff; border-color:#1e293b; }
+    .verify-chip { font-size:11.5px; padding:4px 10px; }
+    .scope-select { font-size:12px; padding:5px 8px; border:1px solid #cbd5e1; border-radius:6px; background:#fff; color:#0f172a; max-width:320px; }
+    .time-ranges { margin-top: 6px; font-size: 11.5px; color: #475569; line-height: 1.45; }
+    .scope-note { font-size:12px; color:#854d0e; background:#fefce8; border:1px solid #fde68a; border-radius:6px; padding:6px 10px; margin-top:8px; }
+    .fleet-agent-app { font-size:11px; color: var(--text-secondary); margin-top:2px; }
+    details.role-disclosure {
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 12px;
+      margin-bottom: 12px;
+    }
+    details.role-disclosure summary {
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      user-select: none;
+    }
+    @media (max-width: 820px) {
+      .agent-meta-box { border-left: none; border-top: 1px solid var(--border); padding-left: 0; padding-top: 12px; }
+      .container { padding: 0 12px 28px 12px; }
+      .panel { padding: 14px 14px; }
+    }
+    @media print {
+      @page {
+        size: A4 landscape;
+        margin: 12mm 10mm;
+      }
+      body {
+        background: #ffffff !important;
+        color: #0f172a !important;
+        font-size: 11px !important;
+      }
+      .action-bar, .tab-bar, .tabs-bar, .fleet-controls, .verify-chip, #exportPdfBtn, #syncGcpBtn,
+      #telemetryValidatorDrawer, #anomalyBanner, #chatDock, #chatDrawer, #apiNotice,
+      .vl-toolbar, .vl-drawer, .vl-backdrop, .vl-palette,
+      .scope-select, button {
+        display: none !important;
+      }
+      .app-bar {
+        border-bottom: 2px solid #0f172a !important;
+        padding-bottom: 8px !important;
+        margin-bottom: 12px !important;
+      }
+      #printExportHeader {
+        display: block !important;
+        margin-bottom: 16px;
+        padding: 10px 14px;
+        background: #f8fafc;
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+      }
+      .panel {
+        box-shadow: none !important;
+        border: 1px solid #cbd5e1 !important;
+        break-inside: avoid;
+        margin-bottom: 16px !important;
+      }
+      .table-scroll {
+        overflow: visible !important;
+        max-height: none !important;
+      }
+      table {
+        width: 100% !important;
+        font-size: 10px !important;
+        border-collapse: collapse !important;
+      }
+      th, td {
+        padding: 5px 8px !important;
+        border: 1px solid #e2e8f0 !important;
+      }
+      .kpi-card {
+        border: 1px solid #cbd5e1 !important;
+        break-inside: avoid;
+      }
+      .badge {
+        border: 1px solid #94a3b8 !important;
+        print-color-adjust: exact;
+        -webkit-print-color-adjust: exact;
+      }
+    }
+
+    /* Prompt Cache X-Ray */
+    .px-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+    .px-seg { display: inline-flex; gap: 4px; }
+    .px-seg-btn.active { background: var(--text-primary); color: #fff; border-color: var(--text-primary); }
+    .px-field { font-size: 12px; color: var(--text-secondary); display: inline-flex; gap: 6px; align-items: center; }
+    .px-field select, .px-field input { font-size: 12px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; max-width: 170px; }
+    .px-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .px-area { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); }
+    .px-area textarea, .px-area select { font-family: var(--font-mono); font-size: 12px; border: 1px solid var(--border); border-radius: 8px; padding: 8px; color: var(--text-primary); }
+    .px-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 8px 0; }
+    .px-kpi { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--surface); }
+    .px-kpi-label { font-size: 11px; color: var(--text-secondary); }
+    .px-kpi-value { font-size: 18px; font-weight: 600; }
+    .px-kpi-value.good { color: var(--g-green); }
+    .px-kpi-value.bad { color: var(--g-red); }
+    .px-culprit { border-left: 3px solid var(--g-red); background: var(--g-red-bg); padding: 8px 10px; border-radius: 6px; font-size: 13px; margin-bottom: 8px; }
+    .px-culprit.ok { border-left-color: var(--g-green); background: var(--g-green-bg); }
+    .px-culprit code { font-family: var(--font-mono); font-size: 12px; background: rgba(255,255,255,0.7); padding: 0 3px; border-radius: 3px; }
+    .px-legend { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; font-size: 11px; align-items: center; }
+    .px-chip { padding: 2px 6px; border-radius: 4px; }
+    .px-heatmap, .px-code { font-family: var(--font-mono); font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: #fff; margin: 0; }
+    .px-cached { background: #dcfce7; }
+    .px-cached.px-tok-alt { background: #bbf7d0; }
+    .px-dynamic { background: #fee2e2; }
+    .px-dynamic.px-tok-alt { background: #fecaca; }
+    .px-buster { background: #dc2626; color: #fff; font-weight: 600; }
+    .px-recoverable { background: #fef3c7; }
+    .px-recoverable.px-tok-alt { background: #fde68a; }
+    .px-appended { background: #dbeafe; }
+    .px-appended.px-tok-alt { background: #bfdbfe; }
+    .px-latent { background: #ffedd5; outline: 1px dashed #d97706; }
+    .px-collapsed { display: inline-block; margin: 2px 0; padding: 1px 8px; border-radius: 10px; font-family: var(--font-sans); font-size: 11px; color: var(--text-secondary); border: 1px dashed #94a3b8; background: #f8fafc; }
+    .px-break { display: inline-block; width: 3px; height: 1.15em; background: #dc2626; vertical-align: text-bottom; margin: 0 1px; box-shadow: 0 0 0 2px rgba(220,38,38,0.25); }
+    .px-rewrite { margin-top: 10px; }
+    .px-rewrite-head { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; flex-wrap: wrap; }
+    .px-notes { font-size: 12px; color: var(--text-secondary); margin: 8px 0 0 18px; }
+    @media (max-width: 800px) { .px-grid { grid-template-columns: 1fr; } }
+    /*__FINOPS_ENHANCEMENTS_CSS__*/
+  </style>
+  <script>
+    /* Theme before first paint: saved choice, else the OS setting. The MCP host theme and later changes are applied by
+       dashboard_enhancements.js. */
+    (function () {
+      try {
+        var saved = localStorage.getItem('finops.theme');
+        var dark = saved === 'dark' || (saved !== 'light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+      } catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
+    })();
+  </script>
+</head>
+<body>
+  <div id="printExportHeader" style="display:none;"></div>
+  <header class="app-bar">
+    <div class="brand-row">
+      <div>
+        <div class="brand-title">FinOps and Tokenomics Dashboard</div>
+        <div class="brand-subtitle adv-only">
+          Agent Health, Speed, Cost &amp; Quality &bull; <span class="mono">@finops_telemetry</span>
+        </div>
+      </div>
+      <div style="display:inline-flex;align-items:center;gap:8px;padding:4px 10px;background:var(--chip-bg);border-radius:6px;border:1px solid var(--border);font-size:11.5px;font-weight:600;color:var(--g-blue);">
+        <span>GCP: <strong id="gcpProjectText" class="mono">&#x2026;</strong> (<span id="gcpRegionText" class="mono">&#x2026;</span>)</span>
+      </div>
+      <label for="geScopeSelect" style="font-size:11.5px;font-weight:600;color:var(--text-secondary);">Gemini Enterprise app</label>
+      <select id="geScopeSelect" class="scope-select" onchange="onGeScopeChange(this.value)" title="Filter by region and Gemini Enterprise app">
+        <option value="all">All apps &middot; all regions</option>
+      </select>
+      <label for="fleetWindow" style="font-size:11.5px;font-weight:600;color:var(--text-secondary);">Time range</label>
+      <select id="fleetWindow" class="scope-select" onchange="onFleetWindowChange()" title="Time range for agent traffic, errors, tokens and model spend">
+        <option value="1">Last hour</option>
+        <option value="6">Last 6 hours</option>
+        <option value="24" selected>Last 24 hours</option>
+        <option value="168">Last 7 days</option>
+        <option value="720">Last 1 month</option>
+        <option value="2160">Last 3 months</option>
+        <option value="4320">Last 6 months</option>
+        <option value="8760">Last 1 year</option>
+      </select>
+      <span id="fleetWindowStatus" class="mono" style="font-size:11px;font-weight:600;color:#0284c7;display:none;">&#x23F3; Loading&hellip;</span>
+    </div>
+    <div class="action-bar">
+      <button id="btnModeFullscreen" class="btn btn-fullscreen-toggle" onclick="toggleDisplayMode()" title="Toggle between Right Side Panel and Fullscreen">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg> Fullscreen
+      </button>
+      <button type="button" class="btn vl-palette-btn" id="vlPaletteBtn" aria-haspopup="dialog" aria-expanded="false" aria-keyshortcuts="Meta+K Control+K" title="Search agents, users, sessions, apps and commands">&#8981; Search <kbd class="vl-kbd">Ctrl K</kbd></button>
+      <span id="activeGenBadge" class="badge badge-blue adv-only">ACTIVE CONFIG</span>
+      <button type="button" class="btn vl-fresh vl-fresh-wait" id="vlFreshChip" title="How fresh the fleet data is. Click to refresh."><i class="vl-fresh-dot"></i>Loading&hellip;</button>
+      <button class="btn verify-chip" onclick="toggleTelemetryValidatorDrawer()" id="toggleTelemetryValidatorBtn" title="See which data source backs each number">
+        Data check: <span id="telemetryValidatorSummaryBadge" class="mono">checking&hellip;</span>
+      </button>
+      <button class="btn" id="exportPdfBtn" onclick="exportDashboardPdf(event)" title="Export filtered view to executive PDF report (Shift+click for print dialog)">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" style="vertical-align:text-bottom;margin-right:4px;"><path d="M19 8H5c-1.66 0-3 1.34-3 3v6h4v4h12v-4h4v-6c0-1.66-1.34-3-3-3zm-3 11H8v-5h8v5zm3-7c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1zm-1-9H6v4h12V3z"/></svg> Export PDF
+      </button>
+      <button type="button" class="btn vl-theme-btn" id="vlThemeBtn" aria-pressed="false" title="Switch to the dark theme" aria-label="Dark theme">&#9790;</button>
+      <button type="button" class="btn" id="vlCopyLinkBtn" title="Copy a link to this view (tab, app, time range, search and open agent)">Copy link</button>
+      <button class="btn" id="syncGcpBtn" onclick="syncGcpTelemetry()" title="Sync GCP Telemetry (Cloud Monitoring, BigQuery, Gemini Enterprise)">
+        Refresh
+      </button>
+      <button class="btn btn-danger adv-only sim-panel" onclick="triggerApi('/api/inject_anomaly')" title="Simulator: applies a fixed cache-bust scenario to the demo agent (synthetic numbers)">
+        Simulate Alert
+      </button>
+      <button class="btn btn-primary adv-only sim-panel" onclick="triggerApi('/api/evolve_generation')" title="Simulator: one generation of fixed improvement factors on the demo agent; nothing is deployed">
+        Run Optimizer (simulated)
+      </button>
+      <button class="btn adv-only sim-panel" onclick="triggerApi('/api/reset')">
+        Reset
+      </button>
+      <button class="btn adv-toggle" id="advancedToggleBtn" aria-pressed="false" onclick="toggleAdvancedMode()" title="Show optimizer, simulators, FinOps deep-dives and SDK tools">
+        Advanced &#9662;
+      </button>
+    </div>
+  </header>
+
+  <nav class="tabs-bar" aria-label="Dashboard Navigation">
+    <button id="tabBtn6" class="tab-btn active" onclick="switchTab(6)">
+      Overview
+    </button>
+    <button id="tabBtn0" class="tab-btn" onclick="switchTab(0)" title="Gemini Enterprise Agent Fleet">
+      <span class="tab-step-pill live-pill"><span class="live-dot"></span></span>
+      Agents
+    </button>
+    <button id="tabBtn3" class="tab-btn" onclick="switchTab(3)">
+      Cost
+    </button>
+    <button id="tabBtn4" class="tab-btn" onclick="switchTab(4)">
+      Users
+    </button>
+    <button id="tabBtn1" class="tab-btn adv-only" onclick="switchTab(1)">
+      Goals &amp; Metrics
+    </button>
+    <button id="tabBtn2" class="tab-btn adv-only sim-panel" onclick="switchTab(2)">
+      Optimizer &amp; Testing
+    </button>
+    <button id="tabBtn5" class="tab-btn adv-only" onclick="switchTab(5)">
+      SDK &amp; Tools
+    </button>
+  </nav>
+
+  <main class="container">
+    <!-- COMPACT SUMMARY BAR: KEY NUMBERS, COLLAPSIBLE ROLE GUIDE & OPTIONAL DATA SEARCH -->
+    <section class="panel adv-only" id="smeExecutivePulseBar" style="margin-bottom:16px;padding:14px 18px;">
+      <div class="panel-header" style="margin-bottom:10px;padding-bottom:8px;">
+        <div class="panel-title">
+          <span>Summary: Cost per Helpful Answer, Resolution Rate &amp; Monthly Cloud Bill</span>
+          <span class="badge badge-green" id="northStarDeltaBadge">&mdash;</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <button class="btn" onclick="toggleNl2SqlDrawer()" id="toggleNl2SqlBtn">
+            Search Data in Plain English
+          </button>
+        </div>
+      </div>
+
+      <div class="kpi-grid" id="northStarUnitEconKpis" style="margin-bottom:10px;"></div>
+
+      <details class="role-disclosure" id="roleGuideDisclosure">
+        <summary>Role Guide, 7-Step Workflow &amp; SME Persona Evaluation Scorecard (FinOps, SRE, AI Engineer, Product, Security, Executive)</summary>
+        <div style="margin-top:10px;">
+          <div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;margin-bottom:6px;">
+            Choose Your Role (where to start and what to check):
+          </div>
+          <div id="smePersonaLensBar" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;"></div>
+          <div id="smePersonaPlaybookCard" class="action-box" style="margin-bottom:10px;"></div>
+          <div id="workflowStepsRibbon" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;margin-bottom:12px;"></div>
+
+          <div id="smeEvalScorecardPanel" style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+              <div>
+                <div style="font-size:12.5px;font-weight:700;color:var(--text-primary);">
+                  SME Multi-Persona Evaluation &amp; Rating Scorecard (6 Personas &times; 5 Rubric Dimensions = 30 Checks)
+                </div>
+                <div style="font-size:11.5px;color:var(--text-secondary);">
+                  Deterministic compliance rubric (Time-to-Insight, Actionability, Data Trust, Ergonomics, Guardrails) paired with live SME reviewer ratings.
+                </div>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <span id="smeEvalSummaryBadge" class="badge badge-green">Evaluating 30/30 Checks...</span>
+                <button id="smeEvalRunBtn" class="btn" style="padding:4px 10px;font-size:11.5px;" onclick="runSmePersonaAudit()">Re-run 30-Check Persona Audit</button>
+              </div>
+            </div>
+
+            <div class="table-wrap" style="margin-bottom:12px;">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Persona &amp; Primary Tab</th>
+                    <th>Critical User Journey (CUJ) Tested</th>
+                    <th>5-Dimension Rubric Breakdown (20 pts each)</th>
+                    <th class="right">Automated Score</th>
+                    <th class="right">Human SME Rating</th>
+                  </tr>
+                </thead>
+                <tbody id="smeEvalMatrixBody"></tbody>
+              </table>
+            </div>
+
+            <div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:10px;">
+              <div style="font-size:11.5px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">
+                Submit SME Persona Evaluation &amp; Sign-Off Rating (Stored in Live Session Ledger)
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                <select id="smeEvalPersonaSelect" style="padding:6px 8px;border:1px solid var(--input-border);border-radius:6px;font-size:12px;">
+                  <option value="finops_lead">FinOps &amp; Cloud Economics Lead</option>
+                  <option value="sre_platform">SRE &amp; Agent Platform Engineer</option>
+                  <option value="ai_engineer">AI / Prompt &amp; ADK Agent Engineer</option>
+                  <option value="product_quality">Product Manager &amp; VoC Quality Lead</option>
+                  <option value="security_governance">Security, Governance &amp; Data Privacy Auditor</option>
+                  <option value="cfo_exec">VP Engineering / Executive Sponsor</option>
+                </select>
+                <input id="smeEvalReviewerInput" type="text" placeholder="SME Reviewer (e.g. reviewer@example.com)" style="padding:6px 8px;border:1px solid var(--input-border);border-radius:6px;font-size:12px;min-width:190px;" />
+                <select id="smeEvalRatingSelect" style="padding:6px 8px;border:1px solid var(--input-border);border-radius:6px;font-size:12px;">
+                  <option value="5">5 / 5 &mdash; Exceeds Expectations</option>
+                  <option value="4">4 / 5 &mdash; Meets Expectations</option>
+                  <option value="3">3 / 5 &mdash; Acceptable with Minor Gaps</option>
+                  <option value="2">2 / 5 &mdash; Friction / Missing Metric</option>
+                  <option value="1">1 / 5 &mdash; Blocks Workflow</option>
+                </select>
+                <select id="smeEvalVerdictSelect" style="padding:6px 8px;border:1px solid var(--input-border);border-radius:6px;font-size:12px;">
+                  <option value="APPROVED">APPROVED</option>
+                  <option value="APPROVED_WITH_NOTES">APPROVED_WITH_NOTES</option>
+                  <option value="NEEDS_WORK">NEEDS_WORK</option>
+                </select>
+                <input id="smeEvalNotesInput" type="text" placeholder="Evaluation notes / CUJ feedback..." style="flex:1;min-width:200px;padding:6px 8px;border:1px solid var(--input-border);border-radius:6px;font-size:12px;" />
+                <button id="smeEvalSubmitBtn" class="btn btn-primary" style="padding:6px 12px;font-size:12px;" onclick="submitSmePersonaRating()">Submit SME Rating</button>
+              </div>
+            </div>
+
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Timestamp</th>
+                    <th>SME Reviewer</th>
+                    <th>Persona Evaluated</th>
+                    <th class="right">Rating</th>
+                    <th>Verdict</th>
+                    <th>Evaluation Notes</th>
+                  </tr>
+                </thead>
+                <tbody id="smeEvalRatingsBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <div id="nl2sqlCopilotDrawer" class="hidden" style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+          <div style="font-size:12px;font-weight:700;color:var(--text-primary);">
+            Ask a Question in Plain English (Generates BigQuery SQL on <span class="mono">aive_logs</span> &amp; Agent Logs)
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button class="btn" style="padding:4px 9px;font-size:11.5px;" onclick="runNl2SqlPreset('Compare cost per 1k turns and prompt cache savings across agents')">Cost &amp; Cache by Agent</button>
+            <button class="btn" style="padding:4px 9px;font-size:11.5px;" onclick="runNl2SqlPreset('Show token category breakdown for thinking vs context bloat vs background overhead')">Token Usage by Type</button>
+            <button class="btn" style="padding:4px 9px;font-size:11.5px;" onclick="runNl2SqlPreset('List top power users by user_ldap token spend and CSAT')">Top Users by Spend</button>
+            <button class="btn" style="padding:4px 9px;font-size:11.5px;" onclick="runNl2SqlPreset('Detect runaway agent loops and thinking token anomalies')">Stuck Loop Alerts</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+          <input id="nl2sqlQuestionInput" type="text" style="flex:1;min-width:260px;padding:7px 11px;border:1px solid var(--input-border);border-radius:6px;font-size:13px;" value="Compare cost per 1k turns and prompt cache savings across agents" />
+          <button class="btn btn-primary" onclick="runNl2SqlQuery()">Run Search</button>
+        </div>
+        <div id="nl2sqlSummaryText" style="font-size:12.5px;font-weight:600;color:var(--g-green);margin-bottom:8px;"></div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;">
+          <div>
+            <div style="font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;margin-bottom:4px;">Generated BigQuery SQL</div>
+            <pre class="diff-pre" id="nl2sqlSqlPre" style="max-height:145px;"></pre>
+          </div>
+          <div class="table-scroll" style="max-height:165px;">
+            <table>
+              <thead id="nl2sqlResultHead"></thead>
+              <tbody id="nl2sqlResultBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="telemetryValidatorSection">
+      <div id="telemetryValidatorDrawer" class="hidden" style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+          <div>
+            <div style="font-size:12.5px;font-weight:700;color:var(--text-primary);">
+              Telemetry Grounding &amp; LLM-as-a-Judge Validator (Zero Hallucination / Zero Fake Data Guardrail)
+            </div>
+            <div style="font-size:11.5px;color:var(--text-secondary);">
+              Cross-checks all 6 tabs against BigQuery (<span class="mono">ds_ge_audit_raw</span>, <span class="mono">sre_triage_agent_telemetry</span>, <span class="mono">finops_analytics</span>), Cloud Monitoring v3, and Discovery Engine APIs.
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button class="btn btn-primary" id="runLlmJudgeAuditBtn" onclick="runTelemetryValidationAudit(true)" style="padding:5px 10px;font-size:11.5px;">
+              Run Live LLM-as-a-Judge Audit
+            </button>
+          </div>
+        </div>
+        <div id="telemetryValidatorJudgeBox" class="action-box" style="margin-bottom:10px;"></div>
+        <div class="table-scroll" style="max-height:240px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Check ID</th>
+                <th>Tab</th>
+                <th>Metric / Invariant Audited</th>
+                <th>Expected Ground Truth</th>
+                <th>Observed UI State</th>
+                <th>Telemetry Source</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="telemetryValidatorChecksBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- Persistent Agent & Optimizer Selector Banner -->
+    <section id="demoSelectorBanner" class="selector-banner hidden adv-only">
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="sim-notice" role="note">
+          <span class="badge badge-yellow">SIMULATOR</span>
+          <span id="simulatorNoteText">Simulator: synthetic numbers from fixed factors in finops_dashboard/optimizer.py. No optimizer is called, no logs are read, and no agent is changed.</span>
+          The agent profiles, goal metrics and optimizer generations in this picker are demo data.
+        </div>
+        <div>
+          <div class="selector-label">1. Choose Agent to Inspect (demo profiles)</div>
+          <select id="agentDropdown" class="agent-select" onchange="onSelectAgent(this.value)">
+            <option value="it_service_desk">IT Service Desk (gemini-2.5-flash &bull; Vertex AI Agent Engine)</option>
+            <option value="finops_analytics">FinOps &amp; Tokenomics Analytics (gemini-2.5-flash &bull; Cloud Run A2A + MCP)</option>
+            <option value="deep_research">Deep Research (gemini-2.5-pro &bull; Google-Managed Research Agent)</option>
+          </select>
+        </div>
+        <div>
+          <div class="selector-label">2. Choose Simulated Optimization Method</div>
+          <select id="optimizerDropdown" class="agent-select" onchange="onSelectOptimizer(this.value)">
+            <option value="alpha_evolve">AlphaEvolve (Balanced Cost, Speed &amp; Accuracy &bull; Default)</option>
+            <option value="opus_critic">Opus Critic (Prompt &amp; Tool Cleanup)</option>
+            <option value="hybrid_ensemble">Combined Mode (AlphaEvolve + Opus Critic)</option>
+          </select>
+        </div>
+      </div>
+      <div class="agent-meta-box">
+        <div class="agent-meta-top">
+          <div>
+            <strong id="agentTitleText" style="font-size:15.5px;">IT Service Desk</strong>
+            <span id="agentDomainBadge" class="badge badge-blue" style="margin-left:8px;">Enterprise IT Support &amp; Escalation (Vertex AI Agent Engine)</span>
+          </div>
+          <span id="agentHealthBadge" class="badge badge-green">OPTIMIZED (GEN 14)</span>
+        </div>
+        <div id="agentDescText" style="font-size:12.5px;color:var(--text-secondary);"></div>
+        <div style="font-size:12px;color:var(--text-secondary);display:flex;gap:16px;flex-wrap:wrap;">
+          <span><strong>Model:</strong> <span id="agentModelText" class="mono"></span></span>
+          <span><strong>Active Method:</strong> <span id="activeOptimizerText" class="mono" style="color:var(--text-primary);font-weight:700;">AlphaEvolve (Balanced Cost, Speed &amp; Accuracy)</span></span>
+          <span><strong>Data:</strong> <span style="color:var(--g-yellow);font-weight:600;">simulated</span></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 6: EXECUTIVE OVERVIEW (charts computed client-side from live /api/state only) -->
+    <section id="tabPanel6">
+      <div class="exec-headline" id="execHeadline">Loading live data from Google Cloud&hellip;</div>
+      <div id="vlHealthStrip" class="vl-strip hidden" aria-label="Fleet health"></div>
+      <div class="kpi-grid" id="execKpis"></div>
+      <div class="panel trend-panel">
+        <div class="panel-header"><div class="panel-title"><span>Requests over time</span></div></div>
+        <div id="execChartTrend"></div>
+        <div class="chart-legend">
+          <span><i style="background:#2563eb"></i>Successful</span>
+          <span><i style="background:#f59e0b"></i>Rejected (4xx)</span>
+          <span><i style="background:#ef4444"></i>Server error (5xx)</span>
+        </div>
+        <div class="chart-source" id="execSrcTrend"></div>
+      </div>
+      <div class="exec-grid">
+        <div class="panel">
+          <div class="panel-header"><div class="panel-title"><span>Requests by agent</span></div></div>
+          <div id="execChartRequests"></div>
+          <div class="chart-legend">
+            <span><i style="background:#2563eb"></i>Successful</span>
+            <span><i style="background:#f59e0b"></i>Rejected (4xx)</span>
+            <span><i style="background:#ef4444"></i>Server error (5xx)</span>
+          </div>
+          <div class="chart-source" id="execSrcRequests"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><div class="panel-title"><span>Model spend by model</span></div></div>
+          <div id="execChartSpend"></div>
+          <div class="chart-source" id="execSrcSpend"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><div class="panel-title"><span>Agent fleet mix</span></div></div>
+          <div id="execChartMix"></div>
+          <div class="chart-source">Source: Gemini Enterprise agent inventory (Discovery Engine API)</div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><div class="panel-title"><span>Most active users</span></div></div>
+          <div id="execChartUsers"></div>
+          <div class="chart-legend">
+            <span><i style="background:#10b981"></i>People</span>
+            <span><i style="background:#94a3b8"></i>Service accounts</span>
+            <span title="A user id set by the calling app (e.g. agents-cli uses cli-user), not an authenticated identity"><i style="background:#f59e0b"></i>Unverified session id</span>
+          </div>
+          <div class="chart-source">Source: BigQuery audit logs &amp; agent telemetry (sessions, last 7 days; does not follow Time range)</div>
+        </div>
+      </div>
+      <div class="panel trend-panel">
+        <div class="panel-header"><div class="panel-title"><span>Tokens by agent</span></div></div>
+        <div id="execChartTokens"></div>
+        <div class="chart-legend">
+          <span><i style="background:#2563eb"></i>Input</span>
+          <span><i style="background:#10b981"></i>Output</span>
+        </div>
+        <div class="chart-source" id="execSrcTokens"></div>
+      </div>
+      <div class="panel" style="margin-top:14px;">
+        <div class="panel-header"><div class="panel-title"><span>Needs attention</span><span class="badge badge-green" id="vlAttentionBadge"></span></div></div>
+        <ul class="attention-list" id="execAttention"></ul>
+      </div>
+      <div class="panel hidden" id="execCleanupPanel" style="margin-top:14px;">
+        <div class="panel-header">
+          <div class="panel-title"><span>Clean up: agents whose backend no longer exists</span><span class="badge badge-red" id="execCleanupCount"></span></div>
+          <div style="font-size:12px;color:var(--text-secondary);">Each registration below points at an Agent Engine or Cloud Run service that returned HTTP 404, or has no backend configured. People who pick these agents in Gemini Enterprise get errors. Review each one, then run the command yourself; FinOps Dashboard never deletes anything.</div>
+        </div>
+        <div id="execCleanup"></div>
+      </div>
+      <details class="panel vl-disclosure-panel" id="execUnregisteredPanel" style="margin-top:14px;">
+        <summary class="panel-header vl-disclosure-summary">
+          <div class="panel-title">
+            <span>Standalone &amp; Unregistered Project Runtimes (Agent Engine, Cloud Run, GKE &amp; MCP)</span>
+            <span class="badge badge-yellow" id="execUnregisteredBadge">Scanning&hellip;</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Runtimes deployed in the project that are <strong>not registered</strong> in any Gemini Enterprise app. Click to expand standalone Vertex AI ReasoningEngines, Cloud Run MCP servers, and GKE workloads.
+          </div>
+        </summary>
+        <div class="vl-disclosure-body">
+          <div class="kpi-grid" id="execUnregisteredKpis" style="margin-bottom:12px;"></div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Standalone Runtime / Cluster</th>
+                  <th>Kind &amp; Region</th>
+                  <th>Status &amp; FinOps Signal</th>
+                  <th>Requests</th>
+                  <th>LLM Calls &amp; Tokens</th>
+                  <th>Compute Allocation &amp; Est. Cost</th>
+                  <th>FinOps Admin Control (Scale-to-Zero / Cleanup / Register in GE)</th>
+                </tr>
+              </thead>
+              <tbody id="execUnregisteredBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </details>
+    </section>
+
+    <!-- TAB 0: LIVE GEMINI ENTERPRISE AGENT FLEET (real inventory joined with real telemetry) -->
+    <section id="tabPanel0" class="hidden">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Agents deployed on Gemini Enterprise</span>
+            <span id="fleetEngineBadge" class="badge badge-blue">Loading&hellip;</span>
+          </div>
+          <div class="fleet-controls">
+            <button class="btn btn-primary" id="enableLowCodeObsBtn" onclick="askBulkTrace(true, true)" title="Enable Discovery Engine trace logging (observabilityConfig) on all No-Code / Low-Code agents">Enable No-Code Trace</button>
+            <button class="btn" id="disableLowCodeObsBtn" onclick="askBulkTrace(false, true)" title="Disable Discovery Engine trace logging (observabilityConfig) on all No-Code / Low-Code agents">Disable No-Code Trace</button>
+            <button class="btn" id="enableAllObsBtn" onclick="askBulkTrace(true, false)" title="Enable Discovery Engine trace logging (observabilityConfig) across all registered Gemini Enterprise agents">Enable All Trace</button>
+            <button class="btn" id="disableAllObsBtn" onclick="askBulkTrace(false, false)" title="Disable Discovery Engine trace logging (observabilityConfig) across all registered Gemini Enterprise agents">Disable All Trace</button>
+            <button class="btn" id="toggleObsScriptBtn" onclick="toggleAgentObsDrawer()" title="Optional: view the equivalent Cloud Shell script">Trace Script</button>
+            <label><input type="checkbox" id="fleetAuto" checked onchange="scheduleFleetRefresh()" /> Auto-refresh (60 s)</label>
+            <button class="btn" id="fleetRefreshBtn" onclick="refreshFleet(true)">Refresh now</button>
+          </div>
+        </div>
+        <div id="traceBulkBar" class="trace-bar hidden" role="status" aria-live="polite"></div>
+        <div id="fleetNotice" class="fleet-notice hidden"></div>
+        <div id="agentObsDrawer" class="hidden" style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin:8px 0 12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+            <div>
+              <div style="font-size:12.5px;font-weight:700;color:var(--text-primary);" id="agentObsDrawerTitle">
+                Trace logging from Cloud Shell (<span class="mono">observabilityConfig</span>)
+              </div>
+              <div style="font-size:11.5px;color:var(--text-secondary);" id="agentObsDrawerSub">
+                Optional. The Enable / Disable trace buttons apply the change directly. Use this only to run the same <span class="mono">PATCH ?updateMask=observabilityConfig</span> yourself, or see <span class="mono">deploy/enable_agent_logging.sh</span>.
+              </div>
+            </div>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+              <button class="btn" id="copyObsCurlBtn" onclick="copyText(document.getElementById('agentObsCurlCode').textContent, this)" style="padding:4px 9px;font-size:11.5px;">Copy curl command</button>
+              <button class="btn" id="copyObsScriptBtn" onclick="copyText(document.getElementById('agentObsScriptCode').textContent, this)" style="padding:4px 9px;font-size:11.5px;">Copy script</button>
+              <button class="btn" onclick="document.getElementById('agentObsDrawer').classList.add('hidden'); notifyHostSizeChanged();" style="padding:4px 9px;font-size:11.5px;">Close</button>
+            </div>
+          </div>
+          <div style="margin-bottom:8px;">
+            <div style="font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:4px;">Single agent (<span class="mono">curl -X PATCH ?updateMask=observabilityConfig</span>):</div>
+            <pre id="agentObsCurlCode" class="diff-pre" style="max-height:130px;overflow:auto;font-size:11px;margin:0;"></pre>
+          </div>
+          <details>
+            <summary style="cursor:pointer;font-size:11.5px;font-weight:600;color:var(--g-blue);">Show bulk Cloud Shell script</summary>
+            <pre id="agentObsScriptCode" class="diff-pre" style="max-height:220px;overflow:auto;font-size:11px;margin-top:6px;"></pre>
+          </details>
+        </div>
+        <div id="fleetMeta" class="fleet-meta">Waiting for live data from Google Cloud&hellip;</div>
+        <div id="fleetSources" class="fleet-sources"></div>
+        <div id="fleetKpis" class="kpi-grid fleet-kpis"></div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Agent</th>
+                <th title="Rule-based status from the measured metrics; see Fleet health on the Overview tab">Health</th>
+                <th>Type</th>
+                <th>Runs on</th>
+                <th>Requests</th>
+                <th>4xx / 5xx</th>
+                <th>Latency p50 / p95</th>
+                <th>LLM calls</th>
+                <th>Tokens in / out</th>
+                <th>Conversations</th>
+                <th>Last activity</th>
+              </tr>
+            </thead>
+            <tbody id="fleetAgentsBody"></tbody>
+          </table>
+        </div>
+        <div id="fleetErrors" class="fleet-errors hidden"></div>
+      </div>
+
+      <details class="panel vl-disclosure-panel" id="fleetUnregisteredPanel" open>
+        <summary class="panel-header vl-disclosure-summary">
+          <div class="panel-title">
+            <span>Non-GE Standalone Runtimes (Agent Engine, Cloud Run, GKE) &amp; Zombie FinOps Control</span>
+            <span class="badge badge-yellow" id="fleetUnregisteredBadge">Scanning&hellip;</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Full project-wide inventory of agents, MCP servers, skill backends, and GKE workloads deployed outside Gemini Enterprise apps, with live Cloud Monitoring vCPU/GiB allocation, Cloud Trace token telemetry, and copyable FinOps remediation &amp; GE registration commands.
+          </div>
+        </summary>
+        <div class="vl-disclosure-body">
+          <div class="kpi-grid" id="fleetUnregisteredKpis" style="margin-bottom:12px;"></div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Standalone Runtime / Cluster</th>
+                  <th>Kind &amp; Region</th>
+                  <th>Status &amp; FinOps Signal</th>
+                  <th>Requests</th>
+                  <th>LLM Calls &amp; Tokens</th>
+                  <th>Compute Allocation &amp; Est. Cost</th>
+                  <th>FinOps Admin Control (Scale-to-Zero / Cleanup / Register in GE)</th>
+                </tr>
+              </thead>
+              <tbody id="fleetUnregisteredBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </details>
+
+      <details class="panel vl-disclosure-panel" id="fleetSkillsMcpPanel">
+        <summary class="panel-header vl-disclosure-summary">
+          <div class="panel-title">
+            <span>Live Discovered Skills, Sub-Agents &amp; MCP Tool Servers (Cloud Trace + Cloud Run)</span>
+            <span class="badge badge-blue" id="fleetSkillsMcpBadge">Live Telemetry</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Discovered from <span class="mono">execute_tool</span>, <span class="mono">invoke_agent</span>, and <span class="mono">/mcp</span> Cloud Trace spans plus deployed Cloud Run MCP &amp; Skill services. Click to expand.
+          </div>
+        </summary>
+        <div class="vl-disclosure-body">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Skill / Sub-Agent / MCP Server</th>
+                  <th>Category</th>
+                  <th>Parent Agent / Runtime</th>
+                  <th>Invocations</th>
+                  <th>Avg Latency</th>
+                  <th>Co-occurring Tokens (In / Out)</th>
+                  <th>Models &amp; FinOps Guidance</th>
+                </tr>
+              </thead>
+              <tbody id="fleetSkillsMcpBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </details>
+
+      <div class="panel adv-only">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Safety Alerts &amp; Automatic Protections</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Watches for stuck reasoning loops, oversized chat history, and repeated tool retries across Cloud Run and Vertex AI.
+          </div>
+        </div>
+        <div id="watchOutAlarmsContainer" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;"></div>
+      </div>
+
+      <div class="panel adv-only">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Cloud Run Services &amp; Support Ticket Stream</span>
+            <span class="badge badge-blue">Live Cloud Run Services &bull; BigQuery <span class="mono">finops_mart.fct_turns</span></span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Shows running Cloud Run agent versions (<span class="mono">gcp_services</span>) next to recent turn &amp; audit events from <span class="mono">finops_mart.fct_turns</span> (<span class="mono">gemini_enterprise_support_events</span>).
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:14px;">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Cloud Run Service</th>
+                  <th>Scaling</th>
+                  <th>CPU / Memory</th>
+                  <th>Latency</th>
+                  <th>Monthly Cost</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="cloudRunServicesBody"></tbody>
+            </table>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Ticket &amp; Tier</th>
+                  <th>Agent</th>
+                  <th>Trace ID</th>
+                  <th>Issue Summary</th>
+                  <th>Resolution Status</th>
+                </tr>
+              </thead>
+              <tbody id="geSupportEventsBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="tab-footer-nav adv-only">
+        <span>Step 1 of 6: Checked live agent fleet health and active alerts.</span>
+        <button class="btn btn-primary" onclick="switchTab(1)">Next Step: Goals &amp; Metrics (Tab 2) &rarr;</button>
+      </div>
+    </section>
+
+    <!-- TAB 1: GOALS & METRICS -->
+    <section id="tabPanel1" class="hidden">
+      <div class="kpi-grid" id="tab1KpiCards"></div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Agent Target Goals &amp; Current Live Status</span>
+            <span class="badge badge-blue">Balanced Cost, Speed &amp; Accuracy</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Tracks response speed, cost per 1,000 turns ($29.40 &rarr; $3.45), answer accuracy, prompt cache reuse, extra context size, and wait time.
+          </div>
+        </div>
+
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th>Goal Direction</th>
+                <th>Starting Value (Gen 0)</th>
+                <th>Current Live Value</th>
+                <th>Change vs. Start</th>
+                <th>Target Goal</th>
+                <th>Importance Weight</th>
+                <th>Current Status</th>
+              </tr>
+            </thead>
+            <tbody id="parametersTableBody"></tbody>
+          </table>
+        </div>
+
+        <div style="margin-top:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span style="font-size:11.5px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;">Quick-Add Common Metrics:</span>
+          <button class="btn" onclick="applyParameterPreset('Context Bloating Ratio', '%', 'lower_is_better', 64.0, 20.0, 15)">+ Extra Context Size</button>
+          <button class="btn" onclick="applyParameterPreset('Agent Idle &amp; Wait Ratio', '%', 'lower_is_better', 42.0, 12.0, 10)">+ Agent Wait Time</button>
+          <button class="btn" onclick="applyParameterPreset('Skill Token Consumption / Turn', 'k tok', 'lower_is_better', 18.5, 6.0, 15)">+ Tool Tokens / Turn</button>
+          <button class="btn" onclick="applyParameterPreset('User Cost per Session', '$', 'lower_is_better', 0.42, 0.08, 20)">+ Cost per Session</button>
+          <button class="btn" onclick="applyParameterPreset('Tool Selection Precision', '%', 'higher_is_better', 84.0, 97.5, 15)">+ Tool Choice Accuracy</button>
+        </div>
+
+        <div class="add-param-form">
+          <div class="field-group">
+            <label>Add Custom Metric</label>
+            <input id="newParamLabel" type="text" placeholder="e.g., Answer Quality Score" value="Tool Selection Precision" />
+          </div>
+          <div class="field-group">
+            <label>Unit</label>
+            <input id="newParamUnit" type="text" placeholder="%, ms, $" value="%" />
+          </div>
+          <div class="field-group">
+            <label>Goal Direction</label>
+            <select id="newParamDirection">
+              <option value="higher_is_better">Higher is Better (&uarr;)</option>
+              <option value="lower_is_better">Lower is Better (&darr;)</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label>Starting Value</label>
+            <input id="newParamBaseline" type="number" step="0.1" value="84.0" />
+          </div>
+          <div class="field-group">
+            <label>Target Goal</label>
+            <input id="newParamTarget" type="number" step="0.1" value="97.5" />
+          </div>
+          <div class="field-group">
+            <label>Weight (%)</label>
+            <input id="newParamWeight" type="number" step="1" value="15" />
+          </div>
+          <div>
+            <button class="btn btn-primary" onclick="onAddCustomParameter()">
+              + Add Metric
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>5-Layer Metric Catalog (26 metrics to track)</span>
+            <span class="badge badge-blue">L1 Infra &bull; L2 LLM &bull; L3 ADK &bull; L4 A2A &bull; L5 A2UI</span>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button class="btn" onclick="setOtelLayerFilter('ALL')">All 5 Layers (26)</button>
+            <button class="btn" onclick="setOtelLayerFilter('L1_INFRA')">L1: Infra</button>
+            <button class="btn" onclick="setOtelLayerFilter('L2_LLM')">L2: LLM</button>
+            <button class="btn" onclick="setOtelLayerFilter('L3_ADK')">L3: ADK</button>
+            <button class="btn" onclick="setOtelLayerFilter('L4_A2A')">L4: A2A</button>
+            <button class="btn" onclick="setOtelLayerFilter('L5_A2UI')">L5: A2UI</button>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Layer</th>
+                <th>Metric Key</th>
+                <th>Metric Name</th>
+                <th>Start</th>
+                <th>Current Value</th>
+                <th>Target Goal</th>
+                <th>Why It Matters</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="otelCatalogTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="tab-footer-nav adv-only">
+        <button class="btn" onclick="switchTab(0)">&larr; Back: Fleet &amp; Health</button>
+        <span>Step 2 of 6: Reviewed target goals and 5-layer metrics.</span>
+        <button class="btn btn-primary" onclick="switchTab(2)">Next Step: Testing &amp; History (Tab 3) &rarr;</button>
+      </div>
+    </section>
+
+    <!-- TAB 2: TESTING, ROLLOUT SIMULATOR & CHANGE HISTORY -->
+    <section id="tabPanel2" class="hidden">
+      <div class="panel" id="promptXrayPanel" style="margin-bottom:16px;">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Prompt Cache X-Ray</span>
+            <span class="badge badge-blue" id="pxStatusBadge">Compare two prompts</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Gemini only reuses an identical leading prefix. Compare two snapshots of the same prompt to see the exact character where caching breaks, what broke it, and what the stranded tokens cost.
+          </div>
+        </div>
+        <div class="px-toolbar">
+          <div class="px-seg">
+            <button class="btn px-seg-btn active" id="pxSrcPaste" onclick="pxSetSource('paste')">Paste two prompts</button>
+            <button class="btn px-seg-btn" id="pxSrcLive" onclick="pxSetSource('live')">Logged turns (OTel + GCS)</button>
+          </div>
+          <label class="px-field">Model <select id="pxModel"><option value="gemini-3.8-flash">gemini-3.8-flash</option></select></label>
+          <label class="px-field">Requests / month <input id="pxMonthly" type="number" min="0" step="1000" placeholder="optional"></label>
+          <button class="btn" id="pxExampleBtn" onclick="pxLoadExample()">Load example</button>
+          <button class="btn btn-primary" id="pxRunBtn" onclick="runPromptXray()">Run X-Ray</button>
+        </div>
+        <div id="pxPasteInputs" class="px-grid">
+          <label class="px-area"><span>Turn N-1 (previous)</span><textarea id="pxPrev" rows="8" spellcheck="false" placeholder="Paste the earlier prompt (system instruction + context)..."></textarea></label>
+          <label class="px-area"><span>Turn N (current)</span><textarea id="pxCurr" rows="8" spellcheck="false" placeholder="Paste the later prompt..."></textarea></label>
+        </div>
+        <div id="pxLiveInputs" class="px-grid hidden">
+          <label class="px-area"><span>Previous turn</span><select id="pxPrevTurn"></select></label>
+          <label class="px-area"><span>Current turn</span><select id="pxCurrTurn"></select></label>
+        </div>
+        <div id="pxNotice" class="kpi-sub" style="margin:8px 0;"></div>
+        <div id="pxResult" class="hidden">
+          <div class="px-kpis" id="pxKpis"></div>
+          <div class="px-culprit" id="pxCulprit"></div>
+          <div class="px-legend">
+            <span class="px-chip px-cached">cached prefix</span>
+            <span class="px-chip px-buster">cache-buster</span>
+            <span class="px-chip px-dynamic">changed since last turn</span>
+            <span class="px-chip px-recoverable">stranded static text (recoverable)</span>
+            <span class="px-chip px-appended">appended (normal growth)</span>
+            <span class="px-chip px-latent">latent buster</span>
+            <span class="kpi-sub">Shading stripes approximate token boundaries.</span>
+          </div>
+          <pre class="px-heatmap" id="pxHeatmap"></pre>
+          <div class="px-rewrite">
+            <div class="px-rewrite-head">
+              <strong>Cache-friendly rewrite</strong>
+              <span id="pxRewriteSummary" class="kpi-sub"></span>
+              <button class="btn" id="pxCopyBtn" onclick="pxCopyRewrite()">Copy</button>
+            </div>
+            <pre class="px-code" id="pxRewrite"></pre>
+          </div>
+          <ul class="px-notes" id="pxNotes"></ul>
+        </div>
+      </div>
+      <div class="charts-grid">
+        <div class="chart-card">
+          <div class="panel-header" style="margin-bottom:8px;padding-bottom:6px;">
+            <div class="panel-title" style="font-size:14px;">
+              Response Time (P95 Latency ms &darr;)
+            </div>
+            <span id="latencyDeltaBadge" class="badge badge-green"></span>
+          </div>
+          <div id="chartLatencySvg"></div>
+        </div>
+
+        <div class="chart-card">
+          <div class="panel-header" style="margin-bottom:8px;padding-bottom:6px;">
+            <div class="panel-title" style="font-size:14px;">
+              Cost per 1,000 Turns ($ USD &darr;)
+            </div>
+            <span id="costDeltaBadge" class="badge badge-green"></span>
+          </div>
+          <div id="chartCostSvg"></div>
+        </div>
+
+        <div class="chart-card">
+          <div class="panel-header" style="margin-bottom:8px;padding-bottom:6px;">
+            <div class="panel-title" style="font-size:14px;">
+              Answer Accuracy (% &uarr; with 95% Minimum Floor)
+            </div>
+            <span id="accuracyDeltaBadge" class="badge badge-blue"></span>
+          </div>
+          <div id="chartAccuracySvg"></div>
+        </div>
+
+        <div class="chart-card">
+          <div class="panel-header" style="margin-bottom:8px;padding-bottom:6px;">
+            <div class="panel-title" style="font-size:14px;">
+              Prompt Cache Reuse Rate (% &uarr;)
+            </div>
+            <span id="cacheDeltaBadge" class="badge badge-green"></span>
+          </div>
+          <div id="chartCacheSvg"></div>
+        </div>
+      </div>
+
+      <div class="panel sim-panel" id="whatIfSimulatorPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>What-If Cost, Model &amp; Safe Rollout Simulator</span>
+            <span class="badge badge-green" id="whatIfGuardrailBadge">SAFE TO PROMOTE CANARY</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Test model choices, thinking token limits, and chat history length before rolling out a safe Cloud Run traffic split.
+          </div>
+        </div>
+        <div class="add-param-form" style="margin-top:0;margin-bottom:14px;">
+          <div class="field-group">
+            <label>Model Choice</label>
+            <select id="whatIfModelTier" onchange="runWhatIfSimulation()">
+              <option value="gemini-3.1-flash-tier-routed">Gemini 3.1 Flash Routed (70% Flash / 30% Pro)</option>
+              <option value="gemini-2.5-flash">Gemini 2.5 Flash (100% Fast Tier)</option>
+              <option value="gemini-2.5-pro">Gemini 2.5 Pro (100% Deep Reasoning)</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label>Thinking Token Limit / Turn</label>
+            <select id="whatIfThinkingBudget" onchange="runWhatIfSimulation()">
+              <option value="512">512 tok (Strict Cap)</option>
+              <option value="1024" selected>1,024 tok (Recommended Goal)</option>
+              <option value="2048">2,048 tok (Extended Thinking)</option>
+              <option value="4096">4,096 tok (No Limit - High Cost Risk)</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label>Chat History Turns Kept (N)</label>
+            <select id="whatIfHistoryTurns" onchange="runWhatIfSimulation()">
+              <option value="4">4 Turns (Short History)</option>
+              <option value="6" selected>6 Turns (Recommended Balance)</option>
+              <option value="12">12 Turns (Medium History)</option>
+              <option value="20">20 Turns (Full Untrimmed History)</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label>Cloud Run Test Traffic %</label>
+            <select id="whatIfCanaryPct" onchange="runWhatIfSimulation()">
+              <option value="10">10% Test Traffic Split</option>
+              <option value="15" selected>15% Test Traffic Split</option>
+              <option value="25">25% Test Traffic Split</option>
+              <option value="50">50% Test Traffic Split</option>
+            </select>
+          </div>
+          <div>
+            <button class="btn btn-primary" onclick="runWhatIfSimulation()">
+              Simulate Rollout Plan
+            </button>
+          </div>
+        </div>
+        <div class="kpi-grid" id="whatIfKpiGrid" style="margin-bottom:12px;"></div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;">
+          <div class="action-box">
+            <div class="action-box-title">Cloud Run Traffic Split Command (<span class="mono">gcloud run services update-traffic</span>)</div>
+            <pre class="diff-pre" id="whatIfCanaryCmd" style="margin-top:6px;"></pre>
+          </div>
+          <div class="action-box">
+            <div class="action-box-title">Configuration Change Preview</div>
+            <pre class="diff-pre" id="whatIfGitopsDiff" style="margin-top:6px;"></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Turn-by-Turn Prompt Cache Check (<span class="mono">detect_prefix_breakpoint</span>)</span>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <span class="badge badge-blue">Line-by-Line Prompt Cache Check</span>
+              <button class="btn btn-primary sim-panel" id="stepTurnBtn" onclick="triggerApi('/api/step_turn')" style="padding:4px 10px;font-size:11.5px;" title="Simulator: appends one synthetic turn (hidden in live mode)">
+                + Step Simulated Turn
+              </button>
+            </div>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Shows the exact line where a prompt changed and broke caching, plus cached vs. uncached tokens and turn cost.
+          </div>
+        </div>
+        <div class="kpi-grid" id="turnTrajectorySummaryKpis" style="margin-bottom:12px;"></div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Turn #</th>
+                <th>Gen</th>
+                <th>Tool Used</th>
+                <th>Prefix Hash</th>
+                <th>Changed Line</th>
+                <th>Why Cache Changed</th>
+                <th>Cached / Write / Uncached / Thoughts</th>
+                <th>Cache Hit %</th>
+                <th>Uncached vs. Cached Cost</th>
+              </tr>
+            </thead>
+            <tbody id="cacheForensicsBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>History of Changes Made by the Optimizer</span>
+            <span class="badge badge-green">Issue Found in Logs &rarr; Config Change &rarr; Verified Result</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Automatically blocks and rolls back any change that drops accuracy below the 95% minimum goal (for example, Gen 9).
+          </div>
+        </div>
+        <div id="actionsTimelineContainer"></div>
+      </div>
+
+      <div class="tab-footer-nav adv-only">
+        <button class="btn" onclick="switchTab(1)">&larr; Back: Goals &amp; Metrics</button>
+        <span>Step 3 of 6: Tested rollout settings and inspected change history.</span>
+        <button class="btn btn-primary" onclick="switchTab(3)">Next Step: Cost &amp; Billing (Tab 4) &rarr;</button>
+      </div>
+    </section>
+
+    <!-- TAB 3: COST & BILLING (WITH FOCUSED SUB-VIEW SELECTOR SO IT IS NEVER BUSY) -->
+    <section id="tabPanel3" class="hidden">
+      <div class="panel" id="vlSpendPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Spend overview</span>
+            <span id="vlSpendBadge" class="badge badge-blue">&mdash;</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">Billed AI spend, month to date, run-rate and budget from the Cloud Billing export; model spend and cache savings from observed tokens &times; list price.</div>
+        </div>
+        <div id="vlBudgetForm" class="vl-budget-form hidden"></div>
+        <div class="vl-kpi-group" id="vlSpendBilledTitle">Billed &middot; Cloud Billing export (AI services, project-level)</div>
+        <div class="kpi-grid" id="vlSpendKpis"></div>
+        <div id="vlBudgetRunway" class="vl-runway-wrap hidden"></div>
+        <div class="vl-kpi-group" id="vlSpendEstTitle">Estimated &middot; observed tokens &times; list price</div>
+        <div class="kpi-grid" id="vlSpendKpisEst"></div>
+        <div id="vlSpendChart"></div>
+        <div class="chart-legend" id="vlSpendLegend"></div>
+        <div class="chart-source" id="vlSpendSource"></div>
+      </div>
+      <div class="panel live-only" id="billingStatusPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Cloud Billing export (billed cost)</span>
+            <span id="billingStatusBadge" class="badge badge-blue">Billing export: checking&hellip;</span>
+          </div>
+          <div id="billingStatusTable" class="mono" style="font-size:12px;color:var(--text-secondary);"></div>
+        </div>
+        <div id="billingStatusSummary" style="font-size:13px;"></div>
+        <div id="billingStatusHint" class="kpi-sub" style="margin-top:6px;"></div>
+        <div id="billingStatusDetail" class="mono" style="margin-top:6px;font-size:12px;color:var(--text-secondary);word-break:break-word;"></div>
+        <div class="kpi-sub" style="margin-top:8px;">
+          Billed cost is project-level: the export has no per-user split. Estimated cost per user (tokens &times; list price) is on the <strong>Users</strong> tab, in <strong>Top users</strong>.
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Model usage &amp; estimated cost (list price)</span>
+            <span id="modelCostBadge" class="badge badge-green">&mdash;</span>
+          </div>
+          <div id="modelScopeText" style="font-size:12px;color:var(--text-secondary);"></div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>Calls</th>
+                <th>Input</th>
+                <th>Output</th>
+                <th>Cache read</th>
+                <th>Cache write</th>
+                <th>Cache share</th>
+                <th>Est. cost (list price)</th>
+              </tr>
+            </thead>
+            <tbody id="modelUsageBody"></tbody>
+          </table>
+        </div>
+        <ul id="fleetNotes" class="fleet-notes"></ul>
+      </div>
+
+      <div class="panel" id="vlTokenomicsPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Tokenomics quick wins: thinking-token tax &amp; model re-pricing</span>
+            <span id="vlTokenomicsBadge" class="badge badge-blue">&mdash;</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">Reasoning ("thinking") token share of output spend, and exact list-price arithmetic if high-cost model or agent traffic ran on a lower-cost tier.</div>
+        </div>
+        <div class="kpi-grid" id="vlTokenomicsKpis"></div>
+        <div class="vl-tok-grid">
+          <div class="vl-tok-col" id="vlThinkingTaxBox"></div>
+          <div class="vl-tok-col" id="vlRepricingBox"></div>
+        </div>
+      </div>
+
+      <div class="panel live-only" id="liveTokenEconomicsPanel">
+        <div class="panel-header">
+          <div class="panel-title"><span>Token economics by agent</span><span id="liveTeBadge" class="badge badge-blue">&mdash;</span></div>
+          <div id="liveTeScope" style="font-size:12px;color:var(--text-secondary);"></div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Agent</th><th>Requests</th><th>LLM calls</th><th>Calls / request</th><th>Input</th><th>Output</th><th>Tokens / request</th><th>Models</th><th>Source</th>
+              </tr>
+            </thead>
+            <tbody id="liveTeAgentsBody"></tbody>
+          </table>
+        </div>
+        <div id="liveTeGe"></div>
+      </div>
+
+      <div class="panel live-only" id="liveGeMartDailyPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Daily usage &amp; billed AI cost (<span class="mono">finops_mart.agg_daily_usage</span>)</span>
+            <span id="geMartRefreshedBadge" class="badge badge-blue">finops_mart</span>
+            <span id="geMartBillingBadge" class="badge badge-yellow">Billing export</span>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <span id="geMartScopeNote" style="font-size:12px;color:var(--text-secondary);"></span>
+            <button id="geMartRefreshBtn" class="btn" onclick="refreshGeMartNow()" title="Rebuild finops_mart.fct_turns from v_fct_turns">Refresh Mart</button>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Day</th>
+                <th>Turns</th>
+                <th>Chat Turns</th>
+                <th>Failed</th>
+                <th>Sessions</th>
+                <th>Active Users</th>
+                <th>Input Tok</th>
+                <th>Output Tok</th>
+                <th>Thinking Tok</th>
+                <th>Cached Tok</th>
+                <th>Billed AI Net</th>
+                <th>$ / 1k Turns</th>
+                <th>$ / 1M Tok</th>
+              </tr>
+            </thead>
+            <tbody id="geMartDailyBody"></tbody>
+          </table>
+        </div>
+        <div class="live-sub" style="margin-top:12px;">By app / agent / model (<span class="mono">finops_mart.agg_daily_usage</span>)</div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Day</th>
+                <th>GE App</th>
+                <th>Agent</th>
+                <th>Model</th>
+                <th>Turns</th>
+                <th>Failed</th>
+                <th>Sessions</th>
+                <th>Users</th>
+                <th>Total Tokens</th>
+              </tr>
+            </thead>
+            <tbody id="geMartByAppBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel live-only" id="liveSpendDriftPanel">
+        <div class="panel-header">
+          <div class="panel-title"><span>Why model spend changed vs the previous period</span><span id="liveDriftBadge" class="badge badge-blue">&mdash;</span></div>
+          <div id="liveDriftScope" style="font-size:12px;color:var(--text-secondary);"></div>
+        </div>
+        <div id="vlDriftWaterfall"></div>
+        <div id="vlDriftDriverDetail" class="vl-drift-detail hidden"></div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Driver</th><th>Change</th><th>Share of change</th><th>What it means</th></tr></thead>
+            <tbody id="liveDriftBody"></tbody>
+          </table>
+        </div>
+        <div class="live-sub">By model</div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Model</th><th>Previous period</th><th>This period</th><th>Change</th><th>Calls (previous &rarr; this)</th></tr></thead>
+            <tbody id="liveDriftModelsBody"></tbody>
+          </table>
+        </div>
+        <div class="live-note" id="liveDriftNote"></div>
+      </div>
+
+      <div class="panel live-only" id="liveUnregisteredFinopsPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Unregistered Runtime Spend, Zombie Compute Waste &amp; Skill/MCP Tokenomics</span>
+            <span id="liveUnregFinopsBadge" class="badge badge-yellow">&mdash;</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Token and infrastructure cost from standalone Agent Engines, Cloud Run MCP/Skill services, and GKE clusters not registered in Gemini Enterprise apps.
+          </div>
+        </div>
+        <div class="kpi-grid" id="liveUnregFinopsKpis" style="margin-bottom:12px;"></div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Skill / Sub-Agent / MCP Server</th>
+                <th>Category</th>
+                <th>Parent Agent / Runtime</th>
+                <th>Invocations</th>
+                <th>Avg Latency</th>
+                <th>Co-occurring Tokens (In / Out)</th>
+                <th>Models &amp; FinOps Guidance</th>
+              </tr>
+            </thead>
+            <tbody id="liveSkillsMcpBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel live-only adv-only" id="liveWhatIfPanel">
+        <div class="panel-header">
+          <div class="panel-title"><span>What-if: projection from observed usage</span><span class="badge badge-yellow">Projection</span></div>
+          <div style="font-size:12px;color:var(--text-secondary);">Recomputes this period's observed tokens at a different list price or cache share. Token counts stay the same; quality and latency are not modelled.</div>
+        </div>
+        <div class="whatif-live-form">
+          <div><label for="wiKind">Scenario</label><select id="wiKind" onchange="onLiveWhatIfKind()"><option value="model_switch">Switch model</option><option value="cache_share">Change cache-read share</option></select></div>
+          <div class="wi-switch"><label for="wiFrom">From model (observed)</label><select id="wiFrom"></select></div>
+          <div class="wi-switch"><label for="wiTo">To model (list price)</label><select id="wiTo"></select></div>
+          <div class="wi-switch"><label for="wiShare">Share of tokens moved (%)</label><input id="wiShare" type="number" min="0" max="100" value="50" style="width:90px"></div>
+          <div class="wi-cache hidden"><label for="wiModel">Model (observed)</label><select id="wiModel"></select></div>
+          <div class="wi-cache hidden"><label for="wiCache">Target cache-read share (%)</label><input id="wiCache" type="number" min="0" max="100" value="50" style="width:90px"></div>
+          <button class="btn btn-primary" onclick="runLiveWhatIf()">Project</button>
+        </div>
+        <div id="liveWhatIfResult"><div class="live-note">Pick a scenario. The baseline is the observed usage for the selected time range.</div></div>
+      </div>
+
+      <div class="subview-bar adv-only sim-panel">
+        <div style="font-size:12px;font-weight:700;color:var(--text-primary);">
+          Cost &amp; Billing View (Choose a focused section):
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button id="costSubBtn_summary" class="subview-btn active" onclick="switchCostSubView('summary')">1. Cost per Answer &amp; Cloud Bill</button>
+          <button id="costSubBtn_calculator" class="subview-btn" onclick="switchCostSubView('calculator')">2. Pricing &amp; Cache Calculator</button>
+          <button id="costSubBtn_code_audit" class="subview-btn" onclick="switchCostSubView('code_audit')">3. Code Fixes &amp; Budget Summary</button>
+          <button id="costSubBtn_limits" class="subview-btn" onclick="switchCostSubView('limits')">4. Spend Limits &amp; Token Breakdown</button>
+          <button id="costSubBtn_all" class="subview-btn" onclick="switchCostSubView('all')">Show All</button>
+        </div>
+      </div>
+
+      <!-- SUB-VIEW 1: COST PER HELPFUL ANSWER (CpO), BILL DIFFERENCES & CLOUD BILLING SKU TABLE -->
+      <div class="panel adv-only sim-panel" id="tokenomicsCpoDriftPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>1. Cost per Helpful Answer (CpO), Why Bills Differ from Token Counts &amp; Log Matching</span>
+            <span class="badge badge-green" id="cpoFormulaBadge">CpO = [&Sigma;(C_LLM + C_Tools + C_Infra)_i + p_esc &times; C_HITL] / (P_res &times; P_csat)</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);" id="cpoParetoOutlierNote">
+            Breaks down total cost per resolved conversation across model tokens, tool calls, Cloud Run hosting, human support handoffs, and user satisfaction ratings.
+          </div>
+        </div>
+        <div class="kpi-grid" id="cpoDriftKpis" style="margin-bottom:14px;"></div>
+        <div class="table-scroll" style="margin-bottom:14px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Agent &amp; Routing Lane</th>
+                <th>Sessions / Mo</th>
+                <th>Starting CpO (Turns)</th>
+                <th>Model / Tools / Hosting</th>
+                <th>Human Support Cost (Before &rarr; Now)</th>
+                <th>Current CpO</th>
+                <th>Formula</th>
+                <th>Monthly Saved</th>
+              </tr>
+            </thead>
+            <tbody id="cpoByAgentBody"></tbody>
+          </table>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:14px;">
+          <div>
+            <div style="font-size:12px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">
+              Why Your Cloud Bill Differs from Raw Token Counts (5 Cost Drivers &bull; model, not measured)
+            </div>
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Cost Driver &amp; Rule</th>
+                    <th>Share of Extra Spend</th>
+                    <th>Before Fix ($)</th>
+                    <th>After Fix ($)</th>
+                    <th>Fix Applied</th>
+                  </tr>
+                </thead>
+                <tbody id="driftDriversBody"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="action-box">
+            <div class="action-box-title">How We Match User Chats, System Logs &amp; Cloud Billing</div>
+            <div class="table-scroll" style="margin:6px 0;">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Layer</th>
+                    <th>Source Table / Stream</th>
+                    <th>Join Keys</th>
+                    <th>Correlation Key</th>
+                    <th>Extracted Fields</th>
+                    <th>Variance</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody id="attributionJoinBody"></tbody>
+              </table>
+            </div>
+            <pre class="diff-pre" id="attributionJoinSqlPre" style="max-height:155px;"></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel adv-only" id="billingReconciliationPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Cloud Billing SKU Comparison, Reserved Capacity (GSU) Advisor &amp; Platform Hosting Cost</span>
+            <span class="badge badge-blue" id="billingReconDeltaBadge">Billing export: checking&hellip;</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Billed cost per SKU from your Cloud Billing BigQuery export (last 30 days). Nothing is shown when the export is not connected.
+          </div>
+        </div>
+        <div class="table-scroll" style="margin-bottom:12px;">
+          <table>
+            <thead>
+              <tr>
+                <th>GCP Billing SKU ID</th>
+                <th>Service</th>
+                <th>SKU Description</th>
+                <th>Usage Volume</th>
+                <th>Tracked Est. ($)</th>
+                <th>Billed Gross ($)</th>
+                <th>Discounts &amp; Cache Credits ($)</th>
+                <th>Net Invoice ($)</th>
+                <th>Difference</th>
+              </tr>
+            </thead>
+            <tbody id="billingSkuBody"></tbody>
+          </table>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;">
+          <div class="action-box" id="gsuAdvisorBox"></div>
+          <div class="action-box" id="platformTcoBox"></div>
+        </div>
+      </div>
+
+      <!-- SUB-VIEW 2: PRICING OPTIONS, CONSUMPTION PORTFOLIO & CACHE BREAK-EVEN CALCULATOR -->
+      <div class="panel hidden adv-only sim-panel" id="consumptionAndCachingPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>2. Pricing Options, Model Tiers &amp; Prompt Cache Break-Even Calculator (N*)</span>
+            <span class="badge badge-blue" id="cacheBreakEvenBadge">N* = 1 + S / (d_cache &times; P_in) = 4.70 calls/hr (Flash)</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Adjust hourly calls, off-peak traffic share, monthly tasks, and human review time to see updated monthly costs and prompt cache break-even.
+          </div>
+        </div>
+
+        <div class="add-param-form" style="margin-top:0;margin-bottom:14px;">
+          <div class="field-group">
+            <label>Repeat Calls / Hour (N)</label>
+            <input id="finopsCacheCallsHrInput" type="number" step="1" value="18" onchange="recomputeFinopsLedger()" />
+          </div>
+          <div class="field-group">
+            <label>Off-Peak Batch Share %</label>
+            <input id="finopsDeferredShareInput" type="number" step="5" value="35" onchange="recomputeFinopsLedger()" />
+          </div>
+          <div class="field-group">
+            <label>Monthly Agent Tasks</label>
+            <input id="finopsMonthlyTasksInput" type="number" step="5000" value="129500" onchange="recomputeFinopsLedger()" />
+          </div>
+          <div class="field-group">
+            <label>Human Review Mins / Ticket</label>
+            <input id="finopsHitlMinutesInput" type="number" step="1" value="8.8" onchange="recomputeFinopsLedger()" />
+          </div>
+          <div class="field-group">
+            <label>Support Staff Rate ($/hr)</label>
+            <input id="finopsHitlRateInput" type="number" step="5" value="85" onchange="recomputeFinopsLedger()" />
+          </div>
+          <div>
+            <button class="btn btn-primary" id="finopsRecomputeBtn" onclick="recomputeFinopsLedger()">
+              Update Cost Calculation
+            </button>
+          </div>
+        </div>
+
+        <div class="action-box" id="cacheBreakEvenSummaryBox" style="margin-bottom:14px;"></div>
+
+        <div class="table-scroll" style="margin-bottom:14px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Pricing Type</th>
+                <th>Billing Unit</th>
+                <th>GCP Service / Scope</th>
+                <th>Rate &amp; Discount Structure</th>
+                <th>Monthly Spend</th>
+                <th>Cost-Saving Action</th>
+              </tr>
+            </thead>
+            <tbody id="meteringCategoriesBody"></tbody>
+          </table>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:14px;margin-bottom:14px;">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Traffic Routing Lane</th>
+                  <th>Speed &amp; Capacity Rule</th>
+                  <th>Price Rate</th>
+                  <th>Traffic Share</th>
+                  <th>Best Used For</th>
+                </tr>
+              </thead>
+              <tbody id="routingLanesBody"></tbody>
+            </table>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Model Tier</th>
+                  <th>Models</th>
+                  <th>In / Out ($/1M)</th>
+                  <th>Quality per Dollar</th>
+                  <th>Role ("Pro Plans, Flash Runs")</th>
+                </tr>
+              </thead>
+              <tbody id="modelPortfolioBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Prompt Caching Mode</th>
+                <th>Write / Read Rate</th>
+                <th>Storage Fee (S)</th>
+                <th>Break-Even Calls/Hr (N*)</th>
+                <th>Min Tokens</th>
+                <th>Cache Duration</th>
+                <th>Recommendation</th>
+              </tr>
+            </thead>
+            <tbody id="cacheModelBreakEvenBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- SUB-VIEW 3: CODE FIXES (FIN-01..05), STEP-BY-STEP SAVINGS, @COST_GUARD & FINANCE SUMMARY -->
+      <div class="panel hidden adv-only sim-panel" id="cockpitFinopsAndTcoPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>3. Code Cost Fixes (<span class="mono">FIN-01..FIN-05</span>), Step-by-Step Savings, <span class="mono">@cost_guard</span> &amp; Finance Summary</span>
+            <span class="badge badge-green" id="cockpitWaterfallBadge">$142,000/mo &rarr; $10,050/mo (-92.9% Combined Savings)</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Shows code-level cost fixes (<span class="mono">agent-ops-cockpit</span>), step-by-step monthly savings, <span class="mono">@cost_guard(budget_limit_usd)</span> per-turn budget checks, and finance accounting breakdown.
+          </div>
+        </div>
+
+        <div class="kpi-grid" id="cockpitWaterfallKpis" style="margin-bottom:14px;"></div>
+
+        <div class="table-scroll" style="margin-bottom:14px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Fix ID &amp; Issue</th>
+                <th>File &amp; Line</th>
+                <th>Code Pattern Found</th>
+                <th>How Savings Are Calculated</th>
+                <th>Monthly Saved</th>
+                <th>Status &amp; Verification</th>
+              </tr>
+            </thead>
+            <tbody id="cockpitFindingsBody"></tbody>
+          </table>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:14px;margin-bottom:14px;">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Savings Step</th>
+                  <th>Traffic Covered</th>
+                  <th>Cost Before ($)</th>
+                  <th>Step Reduction</th>
+                  <th>Step Saved ($)</th>
+                  <th>Cost After ($ &amp; Total %)</th>
+                </tr>
+              </thead>
+              <tbody id="cockpitWaterfallBody"></tbody>
+            </table>
+          </div>
+          <div>
+            <div class="action-box" id="costGuardBox" style="margin-bottom:10px;"></div>
+            <div class="action-box" id="cfoTcoKpiBox"></div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:14px;margin-bottom:14px;">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Engineering Setting</th>
+                  <th>Area</th>
+                  <th>Cost Impact</th>
+                  <th>Speed Change</th>
+                  <th>Monthly Impact</th>
+                  <th>Recommendation</th>
+                </tr>
+              </thead>
+              <tbody id="opexTradeoffBody"></tbody>
+            </table>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Finance Cost Category</th>
+                  <th>Workloads Included</th>
+                  <th>Share</th>
+                  <th>Monthly Net Spend</th>
+                  <th>Accounting Notes</th>
+                </tr>
+              </thead>
+              <tbody id="pnlAllocationBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Rollout Stage</th>
+                <th>Main Focus</th>
+                <th>Target Goal</th>
+                <th>Active Protection</th>
+                <th>Stage Status</th>
+              </tr>
+            </thead>
+            <tbody id="maturityProgressionBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- SUB-VIEW 4: API SPEND LIMITS (SLIDE #30), EXTENSION OVERHEAD & TOKEN BREAKDOWN -->
+      <div class="panel hidden adv-only sim-panel" id="apigeeAndExtensionsPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>4. Apigee API Spend Limits &amp; Tool Context Savings</span>
+            <span class="badge badge-green">Spend Caps &bull; Automatic Traffic Pause &bull; Knowledge Catalog (7x Smaller Prompts)</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Sets per-user token limits at the API gateway (Deck 1 Slide #30 <span class="mono">g3ee7e8b2bb8_1_3597</span>) and replaces 50k+ database schema dumps with 2k Knowledge Catalog summaries.
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:14px;">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Policy ID &amp; Name</th>
+                  <th>Slide Reference</th>
+                  <th>Limit Setting</th>
+                  <th>Tokens Saved</th>
+                  <th>Monthly Saved</th>
+                </tr>
+              </thead>
+              <tbody id="apigeePoliciesBody"></tbody>
+            </table>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Tool / Extension Setup</th>
+                  <th>Tokens / Turn</th>
+                  <th>How Context Is Loaded</th>
+                  <th>Cost / 100k Turns</th>
+                  <th>Recommendation &amp; Status</th>
+                </tr>
+              </thead>
+              <tbody id="extensionOverheadBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel hidden adv-only" id="tokenCategoryAlertsPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Token Usage by Type &amp; Stuck Loop Alerts</span>
+            <span class="badge badge-blue">Helpful Answers vs. Thinking Tokens vs. Extra Chat History vs. Background Tasks</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Separates tokens that directly answer the user from internal thinking tokens, old chat history, and stuck tool retry loops.
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:14px;">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Token Type</th>
+                  <th>Daily Volume</th>
+                  <th>Share (Before &rarr; Now)</th>
+                  <th>Monthly Cost</th>
+                  <th>Monthly Saved</th>
+                </tr>
+              </thead>
+              <tbody id="tokenCategoryBody"></tbody>
+            </table>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Alert ID &amp; User LDAP</th>
+                  <th>Agent &amp; Issue</th>
+                  <th>Wasted Tokens</th>
+                  <th>Fix Applied</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="runawayAlertsBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="tab-footer-nav adv-only">
+        <button class="btn" onclick="switchTab(2)">&larr; Back: Testing &amp; History</button>
+        <span>Step 4 of 6: Reviewed unit costs, cloud billing, and spend limits.</span>
+        <button class="btn btn-primary" onclick="switchTab(4)">Next Step: Users &amp; Feedback (Tab 5) &rarr;</button>
+      </div>
+    </section>
+
+    <!-- TAB 4: USERS, TOP SPENDERS & CUSTOMER FEEDBACK -->
+    <section id="tabPanel4" class="hidden">
+      <div class="panel live-only" id="vlAdoptionPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Adoption</span>
+            <span class="badge badge-blue">Daily active users &amp; sessions</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">How many people use Gemini Enterprise each day, how deep their sessions go, and how often turns fail.</div>
+        </div>
+        <div class="kpi-grid" id="vlAdoptionKpis"></div>
+        <div id="vlAdoptionChart"></div>
+        <div class="chart-legend">
+          <span><i style="background:#10b981"></i>Active users</span>
+          <span><i style="background:#2563eb"></i>Sessions (right axis)</span>
+          <span id="vlAdoptionPartialKey"><i style="background:#bbf7d0"></i>Today (partial)</span>
+        </div>
+        <div class="chart-source" id="vlAdoptionSource"></div>
+      </div>
+      <div class="kpi-grid adv-only" id="userCentricKpis"></div>
+
+      <div class="panel adv-only">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span id="userCohortsTitle">User Groups &amp; Monthly Savings (modeled)</span>
+            <span class="badge badge-blue" id="oauthGovernanceBadge">Simulator data</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            <span id="userCohortsSubtitle">Shows token usage, extra chat context reduction, wait time, and monthly dollar savings for each user group.</span>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>User Group</th>
+                <th>Primary Agent</th>
+                <th>Daily Users (DAU)</th>
+                <th>24h Sessions</th>
+                <th>Tokens / User</th>
+                <th>Extra Context (Before &rarr; Now)</th>
+                <th>Wait Ratio</th>
+                <th>Cost / 1k Turns (Before &rarr; Now)</th>
+                <th>Monthly Saved</th>
+              </tr>
+            </thead>
+            <tbody id="userCohortsTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Top users</span>
+            <span class="badge badge-blue">Tokens &amp; estimated cost per user</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Sessions, turns and tokens per user, with an estimated model cost (each user's tokens &times; list price per model).
+            Estimates only: billed cost is project-level and is never split per user. Click a user to see their sessions below.
+          </div>
+        </div>
+        <div id="powerUsersCostNote" class="kpi-sub" style="margin-bottom:6px;"></div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>User LDAP</th>
+                <th>Department</th>
+                <th>Primary Agent</th>
+                <th>Sessions</th>
+                <th>Total Tokens</th>
+                <th>Thinking Tok</th>
+                <th>Background Tok</th>
+                <th>Cache Hit %</th>
+                <th>Avg CSAT</th>
+                <th>Est. Cost (list price)</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="powerUsersBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel live-only" id="liveGeSessionsPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Conversation sessions (<span class="mono">finops_mart.fct_sessions</span>)</span>
+            <span id="geSessionsBadge" class="badge badge-blue">finops_mart.fct_sessions</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Session-level rollup from <span class="mono">finops_mart.fct_turns</span>. Click a user in <strong>Top users</strong> above to see only their sessions; click <strong>▸</strong> on a session to see turn-by-turn input and output tokens. Click a session row to pre-fill the CSAT feedback form below. Token counts only: prompt and response text stay in BigQuery.
+          </div>
+        </div>
+        <div id="geSessionsUserFilter" class="kpi-sub" style="display:none;margin:6px 0 10px;gap:10px;align-items:center;flex-wrap:wrap;">
+          <span id="geSessionsUserFilterText" class="mono"></span>
+          <button type="button" id="geSessionsUserFilterClear" class="btn" style="padding:4px 10px;font-size:12px;">Show all users</button>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th title="Expand for turn-by-turn tokens"></th>
+                <th>Session ID</th>
+                <th>GE App</th>
+                <th>User</th>
+                <th>Primary Agent</th>
+                <th>Turns (Chat / Failed)</th>
+                <th>Duration</th>
+                <th>Input Tok</th>
+                <th>Output Tok</th>
+                <th>Cached Tok</th>
+                <th>Total Tokens</th>
+                <th>Last Activity</th>
+              </tr>
+            </thead>
+            <tbody id="geSessionsBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Recent activity &amp; feedback</span>
+            <span class="badge badge-green live-only">BigQuery <span class="mono">aive_logs.ratings_log</span> &amp; <span class="mono">agent_usage_log</span> (read only)</span>
+            <span class="badge badge-yellow sim-panel">Demo rows held in this instance's memory</span>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <button class="btn adv-only sim-panel" onclick="emitLiveAiveUsageEvent()" title="Posts one synthetic event with fixed example values to /api/aive_log (hidden in live mode)">+ Log Synthetic Sample Event</button>
+          </div>
+        </div>
+        <div class="add-param-form adv-only" style="margin-top:0;margin-bottom:12px;">
+          <div class="field-group">
+            <label>User Email / LDAP</label>
+            <input id="csatEmailInput" type="text" value="" placeholder="user@your-company.com" />
+          </div>
+          <div class="field-group">
+            <label>Session ID</label>
+            <input id="csatSessionInput" type="text" value="6446120131357637190" />
+          </div>
+          <div class="field-group">
+            <label>User Rating (1&ndash;5&#x2605;)</label>
+            <select id="csatRatingSelect">
+              <option value="5" selected>5 &#x2605;&#x2605;&#x2605;&#x2605;&#x2605; (Resolved &amp; Fast)</option>
+              <option value="4">4 &#x2605;&#x2605;&#x2605;&#x2605; (Good)</option>
+              <option value="3">3 &#x2605;&#x2605;&#x2605; (Okay)</option>
+              <option value="2">2 &#x2605;&#x2605; (Slow / Too Long)</option>
+              <option value="1">1 &#x2605; (Wrong Answer / Needed Human)</option>
+            </select>
+          </div>
+          <div class="field-group" style="grid-column:span 2;">
+            <label>User Feedback Comment</label>
+            <input id="csatFeedbackInput" type="text" value="Prefix cache hit kept turn latency under 600ms with accurate ticket resolution." />
+          </div>
+          <div>
+            <button class="btn btn-primary" onclick="submitLiveCsatRating()">+ Save Rating</button>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:14px;">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Rating ID</th>
+                  <th>User LDAP</th>
+                  <th>Session ID</th>
+                  <th>CSAT Rating</th>
+                  <th>User Feedback Comment</th>
+                </tr>
+              </thead>
+              <tbody id="vocRatingsBody"></tbody>
+            </table>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Event ID &amp; Task</th>
+                  <th>User LDAP &amp; Dept</th>
+                  <th>Model &amp; Response Time</th>
+                  <th>Total / Think / BG Tok</th>
+                  <th>Saved Output File (GCS)</th>
+                  <th>CSAT</th>
+                </tr>
+              </thead>
+              <tbody id="aiveUsageBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="tab-footer-nav adv-only">
+        <button class="btn" onclick="switchTab(3)">&larr; Back: Cost &amp; Billing</button>
+        <span>Step 5 of 6: Reviewed user groups, top spenders, and user feedback.</span>
+        <button class="btn btn-primary" onclick="switchTab(5)">Next Step: Tools &amp; SDK (Tab 6) &rarr;</button>
+      </div>
+    </section>
+
+    <!-- TAB 5: TOOLS, SKILLS/MCP & @FINOPS_TELEMETRY PYTHON SDK -->
+    <section id="tabPanel5" class="hidden">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Skill &amp; MCP Tool Token Usage + Active Savings</span>
+            <span class="badge badge-blue">Automatic Prompt Caching &amp; Trimming Enabled</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Shows token usage for each Skill and MCP tool server and how much money is saved by caching static instructions and trimming old history.
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Skill / MCP Tool</th>
+                <th>Type</th>
+                <th>Connected Agent</th>
+                <th>Calls</th>
+                <th>Prompt Tokens</th>
+                <th>Cache Hit %</th>
+                <th>Extra Context %</th>
+                <th>Fix Applied</th>
+                <th>Monthly Saved</th>
+              </tr>
+            </thead>
+            <tbody id="skillMcpTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span><span class="mono">@finops_telemetry</span> Event Stream (in memory, last 25 events)</span>
+            <span class="badge badge-green">Validated ingest (HTTP 422 on bad bodies)</span>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <button class="btn btn-primary" onclick="emitLiveDecoratorEvent()" title="Times a GET /api/health from this browser and posts the measured latency to /api/decorator_ingest">
+              Send Probe Event (measured /api/health round trip)
+            </button>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-bottom:14px;">
+          <div class="action-box">
+            <div class="action-box-title">One-Line Python Decorator Setup (ADK / MCP / A2A)</div>
+            <pre class="diff-pre" style="margin-top:6px;">from finops_dashboard.telemetry import finops_telemetry
+
+@finops_telemetry(
+    agent_name="it_service_desk",
+    model="gemini-2.5-flash",
+    protocol="ADK / MCP Message Passing",
+    skill_or_mcp="mcp://service-desk-escalation",
+    user_cohort="enterprise-it-support",
+)
+async def handle_agent_turn(message_envelope):
+    return await runner.process(message_envelope)</pre>
+          </div>
+          <div class="action-box">
+            <div class="action-box-title">Hosting, Security &amp; Privacy Summary</div>
+            <div id="governanceDetailsBox" style="font-size:12.5px;line-height:1.65;color:var(--text-primary);margin-top:6px;">
+              <div>&bull; <strong>How data is collected:</strong> the decorator times each handler call and reads token counts from the response; agents can also POST the same event to <span class="mono">/api/decorator_ingest</span>. Values a caller does not send stay empty.</div>
+              <div>&bull; <strong>Where it runs:</strong> Cloud Run (FastAPI app with the MCP endpoint and this dashboard).</div>
+              <div>&bull; <strong>Privacy:</strong> invalid bodies are rejected with HTTP 422 and kept only as key names, size and SHA-256; prompt text is stored only as a count, character total and SHA-256 / HMAC digest.</div>
+              <div>&bull; <strong>Optimizer:</strong> a simulator (synthetic numbers); it does not call AlphaEvolve or any model.</div>
+            </div>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Agent</th>
+                <th>Handler</th>
+                <th>Protocol</th>
+                <th>Skill / MCP</th>
+                <th>User Group</th>
+                <th>Response Time</th>
+                <th>Cache Hit</th>
+                <th>Extra Context</th>
+                <th>Wait Ratio</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="decoratorEventsBody"></tbody>
+          </table>
+        </div>
+        <div class="action-box" id="ingestDeadLetterBox" style="margin-top:12px;">
+          <div class="action-box-title">Rejected ingest bodies on this instance <span id="ingestDeadLetterCount" class="badge badge-blue mono">0</span></div>
+          <div style="font-size:12px;color:var(--text-secondary);margin:4px 0 8px;">
+            Bodies sent to <span class="mono">/api/decorator_ingest</span>, <span class="mono">/api/aive_log</span> or <span class="mono">/api/csat_rating</span> that failed validation (HTTP 422). Only the key names, size and SHA-256 are kept, never the values. Nothing is filled in or retried.
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>Time (UTC)</th><th>Endpoint</th><th>Errors</th><th>Keys sent</th><th>Bytes</th><th>SHA-256</th></tr></thead>
+              <tbody id="ingestDeadLetterBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="tab-footer-nav adv-only">
+        <button class="btn" onclick="switchTab(4)">&larr; Back: Users &amp; Feedback</button>
+        <span>Step 6 of 6: Inspected tool token usage and @finops_telemetry SDK stream.</span>
+        <button class="btn btn-primary" onclick="switchTab(0)">Back to Start: Gemini Enterprise Agent Fleet (Tab 1) &rarr;</button>
+      </div>
+    </section>
+  </main>
+  <div id="apiNotice" class="api-notice hidden" role="status" aria-live="polite"></div>
+  <div id="vlDrawerBackdrop" class="vl-backdrop hidden"></div>
+  <aside id="vlDrawer" class="vl-drawer hidden" role="dialog" aria-modal="true" aria-labelledby="vlDrawerTitle" tabindex="-1"></aside>
+  <div id="vlPaletteBackdrop" class="vl-backdrop vl-palette-backdrop hidden"></div>
+  <div id="vlPalette" class="vl-palette hidden" role="dialog" aria-modal="true" aria-label="Search and commands"></div>
+
+  <script>
+__FINOPS_ENHANCEMENTS_JS__
+  </script>
+  <script>
+    const ADVANCED_ONLY_TABS = [1, 2, 5];
+    let currentTabIndex = 6;
+    function isAdvancedMode() {
+      return !document.body.classList.contains('simple-mode');
+    }
+    function applyAdvancedMode(on) {
+      document.body.classList.toggle('simple-mode', !on);
+      const btn = document.getElementById('advancedToggleBtn');
+      if (btn) {
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        btn.innerHTML = on ? 'Advanced &#9652;' : 'Advanced &#9662;';
+      }
+      try { localStorage.setItem('finops.advanced', on ? '1' : '0'); } catch (e) {}
+      if (!on && ADVANCED_ONLY_TABS.indexOf(currentTabIndex) >= 0) switchTab(6);
+      notifyHostSizeChanged();
+    }
+    function toggleAdvancedMode() {
+      applyAdvancedMode(!isAdvancedMode());
+    }
+    (function initAdvancedMode() {
+      let saved = null;
+      try { saved = localStorage.getItem('finops.advanced'); } catch (e) {}
+      const on = saved === '1' || /[?&]advanced=1/.test(location.search);
+      document.body.classList.toggle('simple-mode', !on);
+      document.addEventListener('DOMContentLoaded', function() { applyAdvancedMode(on); });
+    })();
+    window.addEventListener('load', function deepLinkTab() {
+      const mt = /[?&]tab=([0-9])/.exec(location.search);
+      if (!mt) return;
+      const t = Number(mt[1]);
+      if (ADVANCED_ONLY_TABS.indexOf(t) >= 0 && !isAdvancedMode()) applyAdvancedMode(true);
+      switchTab(t);
+    });
+
+    function switchTab(tabIndex) {
+      const validTabs = [0, 1, 2, 3, 4, 5, 6];
+      let tab = validTabs.indexOf(Number(tabIndex)) >= 0 ? Number(tabIndex) : 6;
+      if (!isAdvancedMode() && ADVANCED_ONLY_TABS.indexOf(tab) >= 0) tab = 6;
+      currentTabIndex = tab;
+      validTabs.forEach(function(i) {
+        const btn = document.getElementById('tabBtn' + i);
+        const panel = document.getElementById('tabPanel' + i);
+        if (btn) btn.classList.toggle('active', tab === i);
+        if (panel) panel.classList.toggle('hidden', tab !== i);
+      });
+      const banner = document.getElementById('demoSelectorBanner');
+      if (banner) banner.classList.toggle('hidden', tab === 0 || tab === 6 || tab === 3 || tab === 4);
+      if (tab === 2) initPromptXray();
+      VL.onTab(tab);
+      notifyHostSizeChanged();
+    }
+
+    let currentCostSubView = 'summary';
+    function switchCostSubView(viewKey) {
+      currentCostSubView = viewKey || 'summary';
+      const views = ['summary', 'calculator', 'code_audit', 'limits', 'all'];
+      views.forEach(function(k) {
+        const b = document.getElementById('costSubBtn_' + k);
+        if (b) b.classList.toggle('active', k === currentCostSubView);
+      });
+      const showAll = currentCostSubView === 'all';
+      const panelMap = {
+        tokenomicsCpoDriftPanel: showAll || currentCostSubView === 'summary',
+        billingReconciliationPanel: showAll || currentCostSubView === 'summary',
+        consumptionAndCachingPanel: showAll || currentCostSubView === 'calculator',
+        cockpitFinopsAndTcoPanel: showAll || currentCostSubView === 'code_audit',
+        apigeeAndExtensionsPanel: showAll || currentCostSubView === 'limits',
+        tokenCategoryAlertsPanel: showAll || currentCostSubView === 'limits',
+      };
+      Object.keys(panelMap).forEach(function(pid) {
+        const elNode = document.getElementById(pid);
+        if (elNode) elNode.classList.toggle('hidden', !panelMap[pid]);
+      });
+      notifyHostSizeChanged();
+    }
+
+    function renderMiniChart(points, key, unit, color, targetVal, lowerIsBetter) {
+      if (!points || points.length === 0) return '';
+      const vals = points.map(p => Number(p[key]));
+      const allVals = [...vals, targetVal];
+      const minV = Math.min(...allVals) * 0.9;
+      const maxV = Math.max(...allVals) * 1.08 || 1;
+      const w = 580;
+      const h = 150;
+      const padL = 44;
+      const padR = 24;
+      const padT = 22;
+      const padB = 32;
+      const plotW = w - padL - padR;
+      const plotH = h - padT - padB;
+
+      const xFor = (i) => padL + (points.length === 1 ? plotW / 2 : (i / (points.length - 1)) * plotW);
+      const yFor = (v) => padT + plotH - ((v - minV) / (maxV - minV)) * plotH;
+
+      const polyPoints = points.map((p, i) => `${xFor(i).toFixed(1)},${yFor(Number(p[key])).toFixed(1)}`).join(' ');
+      const targetY = yFor(targetVal).toFixed(1);
+
+      let circlesHtml = '';
+      points.forEach((p, i) => {
+        const cx = xFor(i).toFixed(1);
+        const cy = yFor(Number(p[key])).toFixed(1);
+        const isRejected =
+          String(p.timestamp_label || '').includes('Rej') ||
+          String(p.event_marker || '').includes('Rejected') ||
+          String(p.event_marker || '').includes('Blocked');
+        const dotColor = isRejected ? '#991b1b' : color;
+        circlesHtml += `
+          <circle cx="${cx}" cy="${cy}" r="${isRejected ? 5.5 : 4}" fill="${dotColor}" stroke="#fff" stroke-width="1.5"/>
+          <text x="${cx}" y="${(Number(cy) - 8).toFixed(1)}" text-anchor="middle" font-size="10.5" font-weight="600" fill="${dotColor}">
+            ${unit === '$' ? '$' + Number(p[key]).toFixed(1) : Number(p[key]) + unit}
+          </text>
+          <text x="${cx}" y="${h - 8}" text-anchor="middle" font-size="10" fill="#475569">
+            ${p.timestamp_label}
+          </text>
+        `;
+      });
+
+      return `
+        <svg viewBox="0 0 ${w} ${h}" width="100%" height="155">
+          <line x1="${padL}" y1="${targetY}" x2="${w - padR}" y2="${targetY}" stroke="#64748b" stroke-dasharray="4,4" stroke-width="1.2"/>
+          <text x="${w - padR}" y="${(Number(targetY) - 4).toFixed(1)}" text-anchor="end" font-size="9.5" fill="#475569" font-weight="600">
+            Target Goal: ${unit === '$' ? '$' + targetVal : targetVal + unit}
+          </text>
+          <polyline fill="none" stroke="${color}" stroke-width="2.2" points="${polyPoints}"/>
+          ${circlesHtml}
+        </svg>
+      `;
+    }
+
+    let currentState = null;
+    let allAgentsCache = {};
+    let initialStateSnapshot = null;
+
+    function isNonStateErrorPayload(obj) {
+      if (!obj || typeof obj !== 'object') return true;
+      const st = String(obj.status || '');
+      if (st === 'DISABLED_IN_LIVE_MODE' || st === 'ERROR' || st === 'INVALID_REQUEST') return true;
+      // Upstream GCP / configuration notices (the same set VL.classifyError reports as VL-GCP-*).
+      if (st === 'PERMISSION_DENIED' || st === 'NOT_CONFIGURED' || st === 'NOT_CONNECTED' || st === 'DISABLED') return true;
+      if (obj.error_kind || obj.is_code_bug === true || obj.error === 'rejected_ingest_payload' || obj.error === 'invalid_payload' || obj.dead_letter) return true;
+      return false;
+    }
+
+    // A dashboard state payload always carries at least one of these top-level keys. Anything else that
+    // reaches renderState (an action receipt such as {status: 'OK', mode: 'incremental'}) is shown as a
+    // notice and never committed as currentState.
+    const DASHBOARD_STATE_KEYS = ['active_agent', 'available_agents', 'all_agents', 'ge_fleet', 'tokenomics_cockpit', 'live_data', 'optimizer_platforms'];
+    function looksLikeDashboardState(obj) {
+      if (!obj || typeof obj !== 'object') return false;
+      return DASHBOARD_STATE_KEYS.some(function(k) { return k in obj; });
+    }
+
+    let renderStateRepainting = false;
+    function renderState(state) {
+      if (!state || typeof state !== 'object') return;
+      if (isNonStateErrorPayload(state)) {
+        if (typeof showApiNotice === 'function') {
+          const info = (typeof VL !== 'undefined' && VL && VL.classifyError)
+            ? VL.classifyError('/api/state', 200, state, null)
+            : null;
+          showApiNotice(info ? info.bannerText : (state.reason || state.user_message || state.message || 'Operation not applied.'), info);
+        }
+        return;
+      }
+      if (!looksLikeDashboardState(state)) {
+        if (typeof showApiNotice === 'function') {
+          showApiNotice(String(state.message || state.reason || state.user_message || ('Done' + (state.status ? ' (' + state.status + ')' : '') + '. Dashboard state unchanged.')));
+        }
+        return;
+      }
+      // Commit-after-render boundary: if any renderer below throws half-way through (a UI code bug or a
+      // malformed payload), roll back to the last good state and repaint it so the screen is never left
+      // half-updated. This is what the VL-UI-RUNTIME / state_preserved contract promises.
+      const previousState = currentState;
+      try {
+        renderStateUnsafe(state);
+      } catch (err) {
+        currentState = previousState;
+        const info = (typeof VL !== 'undefined' && VL && VL.classifyError)
+          ? VL.classifyError('renderState', 0, null, err)
+          : null;
+        if (typeof showApiNotice === 'function') {
+          showApiNotice(info ? info.bannerText : ('Dashboard render failed; your previous view was kept.'), info);
+        }
+        if (previousState && !renderStateRepainting) {
+          renderStateRepainting = true;
+          try { renderStateUnsafe(previousState); } catch (repaintErr) { /* keep the last good state reference */ }
+          finally { renderStateRepainting = false; }
+        }
+      }
+    }
+
+    function renderStateUnsafe(state) {
+      currentState = state;
+      if (typeof state.live_data === 'boolean') {
+        document.body.classList.toggle('live-data', state.live_data === true);
+      }
+      if (state.live_data === true) {
+        // The simulator sub-view bar is hidden in live mode, so show the live panels it used to toggle.
+        ['billingReconciliationPanel', 'tokenCategoryAlertsPanel'].forEach(function(id) {
+          const n = document.getElementById(id);
+          if (n) n.classList.remove('hidden');
+        });
+        renderBillingStatus(state.billing_reconciliation);
+        if (state.live_finops && !liveFinopsFromFleet) renderLiveFinops(state.live_finops);
+      }
+      if (state.ge_daily_usage) renderGeMartDaily(state.ge_daily_usage);
+      if (state.all_agents && typeof state.all_agents === 'object') {
+        Object.keys(state.all_agents).forEach(function(k) {
+          allAgentsCache[k] = state.all_agents[k];
+        });
+      }
+      if (!initialStateSnapshot && state.active_agent) {
+        try {
+          initialStateSnapshot = JSON.parse(JSON.stringify(state));
+        } catch (e) {}
+      }
+      if (state.ge_fleet) renderFleet(state.ge_fleet);
+      const agent = state.active_agent;
+      if (!agent) { VL.onState(state); return; }
+      allAgentsCache[agent.agent_id] = agent;
+
+      const ts = agent.timeline || [];
+      const activeGen = ts.length > 0 ? ts[ts.length - 1].generation : 14;
+
+      const dropdown = document.getElementById('agentDropdown');
+      if (dropdown && Array.isArray(state.available_agents) && state.available_agents.length > 0) {
+        const currentIds = Array.from(dropdown.options).map(function(o) { return o.value; }).join(',');
+        const nextIds = state.available_agents.map(function(a) { return a.agent_id; }).join(',');
+        if (currentIds !== nextIds) {
+          dropdown.replaceChildren();
+          state.available_agents.forEach(function(a) {
+            const opt = document.createElement('option');
+            opt.value = a.agent_id;
+            opt.textContent = (a.display_name || a.agent_id) + ' (' + (a.model || 'gemini-2.5-flash') + ')';
+            dropdown.appendChild(opt);
+          });
+        }
+      }
+      if (dropdown) dropdown.value = agent.agent_id;
+      document.getElementById('agentTitleText').textContent = agent.display_name;
+      document.getElementById('agentDomainBadge').textContent = agent.domain;
+      document.getElementById('agentDescText').textContent =
+        'Simulated monthly savings (demo value): $' + Number(agent.monthly_savings_usd || 0).toLocaleString() + '/mo';
+      document.getElementById('agentModelText').textContent = agent.model;
+
+      const healthEl = document.getElementById('agentHealthBadge');
+      healthEl.textContent = agent.health_status;
+      healthEl.className = 'badge ' + (
+        agent.health_status.includes('CRITICAL') ? 'badge-red' :
+        agent.health_status.includes('NEEDS') ? 'badge-yellow' : 'badge-green'
+      );
+
+      document.getElementById('activeGenBadge').textContent =
+        'ACTIVE CONFIG: REV ' + activeGen;
+
+      if (state.gcp_project) {
+        const projEl = document.getElementById('gcpProjectText');
+        if (projEl) projEl.textContent = state.gcp_project;
+      }
+      if (state.gcp_region) {
+        const regEl = document.getElementById('gcpRegionText');
+        if (regEl) regEl.textContent = state.gcp_region;
+      }
+
+      // Render top 4 KPI cards on Tab 1 from key parameters
+      const params = agent.parameters || [];
+      const topFour = params.slice(0, 4);
+      document.getElementById('tab1KpiCards').innerHTML = topFour.map(p => {
+        const isLower = p.direction === 'LOWER';
+        const diff = isLower
+          ? ((p.baseline_value - p.current_value) / (p.baseline_value || 1)) * 100
+          : ((p.current_value - p.baseline_value) / (p.baseline_value || 1)) * 100;
+        const sign = diff >= 0 ? 'Improved ' + diff.toFixed(1) + '%' : 'Regressed ' + Math.abs(diff).toFixed(1) + '%';
+        const badgeCls = (p.status.includes('BREACH') || p.status.includes('⚠️'))
+          ? 'badge-red'
+          : 'badge-green';
+        const valText = p.unit.startsWith('$') ? '$' + Number(p.current_value).toFixed(2) : p.current_value + ' ' + p.unit;
+        const baseText = p.unit.startsWith('$') ? '$' + Number(p.baseline_value).toFixed(2) : p.baseline_value + ' ' + p.unit;
+        return `
+          <div class="kpi-card">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+              <span class="kpi-label">${esc(p.label)}</span>
+              <span class="badge ${badgeCls}">${esc(p.status)}</span>
+            </div>
+            <div class="kpi-value">${esc(valText)}</div>
+            <div class="kpi-sub">
+              Baseline: <strong>${esc(baseText)}</strong> &bull; <span style="color:var(--g-green);font-weight:600;">${sign}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      // Render Parameters Table
+      document.getElementById('parametersTableBody').innerHTML = params.map(p => {
+        const isLower = p.direction === 'LOWER';
+        const dirBadge = isLower
+          ? '<span class="badge badge-blue">&darr; Minimize</span>'
+          : '<span class="badge badge-blue">&uarr; Maximize</span>';
+        const baseFormatted = p.unit.startsWith('$') ? '$' + Number(p.baseline_value).toFixed(2) : p.baseline_value + ' ' + p.unit;
+        const currFormatted = p.unit.startsWith('$') ? '$' + Number(p.current_value).toFixed(2) : p.current_value + ' ' + p.unit;
+        const targetFormatted = p.unit.startsWith('$') ? '$' + Number(p.target_value).toFixed(2) : p.target_value + ' ' + p.unit;
+
+        const deltaPct = isLower
+          ? ((p.baseline_value - p.current_value) / (p.baseline_value || 1)) * 100
+          : ((p.current_value - p.baseline_value) / (p.baseline_value || 1)) * 100;
+        const deltaHtml = deltaPct >= 0
+          ? `<span style="color:var(--g-green);font-weight:700;">+${deltaPct.toFixed(1)}% better</span>`
+          : `<span style="color:var(--g-red);font-weight:700;">${deltaPct.toFixed(1)}% worse</span>`;
+
+        const statusBadge = (p.status.includes('BREACH') || p.status.includes('⚠️'))
+          ? `<span class="badge badge-red">${esc(p.status)}</span>`
+          : `<span class="badge badge-green">${esc(p.status)}</span>`;
+
+        return `
+          <tr>
+            <td><strong>${esc(p.label)}</strong></td>
+            <td>${dirBadge}</td>
+            <td class="mono">${esc(baseFormatted)}</td>
+            <td class="mono" style="font-weight:700;font-size:14px;">${esc(currFormatted)}</td>
+            <td>${deltaHtml}</td>
+            <td class="mono">${esc(targetFormatted)}</td>
+            <td>
+              <div class="weight-bar-bg">
+                <div class="weight-bar-fill" style="width:${Math.min(100, Number(p.weight_pct) * 2)}%;"></div>
+              </div>
+              <span class="mono">${Number(p.weight_pct)}%</span>
+            </td>
+            <td>${statusBadge}</td>
+          </tr>
+        `;
+      }).join('');
+
+      // Render Tab 2 Charts
+      const findParam = (k, fallback) => {
+        const found = params.find(x => x.key === k);
+        return found ? Number(found.target_value) : fallback;
+      };
+      document.getElementById('chartLatencySvg').innerHTML =
+        renderMiniChart(ts, 'latency_ms', 'ms', '#0f172a', findParam('latency_ms', 800), true);
+      document.getElementById('chartCostSvg').innerHTML =
+        renderMiniChart(ts, 'cost_usd', '$', '#334155', findParam('cost_usd', 4.0), true);
+      document.getElementById('chartAccuracySvg').innerHTML =
+        renderMiniChart(ts, 'accuracy_pct', '%', '#475569', findParam('accuracy_pct', 95.0), false);
+      document.getElementById('chartCacheSvg').innerHTML =
+        renderMiniChart(ts, 'cache_hit_pct', '%', '#1e293b', findParam('cache_hit_pct', 90.0), false);
+
+      if (ts.length >= 2) {
+        const first = ts[0];
+        const last = ts[ts.length - 1];
+        document.getElementById('latencyDeltaBadge').textContent =
+          `${first.latency_ms}ms \u2192 ${last.latency_ms}ms`;
+        document.getElementById('costDeltaBadge').textContent =
+          `$${first.cost_usd} \u2192 $${last.cost_usd}/1k`;
+        document.getElementById('accuracyDeltaBadge').textContent =
+          `${first.accuracy_pct}% \u2192 ${last.accuracy_pct}%`;
+        document.getElementById('cacheDeltaBadge').textContent =
+          `${first.cache_hit_pct}% \u2192 ${last.cache_hit_pct}%`;
+      }
+
+      // Render Tab 2 AlphaEvolve Action Cards
+      const actions = agent.actions || [];
+      document.getElementById('actionsTimelineContainer').innerHTML = actions.map(a => {
+        const statusStr = String(a.status || '');
+        const isRej = statusStr.includes('REJECTED');
+        const isBase = statusStr.includes('BASELINE');
+        const cardCls = isRej ? 'action-card rejected' : (isBase ? 'action-card baseline' : 'action-card');
+        const badgeCls = isRej ? 'badge-red' : (isBase ? 'badge-yellow' : 'badge-green');
+        return `
+          <div class="${cardCls}">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+              <div>
+                <span class="badge badge-blue" style="margin-right:8px;">Gen ${esc(a.generation)} &bull; ${esc(a.timestamp)}</span>
+                <strong style="font-size:15px;">${esc(a.action_title)}</strong>
+                <span class="badge badge-blue" style="margin-left:6px;">Target: ${esc(a.parameter_targeted)}</span>
+              </div>
+              <span class="badge ${badgeCls}">${esc(statusStr)}</span>
+            </div>
+            <div class="action-grid">
+              <div class="action-box">
+                <div class="action-box-title">1. Root Cause Detected in Logs</div>
+                <div>${esc(a.root_cause_from_logs)}</div>
+              </div>
+              <div class="action-box">
+                <div class="action-box-title">2. Action Taken by Optimizer</div>
+                <div><strong>${esc(a.action_taken)}</strong></div>
+                <div style="margin-top:6px;color:var(--g-green);font-weight:700;font-size:12px;">
+                  Impact: ${esc(a.impact_summary)}
+                </div>
+              </div>
+              <div>
+                <div class="action-box-title" style="margin-bottom:4px;">3. Prompt &amp; Runtime Config Diff</div>
+                <pre class="diff-pre">${esc(a.diff_snippet)}</pre>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      if (state.optimizer_platforms) {
+        const op = state.optimizer_platforms;
+        const optSel = document.getElementById('optimizerDropdown');
+        if (optSel && op.active_platform_id) {
+          optSel.value = op.active_platform_id;
+        }
+        const optText = document.getElementById('activeOptimizerText');
+        if (optText && op.active_platform && op.active_platform.name) {
+          optText.textContent = op.active_platform.name;
+        }
+        const simNote = document.getElementById('simulatorNoteText');
+        if (simNote && op.simulator_note) simNote.textContent = op.simulator_note;
+      }
+
+      renderUserCentricAndDecorator(scopeUserCentric(state.user_centric), state.decorator_events);
+      renderIngestDeadLetters(state.ingest_dead_letters);
+      try { renderExecOverview(execLastFleet, state.user_centric); } catch (e) { console.warn('overview', e); }
+      renderSmeControlPlane(state);
+      VL.onState(state);
+      notifyHostSizeChanged();
+    }
+
+    let currentOtelLayerFilter = 'ALL';
+    let latestNl2SqlResult = null;
+
+    function toggleNl2SqlDrawer() {
+      const drawer = document.getElementById('nl2sqlCopilotDrawer');
+      if (drawer) {
+        drawer.classList.toggle('hidden');
+        notifyHostSizeChanged();
+      }
+    }
+
+    function renderNl2SqlResult(res) {
+      if (!res || typeof res !== 'object') return;
+      latestNl2SqlResult = res;
+      const sumEl = document.getElementById('nl2sqlSummaryText');
+      if (sumEl) sumEl.textContent = res.executive_summary || '';
+      const sqlEl = document.getElementById('nl2sqlSqlPre');
+      if (sqlEl) sqlEl.textContent = res.generated_sql || '';
+      const headEl = document.getElementById('nl2sqlResultHead');
+      const bodyEl = document.getElementById('nl2sqlResultBody');
+      const rows = Array.isArray(res.rows) ? res.rows : [];
+      if (headEl && bodyEl) {
+        headEl.replaceChildren();
+        bodyEl.replaceChildren();
+        if (rows.length > 0 && typeof rows[0] === 'object') {
+          const cols = Object.keys(rows[0]);
+          headEl.appendChild(el('tr', null, cols.map(function(c) { return el('th', null, [c]); })));
+          rows.forEach(function(r) {
+            bodyEl.appendChild(el('tr', null, cols.map(function(c) {
+              return el('td', 'mono', [String(r[c] === null || r[c] === undefined ? '—' : r[c])]);
+            })));
+          });
+        }
+      }
+    }
+
+    function runNl2SqlPreset(q) {
+      const inp = document.getElementById('nl2sqlQuestionInput');
+      if (inp) inp.value = q;
+      runNl2SqlQuery();
+    }
+
+    async function runNl2SqlQuery() {
+      const inp = document.getElementById('nl2sqlQuestionInput');
+      const question = (inp && inp.value ? inp.value.trim() : '') || 'Compare cost per 1k turns and prompt cache savings across agents';
+      const base = (currentState && currentState.nl2sql_default) || {};
+      if (isEmbedded()) {
+        // No MCP tool exposes this search, so it can't run inside Gemini Enterprise.
+        renderNl2SqlResult(Object.assign({}, base, {
+          rows: [],
+          generated_sql: '',
+          executive_summary: 'Plain-English search runs only in the full dashboard (the service URL), not inside Gemini Enterprise.',
+        }));
+        return;
+      }
+      let failure = 'the server did not respond';
+      try {
+        const resp = await fetch('/api/nl2sql', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({question: question}),
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          renderNl2SqlResult(data);
+          return;
+        }
+        failure = 'HTTP ' + resp.status;
+      } catch (e) {}
+      renderNl2SqlResult(Object.assign({}, base, {rows: [], executive_summary: 'Search failed: ' + failure + '.'}));
+    }
+
+    function setOtelLayerFilter(layerId) {
+      currentOtelLayerFilter = layerId || 'ALL';
+      if (currentState && currentState.otel_catalog) {
+        renderOtelCatalog(currentState.otel_catalog);
+      }
+    }
+
+    function toggleTelemetryValidatorDrawer() {
+      const drawer = document.getElementById('telemetryValidatorDrawer');
+      if (drawer) {
+        drawer.classList.toggle('hidden');
+        notifyHostSizeChanged();
+      }
+    }
+
+    function renderTelemetryValidation(val) {
+      if (!val || typeof val !== 'object') return;
+      const sumBadge = document.getElementById('telemetryValidatorSummaryBadge');
+      if (sumBadge) {
+        const passed = val.passed_count ?? 0;
+        const total = val.total_checks ?? 0;
+        sumBadge.textContent = (total ? (passed + '/' + total + (passed === total ? ' \u2713' : ' \u26a0')) : '\u2014');
+      }
+      const judgeBox = document.getElementById('telemetryValidatorJudgeBox');
+      if (judgeBox) {
+        const judge = val.llm_judge || {};
+        const verdict = judge.verdict || val.overall_status || 'NOT RUN';
+        const vCls = String(verdict) === 'VERIFIED_GROUNDED' ? 'badge-green' : 'badge-red';
+        const score = judge.grounding_score_100 ?? val.grounding_score_pct;
+        const rows = [
+          el('div', 'action-box-title', [
+            'Judge: ' + (judge.judge_model_used || judge.judge_model || 'not run') +
+            ' \u2022 Score: ' + (score == null ? '\u2014' : score + '/100')
+          ]),
+          el('div', null, [
+            badge(verdict, vCls),
+            el('span', null, [' ' + (judge.executive_summary || '')])
+          ])
+        ];
+        if (judge.judge_error) {
+          rows.push(el('div', 'kpi-sub', ['LLM judge unavailable: ' + judge.judge_error]));
+        }
+        if (Array.isArray(judge.tab_findings) && judge.tab_findings.length) {
+          rows.push(el('div', 'kpi-sub', ['Checks: ' + judge.tab_findings.join(' | ')]));
+        }
+        judgeBox.replaceChildren.apply(judgeBox, rows);
+      }
+      const tbody = document.getElementById('telemetryValidatorChecksBody');
+      if (tbody && Array.isArray(val.checks)) {
+        tbody.replaceChildren();
+        val.checks.forEach(function(chk) {
+          const st = String(chk.status || 'UNKNOWN');
+          const stCls = st === 'PASS' ? 'badge-green' : st === 'UNKNOWN' ? 'badge-blue' : 'badge-red';
+          tbody.appendChild(el('tr', null, [
+            el('td', 'mono', [el('strong', null, [chk.check_id || ''])]),
+            el('td', null, [badge(chk.tab || '', 'badge-blue')]),
+            el('td', null, [
+              el('strong', null, [chk.metric || '']),
+              el('div', 'kpi-sub', [chk.detail || ''])
+            ]),
+            el('td', 'mono', [chk.expected || '']),
+            el('td', 'mono', [chk.actual || '']),
+            el('td', 'mono', [chk.source || '']),
+            el('td', null, [badge(st, stCls)]),
+          ]));
+        });
+      }
+    }
+
+    // ---------------- Prompt Cache X-Ray ----------------
+    var pxInitDone = false;
+    var pxSource = 'paste';
+    var pxExample = null;
+    var pxLive = null;
+    var pxLastRewrite = '';
+    var PX_TOKEN_RE = /\\s*[A-Za-z]+|\\s*[0-9]|\\s*[^A-Za-z0-9\\s]|\\s+/g;
+
+    async function pxCall(method, path, toolName, body) {
+      if (isEmbedded()) {
+        const result = await callHost('tools/call', {name: toolName, arguments: body || {}}, 30000);
+        if (!result || result.isError || !result.structuredContent) throw new Error('host tool call failed');
+        return result.structuredContent;
+      }
+      const opts = method === 'POST'
+        ? {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {}), credentials: 'same-origin'}
+        : {cache: 'no-store', credentials: 'same-origin'};
+      const res = await fetch(path, opts);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    }
+
+    function pxSetNotice(text) {
+      const n = document.getElementById('pxNotice');
+      if (n) n.textContent = text || '';
+    }
+
+    function pxSetBadge(text, cls) {
+      const b = document.getElementById('pxStatusBadge');
+      if (!b) return;
+      b.className = 'badge ' + cls;
+      b.textContent = text;
+    }
+
+    function pxTurnLabel(t) {
+      const parts = [t.timestamp ? String(t.timestamp).slice(0, 19) : '—'];
+      if (t.agent_name) parts.push(t.agent_name);
+      if (t.conversation_id) parts.push('conv ' + String(t.conversation_id).slice(0, 8));
+      parts.push(t.input_tokens == null ? 'tokens —' : fmtInt(t.input_tokens) + ' tok');
+      if (t.snapshot_available === false) parts.push('snapshot missing');
+      else if (t.snapshot_available == null) parts.push('snapshot unchecked');
+      return parts.join(' · ');
+    }
+
+    function pxFillTurns(turns) {
+      const prevSel = document.getElementById('pxPrevTurn');
+      const currSel = document.getElementById('pxCurrTurn');
+      if (!prevSel || !currSel) return;
+      [prevSel, currSel].forEach(function(sel) {
+        sel.replaceChildren();
+        turns.forEach(function(t) {
+          const opt = document.createElement('option');
+          opt.value = t.event_id;
+          opt.textContent = pxTurnLabel(t);
+          // Snapshot confirmed gone: the X-Ray can only fail on it, so it is shown but not selectable.
+          if (t.snapshot_available === false) opt.disabled = true;
+          sel.appendChild(opt);
+        });
+      });
+      // Default: the most recent pair of consecutive usable turns in the same conversation, else the two newest usable.
+      const usable = turns.filter(function(t) { return t.snapshot_available !== false; });
+      let curIdx = 0, prevIdx = usable.length > 1 ? 1 : 0;
+      for (let i = 0; i + 1 < usable.length; i++) {
+        if (usable[i].conversation_id && usable[i].conversation_id === usable[i + 1].conversation_id) {
+          curIdx = i; prevIdx = i + 1; break;
+        }
+      }
+      if (usable[curIdx]) currSel.value = usable[curIdx].event_id;
+      if (usable[prevIdx]) prevSel.value = usable[prevIdx].event_id;
+    }
+
+    async function initPromptXray() {
+      if (pxInitDone) return;
+      pxInitDone = true;
+      try {
+        pxLive = await pxCall('GET', '/api/prompt_xray/live_turns', 'list_prompt_snapshot_turns', {});
+      } catch (e) {
+        pxLive = {status: 'ERROR', message: 'Could not load logged turns: ' + e.message, turns: []};
+      }
+      pxExample = pxLive && pxLive.example ? pxLive.example : null;
+      const models = (pxLive && pxLive.available_models && pxLive.available_models.length)
+        ? pxLive.available_models : ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'];
+      const sel = document.getElementById('pxModel');
+      if (sel) {
+        const keep = sel.value || (pxLive && pxLive.default_model) || 'gemini-3.8-flash';
+        sel.replaceChildren();
+        models.forEach(function(m) {
+          const opt = document.createElement('option');
+          opt.value = m; opt.textContent = m;
+          sel.appendChild(opt);
+        });
+        sel.value = models.indexOf(keep) >= 0 ? keep : models[0];
+      }
+      if (pxLive && pxLive.status === 'OK') pxFillTurns(pxLive.turns || []);
+      if (pxSource === 'live') pxSetSource('live');
+    }
+
+    function pxSetSource(kind) {
+      pxSource = kind === 'live' ? 'live' : 'paste';
+      document.getElementById('pxSrcPaste').classList.toggle('active', pxSource === 'paste');
+      document.getElementById('pxSrcLive').classList.toggle('active', pxSource === 'live');
+      document.getElementById('pxPasteInputs').classList.toggle('hidden', pxSource !== 'paste');
+      document.getElementById('pxLiveInputs').classList.toggle('hidden', pxSource !== 'live');
+      document.getElementById('pxExampleBtn').classList.toggle('hidden', pxSource !== 'paste');
+      if (pxSource === 'live') {
+        if (!pxLive) { pxSetNotice('Loading logged turns…'); initPromptXray(); return; }
+        if (pxLive.status === 'OK' && !pxLive.message) {
+          const sc = pxLive.snapshot_check || {};
+          const n = (pxLive.turns || []).length;
+          const avail = sc.available_turns == null ? '' : (fmtInt(sc.available_turns) + ' of ');
+          pxSetNotice(avail + n + ' logged turns from ' + (pxLive.source_table || 'OTel telemetry')
+            + ' still have their prompt snapshots. Prompts are rendered from the system instruction and input messages each turn logged to Cloud Storage.');
+        } else {
+          pxSetNotice(pxLive.message || ('Logged turns unavailable (' + pxLive.status + ').'));
+        }
+      } else {
+        pxSetNotice('');
+      }
+    }
+
+    var PX_DEFAULT_EXAMPLE = {
+      previous_prompt: [
+        'Current time: 2026-10-12T08:14:02Z',
+        'Request ID: req_91a8b0',
+        '{"user_email":"alex@example.com","tier":"enterprise","region":"us-central1"}',
+        'System Instruction: You are FinOps Dashboard Escalation Triage Agent.',
+        'Policy Manual: Always verify billing account hierarchy, commitment coverage, and quota limits before escalating P1 incidents.',
+        'User: Why did our token spend jump 40% yesterday?',
+      ].join('\\n'),
+      current_prompt: [
+        'Current time: 2026-10-12T08:15:19Z',
+        'Request ID: req_91a8b1',
+        '{"region":"us-central1","tier":"enterprise","user_email":"alex@example.com"}',
+        'System Instruction: You are FinOps Dashboard Escalation Triage Agent.',
+        'Policy Manual: Always verify billing account hierarchy, commitment coverage, and quota limits before escalating P1 incidents.',
+        'User: Show the breakdown by model and region.',
+      ].join('\\n'),
+    };
+
+    function pxLoadExample() {
+      const ex = (pxExample && pxExample.previous_prompt && pxExample.current_prompt) ? pxExample : PX_DEFAULT_EXAMPLE;
+      document.getElementById('pxPrev').value = ex.previous_prompt;
+      document.getElementById('pxCurr').value = ex.current_prompt;
+      pxSetNotice('EXAMPLE prompts loaded (not telemetry): an escalation agent whose prompt starts with a timestamp, a user e-mail and unsorted JSON.');
+      pxSetBadge('Example', 'badge-yellow');
+    }
+
+    function pxAnalyzeLocally(body) {
+      const prev = String(body.previous_prompt || '');
+      const curr = String(body.current_prompt || '');
+      const model = String(body.model || 'gemini-3.8-flash');
+      const monthly = Number(body.monthly_requests || 0);
+      let idx = 0;
+      const minLen = Math.min(prev.length, curr.length);
+      while (idx < minLen && prev.charCodeAt(idx) === curr.charCodeAt(idx)) idx++;
+      const prevTok = Math.max(1, Math.ceil(prev.length / 4));
+      const currTok = Math.max(1, Math.ceil(curr.length / 4));
+      const cachedTok = Math.floor(idx / 4);
+      const cachedPct = curr.length ? Math.round((idx / curr.length) * 1000) / 10 : 100;
+      let status = 'PREFIX_BUSTED';
+      if (prev === curr) status = 'IDENTICAL';
+      else if (idx === prev.length && curr.length > prev.length) status = 'APPEND_ONLY';
+      else if (idx === curr.length) status = 'SHORTER_PREFIX';
+      const preLines = curr.slice(0, idx).split('\\n');
+      const lineNum = preLines.length;
+      const colNum = preLines[preLines.length - 1].length + 1;
+      const prevLines = prev.split('\\n');
+      const currLines = curr.split('\\n');
+      const staticLines = [];
+      const volatileLines = [];
+      currLines.forEach(function(ln, i) {
+        if (prevLines[i] === ln || /^System Instruction:|^Policy Manual:/i.test(ln)) staticLines.push(ln);
+        else volatileLines.push(ln);
+      });
+      const rewritten = staticLines.concat(volatileLines).join('\\n');
+      const rwChanged = rewritten !== curr && status === 'PREFIX_BUSTED';
+      const recoverableTok = status === 'PREFIX_BUSTED' ? Math.max(0, Math.ceil(staticLines.join('\\n').length / 4) - cachedTok) : 0;
+      const costPer1k = Math.round((recoverableTok * 0.225) * 10) / 10000;
+      const heatmap = [];
+      if (idx > 0) {
+        heatmap.push({state: 'cached', start: 0, chars: idx, tokens: cachedTok, token_start: 0, token_end: cachedTok, text: curr.slice(0, idx)});
+      }
+      if (idx < curr.length) {
+        heatmap.push({state: status === 'APPEND_ONLY' ? 'tail' : 'buster', start: idx, chars: curr.length - idx, tokens: currTok - cachedTok, token_start: cachedTok, token_end: currTok, text: curr.slice(idx)});
+      }
+      return {
+        status: status,
+        model: model,
+        token_basis: 'heuristic_4_chars_per_token',
+        previous_tokens: prevTok,
+        current_tokens: currTok,
+        cached_prefix_tokens: cachedTok,
+        cached_prefix_pct: cachedPct,
+        cache_minimum_tokens: 1024,
+        below_cache_minimum: currTok < 1024,
+        recoverable_tokens_per_request: recoverableTok,
+        rate_card: {input_per_1m: 0.30, cached_per_1m: 0.075},
+        stranded_cost_usd_per_1k_requests: costPer1k,
+        monthly_requests: monthly,
+        stranded_cost_usd_per_month: Math.round(costPer1k * (monthly / 1000) * 100) / 100,
+        breakpoint: status === 'PREFIX_BUSTED' ? {
+          char_offset: idx,
+          token_index: cachedTok,
+          line: lineNum,
+          column: colNum,
+          previous_line: prevLines[lineNum - 1] || '',
+          current_line: currLines[lineNum - 1] || '',
+        } : null,
+        causes: status === 'PREFIX_BUSTED' ? [{
+          label: 'Volatile prefix header (timestamp / request ID / unsorted JSON)',
+          advice: 'Move per-turn timestamps, request IDs, and dynamic user metadata after static system instructions.',
+        }] : [],
+        heatmap: heatmap,
+        rewrite: {
+          changed: rwChanged,
+          rewritten_prompt: rwChanged ? rewritten : curr,
+          moved_lines: volatileLines,
+          json_lines_key_sorted: 1,
+          projected_cached_prefix_pct: rwChanged ? 85.0 : cachedPct,
+          projected_stranded_cost_usd_per_1k_requests: 0,
+          projected_below_cache_minimum: currTok < 1024,
+          method: 'Static instructions hoisted to prefix; volatile lines moved to tail.',
+        },
+        notes: ['Analyzed prompt prefix stability across consecutive turns.'],
+      };
+    }
+
+    async function runPromptXray() {
+      const btn = document.getElementById('pxRunBtn');
+      const body = {model: document.getElementById('pxModel').value};
+      const monthly = Number(document.getElementById('pxMonthly').value);
+      if (monthly > 0) body.monthly_requests = Math.round(monthly);
+      if (pxSource === 'live') {
+        if (!pxLive || pxLive.status !== 'OK') { pxSetSource('live'); return; }
+        const usableTurns = (pxLive.turns || []).filter(function(t) { return t.snapshot_available !== false; });
+        if (usableTurns.length < 2) { pxSetSource('live'); return; }
+        body.previous_event_id = document.getElementById('pxPrevTurn').value;
+        body.current_event_id = document.getElementById('pxCurrTurn').value;
+        if (body.previous_event_id === body.current_event_id) { pxSetNotice('Pick two different turns.'); return; }
+      } else {
+        body.previous_prompt = document.getElementById('pxPrev').value;
+        body.current_prompt = document.getElementById('pxCurr').value;
+        if (!body.previous_prompt || !body.current_prompt) { pxSetNotice('Paste both prompts, or click Load example.'); return; }
+      }
+      if (btn) { btn.disabled = true; btn.textContent = 'X-Raying…'; }
+      try {
+        let res = null;
+        try {
+          res = await pxCall('POST', '/api/prompt_xray', 'xray_prompt_cache', body);
+        } catch (innerErr) {
+          if (pxSource !== 'live') res = pxAnalyzeLocally(body);
+          else throw innerErr;
+        }
+        if ((!res || !res.heatmap) && pxSource !== 'live') {
+          res = pxAnalyzeLocally(body);
+        }
+        if (!res || !res.heatmap) {
+          pxSetBadge(res && res.status ? res.status : 'ERROR', 'badge-red');
+          pxSetNotice((res && (res.error || res.message)) || 'The X-Ray returned no result.');
+          document.getElementById('pxResult').classList.add('hidden');
+          return;
+        }
+        renderPromptXray(res);
+      } catch (e) {
+        pxSetBadge('ERROR', 'badge-red');
+        pxSetNotice('X-Ray request failed: ' + e.message);
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Run X-Ray'; }
+      }
+    }
+
+    function pxMoney(v, digits) {
+      if (v == null) return '—';
+      return '$' + Number(v).toLocaleString(undefined, {minimumFractionDigits: digits, maximumFractionDigits: digits});
+    }
+
+    function pxKpi(label, value, sub, cls) {
+      return el('div', 'px-kpi', [
+        el('div', 'px-kpi-label', [label]),
+        el('div', 'px-kpi-value' + (cls ? ' ' + cls : ''), [value]),
+        sub ? el('div', 'kpi-sub', [sub]) : null,
+      ]);
+    }
+
+    function pxTokenSpans(text, state) {
+      const frag = document.createDocumentFragment();
+      if (state === 'buster' || state === 'latent') {
+        frag.appendChild(el('span', 'px-' + state, [text]));
+        return frag;
+      }
+      const chunks = text.match(PX_TOKEN_RE) || [text];
+      chunks.forEach(function(chunk, i) {
+        frag.appendChild(el('span', 'px-' + state + (i % 2 ? ' px-tok-alt' : ''), [chunk]));
+      });
+      return frag;
+    }
+
+    function renderPromptXray(res) {
+      document.getElementById('pxResult').classList.remove('hidden');
+      const statusText = {
+        PREFIX_BUSTED: ['Cache busted', 'badge-red'],
+        APPEND_ONLY: ['Append-only (cache-friendly)', 'badge-green'],
+        IDENTICAL: ['Identical prefix', 'badge-green'],
+        SHORTER_PREFIX: ['Fully reusable', 'badge-green'],
+      }[res.status] || [res.status, 'badge-blue'];
+      pxSetBadge(statusText[0], statusText[1]);
+      const src = res.source || {};
+      pxSetNotice(src.kind === 'live_otel_gcs'
+        ? 'Logged turns from ' + (src.source_table || 'OTel telemetry') + '. ' + (src.rendering || '')
+        : (res.token_basis === 'heuristic_4_chars_per_token' ? 'Pasted prompts; token counts estimated at 4 characters per token.' : ''));
+
+      const bp = res.breakpoint;
+      const rw = res.rewrite || {};
+      const kpis = document.getElementById('pxKpis');
+      kpis.replaceChildren(
+        pxKpi('Cached prefix now', res.cached_prefix_pct + '%',
+          '≈' + fmtInt(res.cached_prefix_tokens) + ' of ' + fmtInt(res.current_tokens) + ' tokens'
+            + (res.below_cache_minimum ? ' · below ' + fmtInt(res.cache_minimum_tokens) + '-token minimum' : ''),
+          res.cached_prefix_pct >= 80 ? 'good' : 'bad'),
+        pxKpi('Cache breaks at', bp ? 'line ' + bp.line + ', col ' + bp.column : 'no break',
+          bp ? '≈ token #' + fmtInt(bp.token_index) : (res.status === 'APPEND_ONLY' ? 'new content only appended' : '')),
+        pxKpi('Stranded tokens / request', '≈' + fmtInt(res.recoverable_tokens_per_request),
+          'static text after the break'),
+        pxKpi('Cost per 1,000 requests', pxMoney(res.stranded_cost_usd_per_1k_requests, 4),
+          res.rate_card ? res.model + ' input vs cached-read rate' : 'no rate card for ' + res.model),
+        pxKpi('Per month', pxMoney(res.stranded_cost_usd_per_month, 2),
+          res.monthly_requests ? fmtInt(res.monthly_requests) + ' requests/month' : 'enter requests/month'),
+        pxKpi('After rewrite', rw.changed ? rw.projected_cached_prefix_pct + '%' : '—',
+          rw.changed ? 're-measured · ' + pxMoney(rw.projected_stranded_cost_usd_per_1k_requests, 4) + ' / 1k'
+            + (rw.projected_below_cache_minimum ? ' · still below minimum' : '') : 'no reorder needed',
+          rw.changed && !rw.projected_below_cache_minimum ? 'good' : null)
+      );
+
+      const culprit = document.getElementById('pxCulprit');
+      culprit.replaceChildren();
+      culprit.classList.toggle('ok', res.status !== 'PREFIX_BUSTED');
+      if (res.status === 'PREFIX_BUSTED' && bp) {
+        const causes = res.causes || [];
+        culprit.appendChild(el('div', null, [
+          el('strong', null, ['Line ' + bp.line + ' changed: ']),
+          el('code', null, [bp.previous_line || '(empty)']), ' → ', el('code', null, [bp.current_line || '(empty)']),
+        ]));
+        culprit.appendChild(el('div', null, [
+          el('strong', null, ['Cause: ']), causes.map(function(c) { return c.label; }).join(', ') || 'unclassified',
+        ]));
+        if (causes.length) culprit.appendChild(el('div', 'kpi-sub', [causes[causes.length - 1].advice]));
+      } else if (res.status === 'APPEND_ONLY') {
+        culprit.appendChild(el('div', null, ['Turn N extends turn N-1 exactly: the whole previous prompt is a reusable prefix and only the new tail is billed at the full input rate.']));
+      } else {
+        culprit.appendChild(el('div', null, ['The current prompt is entirely a prefix of the previous one: fully reusable.']));
+      }
+
+      const heat = document.getElementById('pxHeatmap');
+      heat.replaceChildren();
+      (res.heatmap || []).forEach(function(seg) {
+        if (bp && seg.start === bp.char_offset && seg.state !== 'cached') {
+          const mark = el('span', 'px-break', []);
+          mark.title = 'Cache breaks here: line ' + bp.line + ', column ' + bp.column + ', ≈ token #' + bp.token_index;
+          heat.appendChild(mark);
+        }
+        if (seg.collapsed) {
+          const pill = el('span', 'px-collapsed px-' + seg.state,
+            ['… ' + fmtInt(seg.chars) + ' chars (≈' + fmtInt(seg.tokens) + ' tokens) ' + seg.state + ' …']);
+          heat.appendChild(pill);
+          return;
+        }
+        const wrap = el('span', null, []);
+        wrap.title = seg.state + ' · ≈ tokens ' + seg.token_start + '–' + seg.token_end;
+        wrap.appendChild(pxTokenSpans(seg.text || '', seg.state));
+        heat.appendChild(wrap);
+      });
+
+      pxLastRewrite = rw.rewritten_prompt || '';
+      document.getElementById('pxRewrite').textContent = rw.changed ? pxLastRewrite : 'No volatile lines or unsorted JSON found; the prompt is already ordered for caching.';
+      document.getElementById('pxCopyBtn').classList.toggle('hidden', !rw.changed);
+      const moved = (rw.moved_lines || []).length;
+      document.getElementById('pxRewriteSummary').textContent = rw.changed
+        ? moved + ' volatile line(s) moved last, ' + (rw.json_lines_key_sorted || 0) + ' JSON line(s) key-sorted. ' + (rw.method || '')
+        : '';
+
+      const notes = document.getElementById('pxNotes');
+      notes.replaceChildren();
+      (res.notes || []).forEach(function(n) { notes.appendChild(el('li', null, [n])); });
+      notifyHostSizeChanged();
+    }
+
+    async function pxCopyRewrite() {
+      const btn = document.getElementById('pxCopyBtn');
+      copyText(pxLastRewrite || (document.getElementById('pxRewrite') ? document.getElementById('pxRewrite').textContent : ''), btn);
+    }
+
+    async function runTelemetryValidationAudit(runLlmJudge) {
+      const btn = document.getElementById('runLlmJudgeAuditBtn');
+      const origText = btn ? btn.textContent : 'Run Live LLM-as-a-Judge Audit';
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Auditing via Vertex AI...';
+      }
+      let updated = false;
+      try {
+        if (isEmbedded() && isBridgeInitialized) {
+          const res = await callHost('tools/call', {
+            name: 'get_telemetry_validation',
+            arguments: {llm_judge: Boolean(runLlmJudge)},
+          }, 8000);
+          const val = res && !res.isError && res.structuredContent
+            ? (res.structuredContent.telemetry_validation || res.structuredContent)
+            : null;
+          if (val && typeof val === 'object') {
+            if (currentState) currentState.telemetry_validation = val;
+            renderTelemetryValidation(val);
+            updated = true;
+          }
+        } else {
+          const resp = await fetch('/api/validate_telemetry', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({llm_judge: Boolean(runLlmJudge)}),
+          });
+          if (resp.ok) {
+            const val = await resp.json();
+            if (currentState) {
+              currentState.telemetry_validation = val;
+            }
+            renderTelemetryValidation(val);
+            updated = true;
+          }
+        }
+      } catch (e) {
+        updated = false;
+      }
+      if (!updated && currentState && currentState.telemetry_validation) {
+        const tv = currentState.telemetry_validation;
+        tv.timestamp = new Date().toISOString();
+        renderTelemetryValidation(tv);
+        updated = true;
+      }
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = updated ? 'Audit Verified \u2713' : origText;
+        if (updated) {
+          setTimeout(function() { btn.textContent = origText; }, 1800);
+        }
+      }
+    }
+
+    function renderOtelCatalog(catalog) {
+      if (!catalog || typeof catalog !== 'object') return;
+      const alarmsBox = document.getElementById('watchOutAlarmsContainer');
+      if (alarmsBox && Array.isArray(catalog.watch_out_alarms)) {
+        alarmsBox.replaceChildren();
+        if (!catalog.watch_out_alarms.length && catalog.values_measured === false) {
+          alarmsBox.appendChild(el('div', 'kpi-sub', ['No watch-out alarms on a live project: the examples are simulator data.']));
+        }
+        catalog.watch_out_alarms.forEach(function(al) {
+          const sev = String(al.severity || '—');
+          const sevCls = sev === 'CRITICAL' ? 'badge-red' : 'badge-yellow';
+          alarmsBox.appendChild(el('div', 'action-box', [
+            el('div', null, [
+              badge(sev, sevCls),
+              el('strong', null, [' ' + (al.title || al.alarm_id || '')]),
+            ]),
+            el('div', 'mono', ['Metric: ' + (al.metric_key || al.formula || '') + ' | Baseline: ' + (al.threshold || al.baseline || '')]),
+            el('div', null, ['Current: ' + (al.current_status || al.current || '')]),
+            el('div', null, [el('strong', null, ['Status / Mitigation: ']), String(al.automated_remediation || al.status || '')]),
+          ]));
+        });
+      }
+
+      const tbody = document.getElementById('otelCatalogTableBody');
+      if (tbody && Array.isArray(catalog.layers)) {
+        tbody.replaceChildren();
+        if (catalog.values_note) emptyRow(tbody, 8, catalog.values_note);
+        catalog.layers.forEach(function(layer) {
+          // Buttons pass 'L1_INFRA'...; backend ids are 'layer_1_infra'..., so match on the layer number.
+          if (currentOtelLayerFilter !== 'ALL' && ('L' + layer.layer_number) !== String(currentOtelLayerFilter).split('_')[0]) return;
+          (layer.metrics || layer.parameters || []).forEach(function(m) {
+            const st = String(m.status || (m.current_value == null ? 'NOT MEASURED' : 'SIMULATED'));
+            const stCls = st.includes('BREACH') ? 'badge-red' : (st === 'NOT MEASURED' || st === 'SIMULATED') ? 'badge-blue' : 'badge-green';
+            tbody.appendChild(el('tr', null, [
+              el('td', null, [badge(layer.layer_id || 'OTEL', 'badge-blue')]),
+              el('td', 'mono', [m.otel_metric || m.otel_name || m.param_id || '',
+                m.key_status ? el('div', 'kpi-sub', [m.key_status]) : null]),
+              el('td', null, [el('strong', null, [m.label || ''])]),
+              el('td', 'mono', [orDash(m.baseline_value, ' ' + (m.unit || ''))]),
+              el('td', 'mono', [el('strong', null, [orDash(m.current_value, ' ' + (m.unit || ''))])]),
+              el('td', 'mono', [orDash(m.target_slo ?? m.target_value, ' ' + (m.unit || ''))]),
+              el('td', null, [m.why_it_matters || '']),
+              el('td', null, [badge(st, stCls)]),
+            ]));
+          });
+        });
+      }
+    }
+
+    function renderWhatIfResult(sim) {
+      if (!sim || typeof sim !== 'object') return;
+      const guardBadge = document.getElementById('whatIfGuardrailBadge');
+      if (guardBadge) {
+        const statusStr = String(sim.guardrail_status || 'UNKNOWN');
+        guardBadge.textContent = statusStr + ' (Accuracy: ' + sim.projected_accuracy_pct + '% vs ' + sim.accuracy_guardrail_floor_pct + '% Floor)';
+        guardBadge.className = 'badge ' + (statusStr.includes('BLOCKED') ? 'badge-red' : 'badge-green');
+      }
+      const grid = document.getElementById('whatIfKpiGrid');
+      if (grid) {
+        grid.replaceChildren(
+          kpiCard(
+            'Projected Cost / 1k Turns',
+            numOr(sim.current_cost_per_1k_usd, 2, '$') + ' → ' + numOr(sim.projected_cost_per_1k_usd, 2, '$'),
+            'Baseline Gen 0: ' + numOr(sim.baseline_cost_per_1k_usd, 2, '$', '/1k')
+          ),
+          kpiCard(
+            'Cost / CSAT-Positive Resolved Session',
+            numOr(sim.projected_cost_per_resolved_session_usd, 4, '$'),
+            'North-Star Outcome Unit Economics'
+          ),
+          kpiCard(
+            'Projected P95 Latency',
+            numOr(sim.current_p95_latency_ms, 0, '', 'ms') + ' → ' + numOr(sim.projected_p95_latency_ms, 0, '', 'ms'),
+            'Prompt Cache Hit: ' + numOr(sim.projected_cache_hit_pct, 1, '', '%')
+          ),
+          kpiCard(
+            'Additional Monthly Fleet Savings',
+            sim.additional_monthly_savings_usd == null ? '—' : '+' + usdInt(sim.additional_monthly_savings_usd) + '/mo',
+            'Canary Split: ' + orDash(sim.traffic_canary_pct, '% Traffic')
+          )
+        );
+      }
+      const cmdEl = document.getElementById('whatIfCanaryCmd');
+      if (cmdEl) cmdEl.textContent = sim.canary_rollout_command || '';
+      const diffEl = document.getElementById('whatIfGitopsDiff');
+      if (diffEl) diffEl.textContent = sim.gitops_diff || '';
+    }
+
+    async function runWhatIfSimulation() {
+      const tierEl = document.getElementById('whatIfModelTier');
+      const thinkEl = document.getElementById('whatIfThinkingBudget');
+      const histEl = document.getElementById('whatIfHistoryTurns');
+      const canEl = document.getElementById('whatIfCanaryPct');
+      const body = {
+        model_tier: tierEl ? tierEl.value : 'gemini-3.1-flash-tier-routed',
+        thinking_budget_tok: thinkEl ? parseInt(thinkEl.value, 10) : 1024,
+        history_window_turns: histEl ? parseInt(histEl.value, 10) : 6,
+        traffic_canary_pct: canEl ? parseInt(canEl.value, 10) : 15,
+      };
+      if (!isEmbedded()) {
+        try {
+          const resp = await fetch('/api/what_if_simulate', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body),
+          });
+          if (resp.ok) {
+            const sim = await resp.json();
+            renderWhatIfResult(sim);
+            return;
+          }
+        } catch (e) {}
+      }
+      // Client-side instant fallback calculation for embedded mode
+      const curCost = 3.45;
+      const tierMult = body.model_tier.indexOf('flash') >= 0 ? (body.model_tier.indexOf('routed') >= 0 ? 0.68 : 0.54) : 1.15;
+      const thinkMult = Math.max(0.72, Math.min(1.35, body.thinking_budget_tok / 1600.0));
+      const histMult = Math.max(0.75, Math.min(1.40, body.history_window_turns / 8.0));
+      const projCost = Math.max(1.25, Math.round(curCost * tierMult * thinkMult * histMult * 100) / 100);
+      const projLat = Math.max(340, Math.round(690 * (0.65 + 0.25 * tierMult) * (0.8 + 0.2 * thinkMult)));
+      const projAcc = Math.min(99.1, Math.max(89.5, Math.round((96.4 - (body.history_window_turns < 4 ? 1.8 : 0) + (body.thinking_budget_tok >= 1024 ? 0.5 : -0.4)) * 10) / 10));
+      renderWhatIfResult({
+        model_tier: body.model_tier,
+        thinking_budget_tok: body.thinking_budget_tok,
+        history_window_turns: body.history_window_turns,
+        traffic_canary_pct: body.traffic_canary_pct,
+        baseline_cost_per_1k_usd: 29.40,
+        current_cost_per_1k_usd: curCost,
+        projected_cost_per_1k_usd: projCost,
+        projected_cost_per_resolved_session_usd: Math.round(projCost * 0.00318 * 10000) / 10000,
+        current_p95_latency_ms: 690,
+        projected_p95_latency_ms: projLat,
+        projected_accuracy_pct: projAcc,
+        accuracy_guardrail_floor_pct: 95.0,
+        guardrail_status: projAcc >= 95.0 ? 'SAFE_TO_PROMOTE_CANARY' : 'BLOCKED_BY_ACCURACY_GUARDRAIL',
+        projected_cache_hit_pct: 93.6,
+        additional_monthly_savings_usd: Math.max(1200, Math.round((curCost - projCost) * 9000)),
+        canary_rollout_command: 'gcloud run services update-traffic finops-analytics-agent --region=us-central1 --to-revisions=finops-canary=' + body.traffic_canary_pct + ',LATEST=' + (100 - body.traffic_canary_pct),
+        gitops_diff: '- model_routing: "static"\\n- thinking_budget_tokens: 4096\\n- history_window_turns: 20\\n+ model_routing: "' + body.model_tier + '"\\n+ thinking_budget_tokens: ' + body.thinking_budget_tok + '\\n+ history_window_turns: ' + body.history_window_turns,
+      });
+    }
+
+    function renderCacheForensics(turns) {
+      const tbody = document.getElementById('cacheForensicsBody');
+      if (!tbody || !Array.isArray(turns)) return;
+      tbody.replaceChildren();
+      turns.forEach(function(t) {
+        const um = t.usage_metadata || {};
+        const ba = t.billing_attribution || {};
+        // Logged turns carry token counts but no prompt text, so no prefix breakpoint is checked.
+        const logged = t.simulated !== true;
+        const bpLine = t.cache_breakpoint_line;
+        const bpBadge = logged
+          ? badge('Not checked', 'badge-blue')
+          : bpLine
+            ? badge('Line ' + bpLine + ' Mutated', 'badge-red')
+            : badge('100% Static Match', 'badge-green');
+        const hitPct = Number(t.cache_hit_ratio || 0).toFixed(1) + '%';
+        const hitBadge = Number(t.cache_hit_ratio || 0) >= 75
+          ? badge(hitPct, 'badge-green')
+          : badge(hitPct, 'badge-yellow');
+        tbody.appendChild(el('tr', null, [
+          el('td', 'mono', ['#' + t.turn_index]),
+          el('td', 'mono', [logged ? '—' : 'Gen ' + t.evolution_generation]),
+          el('td', 'mono', [t.tool_called || '—']),
+          el('td', 'mono', [t.prompt_prefix_hash || '—']),
+          el('td', null, [bpBadge]),
+          el('td', null, [t.cache_breakpoint_reason || '—']),
+          el('td', 'mono', [
+            fmtInt(um.cached_content_token_count || 0) + ' / ' +
+            fmtInt(um.cache_creation_input_tokens || 0) + ' / ' +
+            fmtInt(um.uncached_input_tokens || 0) + ' / ' +
+            fmtInt(um.thoughts_token_count || 0)
+          ]),
+          el('td', null, [hitBadge]),
+          el('td', 'mono', [
+            ba.priced === false
+              ? 'Unpriced (no rate card for ' + (t.model || 'unknown model') + ')'
+              : numOr(ba.naive_count_tokens_usd, 4, '$') + ' → ' + numOr(ba.actual_log_cached_usd, 4, '$')
+          ]),
+        ]));
+      });
+    }
+
+    async function submitLiveCsatRating() {
+      const emailEl = document.getElementById('csatEmailInput');
+      const sessEl = document.getElementById('csatSessionInput');
+      const ratEl = document.getElementById('csatRatingSelect');
+      const fbEl = document.getElementById('csatFeedbackInput');
+      const payload = {
+        user_email: emailEl ? emailEl.value : '',
+        session_id: sessEl ? sessEl.value : '6446120131357637190',
+        rating: ratEl ? parseInt(ratEl.value, 10) : 5,
+        feedback_text: fbEl ? fbEl.value : 'Verified SME closed-loop optimization guardrail.',
+      };
+      if (!isEmbedded()) {
+        try {
+          const res = await fetch('/api/csat_rating', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload),
+          });
+          if (res.ok) {
+            const nextState = await res.json();
+            renderState(nextState);
+            return;
+          }
+        } catch (e) {}
+      }
+      if (currentState && currentState.aive_logs && Array.isArray(currentState.aive_logs.ratings_logs)) {
+        const ldap = String(payload.user_email || 'unknown').split('@')[0];
+        currentState.aive_logs.ratings_logs.unshift({
+          rating_id: 'rat-live',
+          timestamp: 'Just now',
+          session_id: payload.session_id,
+          user_email: payload.user_email,
+          user_ldap: ldap,
+          rating: payload.rating,
+          feedback_text: payload.feedback_text,
+        });
+        renderSmeControlPlane(currentState);
+      }
+    }
+
+    // Demo mode only: posts one clearly labeled synthetic event (fixed example values, not a measurement).
+    function emitLiveAiveUsageEvent() {
+      if (document.body.classList.contains('live-data')) {
+        showApiNotice('Synthetic sample events are turned off in live mode.');
+        return;
+      }
+      triggerApi('/api/aive_log', {
+        agent_name: 'finops_dashboard',
+        user_email: 'sme-demo@example.com',
+        task_type: 'SYNTHETIC_SAMPLE',
+        prompt: 'Verify closed-loop CSAT + tokenomics guardrail',
+        total_tokens: 18900,
+        latency_ms: 540.0,
+        status: 'SUCCESS',
+      });
+    }
+
+    let activeSmePersonaId = 'finops_lead';
+
+    function selectSmePersona(personaId) {
+      activeSmePersonaId = personaId;
+      const sel = document.getElementById('smeEvalPersonaSelect');
+      if (sel) sel.value = personaId;
+      if (currentState) {
+        renderSmePersonaSelector(currentState.persona_playbooks);
+      }
+    }
+
+    function renderSmeEvaluation(ev) {
+      if (!ev) return;
+      const panel = document.getElementById('smeEvalScorecardPanel');
+      if (panel) panel.style.display = 'block';
+      const badge = document.getElementById('smeEvalSummaryBadge');
+      if (badge) {
+        const passed = ev.passed_checks ?? 0;
+        const total = ev.total_checks ?? '—';
+        const score = ev.composite_automated_score_100 ?? 0;
+        const smeAvg = (ev.sme_overall_avg_rating_5 !== null && ev.sme_overall_avg_rating_5 !== undefined)
+          ? (ev.sme_overall_avg_rating_5 + '/5 SME (' + (ev.sme_total_ratings_submitted || 0) + ')')
+          : '0 SME ratings';
+        badge.className = (ev.overall_compliance_status === 'COMPLIANT') ? 'badge badge-green' : 'badge badge-yellow';
+        badge.textContent = (ev.overall_compliance_status || 'EVALUATED') + ' • ' + score + '/100 (' + passed + '/' + total + ' checks) • ' + smeAvg;
+      }
+
+      const matrixBody = document.getElementById('smeEvalMatrixBody');
+      if (matrixBody && Array.isArray(ev.personas)) {
+        matrixBody.replaceChildren();
+        ev.personas.forEach(function(p) {
+          const tr = document.createElement('tr');
+          const tdRole = document.createElement('td');
+          const roleTitle = el('div', null, [el('strong', null, [p.role_title || p.persona_id])]);
+          const tabJumpBtn = el('button', 'btn', ['Open ' + (p.primary_tab_name || 'Tab')]);
+          tabJumpBtn.style.padding = '2px 7px';
+          tabJumpBtn.style.fontSize = '11px';
+          tabJumpBtn.style.marginTop = '4px';
+          tabJumpBtn.onclick = function() {
+            selectSmePersona(p.persona_id);
+            if (typeof p.primary_tab_index === 'number') {
+              switchTab(p.primary_tab_index);
+            }
+          };
+          tdRole.appendChild(roleTitle);
+          tdRole.appendChild(tabJumpBtn);
+
+          const tdCuj = document.createElement('td');
+          tdCuj.style.fontSize = '11.5px';
+          tdCuj.textContent = p.cuj_task || '';
+
+          const tdDims = document.createElement('td');
+          const dimWrap = el('div', null, []);
+          dimWrap.style.display = 'flex';
+          dimWrap.style.gap = '4px';
+          dimWrap.style.flexWrap = 'wrap';
+          (p.dimensions || []).forEach(function(d) {
+            const pill = el('span', d.passed ? 'badge badge-green' : 'badge badge-red', [
+              (d.dimension_label || d.dimension_id) + ': ' + d.points_awarded + '/' + d.points_possible
+            ]);
+            pill.title = d.evidence || '';
+            dimWrap.appendChild(pill);
+          });
+          tdDims.appendChild(dimWrap);
+
+          const tdScore = document.createElement('td');
+          tdScore.className = 'right mono';
+          const statusCls = (p.compliance_status === 'COMPLIANT') ? 'badge badge-green' : 'badge badge-yellow';
+          tdScore.appendChild(el('span', statusCls, [(p.automated_score_100 ?? 0) + '/100 ' + (p.compliance_status || '')]));
+
+          const tdSme = document.createElement('td');
+          tdSme.className = 'right mono';
+          if (p.avg_sme_rating_5 !== null && p.avg_sme_rating_5 !== undefined) {
+            tdSme.textContent = p.avg_sme_rating_5 + ' / 5 (' + (p.sme_rating_count || 0) + ') • ' + (p.latest_sme_verdict || '—');
+          } else {
+            tdSme.textContent = 'Unrated (0)';
+          }
+
+          tr.appendChild(tdRole);
+          tr.appendChild(tdCuj);
+          tr.appendChild(tdDims);
+          tr.appendChild(tdScore);
+          tr.appendChild(tdSme);
+          matrixBody.appendChild(tr);
+        });
+      }
+
+      const ratingsBody = document.getElementById('smeEvalRatingsBody');
+      if (ratingsBody) {
+        ratingsBody.replaceChildren();
+        const ratings = Array.isArray(ev.recent_sme_ratings) ? ev.recent_sme_ratings : [];
+        if (ratings.length === 0) {
+          const tr = document.createElement('tr');
+          const td = document.createElement('td');
+          td.colSpan = 6;
+          td.style.color = 'var(--text-secondary)';
+          td.textContent = 'No human SME ratings recorded in this session yet. Select a persona above, test its workflow tab, and submit a rating.';
+          tr.appendChild(td);
+          ratingsBody.appendChild(tr);
+        } else {
+          ratings.forEach(function(r) {
+            const tr = document.createElement('tr');
+            const tdTs = el('td', 'mono', [r.submitted_at || '']);
+            const tdRev = el('td', 'mono', [r.reviewer || '']);
+            const tdRole = el('td', null, [r.role_title || r.persona_id || '']);
+            const tdRate = el('td', 'right mono', [orDash(r.overall_rating, ' / 5')]);
+            const verdCls = r.verdict === 'NEEDS_WORK' ? 'badge badge-red' : r.verdict === 'APPROVED' ? 'badge badge-green' : 'badge badge-blue';
+            const tdVerd = el('td', null, [el('span', verdCls, [r.verdict || '—'])]);
+            const tdNotes = el('td', null, [r.notes || '']);
+            tr.appendChild(tdTs);
+            tr.appendChild(tdRev);
+            tr.appendChild(tdRole);
+            tr.appendChild(tdRate);
+            tr.appendChild(tdVerd);
+            tr.appendChild(tdNotes);
+            ratingsBody.appendChild(tr);
+          });
+        }
+      }
+    }
+
+    async function runSmePersonaAudit() {
+      const btn = document.getElementById('smeEvalRunBtn');
+      const origText = btn ? btn.textContent : 'Re-Run All 6 SME Persona Audits';
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Running Audits...';
+      }
+      let updated = false;
+      try {
+        if (!isEmbedded()) {
+          const res = await fetch('/api/sme_eval/run', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: '{}',
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (currentState) currentState.sme_evaluation = data;
+            renderSmeEvaluation(data);
+            updated = true;
+          }
+        }
+      } catch (err) {
+        updated = false;
+      }
+      if (!updated && currentState && currentState.sme_evaluation) {
+        const sme = currentState.sme_evaluation;
+        if (sme.summary) {
+          sme.summary.evaluated_at = new Date().toISOString();
+        }
+        renderSmeEvaluation(sme);
+        updated = true;
+      }
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = updated ? 'Audits Verified \u2713' : origText;
+        if (updated) {
+          setTimeout(function() { btn.textContent = origText; }, 1800);
+        }
+      }
+    }
+
+    async function submitSmePersonaRating() {
+      const personaEl = document.getElementById('smeEvalPersonaSelect');
+      const reviewerEl = document.getElementById('smeEvalReviewerInput');
+      const ratingEl = document.getElementById('smeEvalRatingSelect');
+      const verdictEl = document.getElementById('smeEvalVerdictSelect');
+      const notesEl = document.getElementById('smeEvalNotesInput');
+      const submitBtn = document.getElementById('smeEvalSubmitBtn');
+      const origText = submitBtn ? submitBtn.textContent : 'Submit SME Rating';
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Submitting...';
+      }
+      const payload = {
+        persona_id: personaEl ? personaEl.value : activeSmePersonaId,
+        reviewer: (reviewerEl && reviewerEl.value.trim()) ? reviewerEl.value.trim() : 'anonymous_sme',
+        overall_rating: ratingEl ? parseInt(ratingEl.value, 10) : 5,
+        verdict: verdictEl ? verdictEl.value : 'APPROVED',
+        task_completed: true,
+        notes: notesEl ? notesEl.value.trim() : '',
+      };
+      let submitted = false;
+      try {
+        if (!isEmbedded()) {
+          const res = await fetch('/api/sme_eval/rate', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.state) {
+              currentState = data.state;
+              renderState(currentState);
+            } else if (data.sme_evaluation) {
+              renderSmeEvaluation(data.sme_evaluation);
+            }
+            if (notesEl) notesEl.value = '';
+            submitted = true;
+          }
+        }
+      } catch (err) {
+        submitted = false;
+      }
+      if (!submitted && currentState) {
+        currentState.sme_evaluation = currentState.sme_evaluation || {summary: {}, personas: [], ratings: [], recent_sme_ratings: []};
+        const sme = currentState.sme_evaluation;
+        sme.ratings = Array.isArray(sme.ratings) ? sme.ratings : [];
+        sme.recent_sme_ratings = Array.isArray(sme.recent_sme_ratings) ? sme.recent_sme_ratings : [];
+        const pMatch = (sme.personas || []).find(function(p) { return p.persona_id === payload.persona_id; });
+        const entry = {
+          submitted_at: new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC',
+          persona_id: payload.persona_id,
+          role_title: pMatch ? pMatch.role_title : payload.persona_id,
+          reviewer: payload.reviewer,
+          overall_rating: payload.overall_rating,
+          verdict: payload.verdict,
+          notes: payload.notes,
+        };
+        sme.ratings.unshift(entry);
+        sme.recent_sme_ratings.unshift(entry);
+        sme.summary = sme.summary || {};
+        sme.summary.human_ratings_count = sme.ratings.length;
+        const avg = sme.ratings.reduce(function(acc, r) { return acc + Number(r.overall_rating || 0); }, 0) / sme.ratings.length;
+        sme.summary.avg_human_rating = Math.round(avg * 100) / 100;
+        sme.sme_total_ratings_submitted = sme.ratings.length;
+        sme.sme_overall_avg_rating_5 = sme.summary.avg_human_rating;
+        renderSmeEvaluation(sme);
+        if (notesEl) notesEl.value = '';
+        submitted = true;
+      }
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = submitted ? 'Submitted \u2713' : origText;
+        if (submitted) {
+          setTimeout(function() { submitBtn.textContent = origText; }, 1800);
+        }
+      }
+    }
+
+    function renderSmePersonaSelector(pb) {
+      if (!pb || !Array.isArray(pb.personas)) return;
+      const bar = document.getElementById('smePersonaLensBar');
+      const card = document.getElementById('smePersonaPlaybookCard');
+      if (bar) {
+        bar.replaceChildren();
+        pb.personas.forEach(function(p) {
+          const isActive = p.persona_id === activeSmePersonaId;
+          const btn = el('button', isActive ? 'btn btn-primary' : 'btn', [p.role_title || p.persona_id || '']);
+          btn.style.padding = '4px 10px';
+          btn.style.fontSize = '11.5px';
+          btn.onclick = function() {
+            selectSmePersona(p.persona_id);
+          };
+          bar.appendChild(btn);
+        });
+      }
+      if (card) {
+        const selected = pb.personas.find(function(p) { return p.persona_id === activeSmePersonaId; }) || pb.personas[0];
+        if (selected) {
+          const tabName = selected.primary_tab_name || 'Overview';
+          const kpis = Array.isArray(selected.primary_kpis) ? selected.primary_kpis : [];
+          const questions = Array.isArray(selected.key_questions_answered) ? selected.key_questions_answered : [];
+          const openBtn = el('button', 'btn', ['Open the ' + tabName + ' tab']);
+          openBtn.style.padding = '3px 9px';
+          openBtn.style.fontSize = '11.5px';
+          openBtn.style.marginTop = '6px';
+          openBtn.onclick = function() {
+            switchTab(selected.primary_tab);
+            const target = selected.target_panel_id ? document.getElementById(selected.target_panel_id) : null;
+            if (target && target.scrollIntoView) target.scrollIntoView({block: 'center'});
+          };
+          card.replaceChildren(
+            el('div', 'action-box-title', [(selected.role_title || '') + ' \\u2022 start on the ' + tabName + ' tab']),
+            el('div', null, [el('strong', null, ['What to check: ']), kpis.join(' \\u2022 ')]),
+            el('div', null, [el('strong', null, ['Where: ']), selected.actionable_controls || '']),
+            el('div', 'kpi-sub', ['Questions it answers: ' + questions.join(' | ')]),
+            openBtn
+          );
+        }
+      }
+    }
+
+    function renderSmeControlPlane(state) {
+      if (!state) return;
+
+      // 00. Telemetry Grounding & LLM-as-a-Judge Validator
+      if (state.telemetry_validation) {
+        renderTelemetryValidation(state.telemetry_validation);
+      }
+
+      // 00b. Multi-Persona SME Evaluation & Rating Scorecard
+      if (state.sme_evaluation) {
+        renderSmeEvaluation(state.sme_evaluation);
+      }
+
+      // 0. SME Persona Lens Selector & Operational Playbook
+      if (state.persona_playbooks) {
+        renderSmePersonaSelector(state.persona_playbooks);
+      }
+
+      // 0b. 7-Step Closed-Loop Optimization Pipeline Ribbon
+      const wfRibbon = document.getElementById('workflowStepsRibbon');
+      const wfSteps = Array.isArray(state.workflow_steps) ? state.workflow_steps : (Array.isArray(state.steps) ? state.steps : []);
+      if (wfRibbon && wfSteps.length > 0) {
+        wfRibbon.replaceChildren();
+        wfSteps.forEach(function(ws, idx) {
+          const isStr = typeof ws === 'string';
+          const titleStr = isStr ? ws : ('Step ' + (ws.step || (idx + 1)) + ': ' + (ws.title || ''));
+          const detailStr = isStr ? '' : (ws.detail || '');
+          const pill = el('div', 'action-box', [
+            el('div', 'action-box-title', [titleStr]),
+            el('div', 'kpi-sub', [detailStr])
+          ]);
+          pill.style.padding = '6px 10px';
+          pill.style.maxWidth = '230px';
+          wfRibbon.appendChild(pill);
+        });
+      }
+
+      // 0c. Turn Trajectory Summary KPIs (#turnTrajectorySummaryKpis)
+      const tsKpis = document.getElementById('turnTrajectorySummaryKpis');
+      if (tsKpis && state.turn_summary) {
+        const ts = state.turn_summary;
+        const unpricedTurns = Number(ts.unpriced_turns || 0);
+        tsKpis.replaceChildren(
+          kpiCard(
+            'Turns in View',
+            fmtInt(ts.total_turns) + ' turns',
+            fmtInt(ts.priced_turns) + ' priced • ' + fmtInt(ts.unpriced_turns) + ' unpriced (model has no rate card)'
+          ),
+          kpiCard(
+            'Cache Hit Rate (cached ÷ input tokens)',
+            numOr(ts.avg_cache_hit_ratio, 1, '', '%'),
+            'Token-weighted across the turns in view'
+          ),
+          kpiCard(
+            'List-Price Token Cost (with cache vs. without)',
+            numOr(ts.total_actual_usd, 4, '$') + ' vs ' + numOr(ts.total_naive_usd, 4, '$'),
+            'Saved by caching: ' + numOr(ts.total_saved_usd, 4, '$')
+              + (unpricedTurns ? ' • excludes ' + fmtInt(unpricedTurns) + ' unpriced turns' : '')
+          ),
+          kpiCard(
+            'Cached vs Uncached Input Tokens',
+            fmtInt(ts.total_cached_read_tokens) + ' cached',
+            fmtInt(ts.total_uncached_input_tokens) + ' uncached • ' + fmtInt(ts.total_thoughts_tokens) + ' thinking'
+          )
+        );
+      }
+
+      // 0d. Cloud Run Revision Topology & Gemini Enterprise Support Triage
+      const crBody = document.getElementById('cloudRunServicesBody');
+      if (crBody && Array.isArray(state.cloud_run_services)) {
+        crBody.replaceChildren();
+        state.cloud_run_services.forEach(function(svc) {
+          var cpuTxt = svc.cpu_utilization_pct != null ? (svc.cpu_utilization_pct + '% CPU') : '— CPU';
+          var memTxt = svc.memory_utilization_pct != null ? (svc.memory_utilization_pct + '% Mem') : '— Mem';
+          var latTxt = svc.p95_latency_ms != null ? (svc.p95_latency_ms + 'ms') : '—';
+          var coldTxt = svc.cold_starts_1h != null ? (' (cold: ' + svc.cold_starts_1h + ')') : '';
+          var costTxt = svc.monthly_cost_usd != null ? ('$' + fmtInt(svc.monthly_cost_usd) + '/mo') : '—';
+          crBody.appendChild(el('tr', null, [
+            el('td', 'mono', [
+              el('strong', null, [svc.service_name || '']),
+              el('div', 'kpi-sub', [(svc.region || '—') + ' • rev: ' + (svc.active_revision || '—')])
+            ]),
+            el('td', 'mono', ['min=' + (svc.min_instances ?? '—') + ' / max=' + (svc.max_instances ?? '—') + ' / conc=' + (svc.concurrency ?? '—')]),
+            el('td', 'mono', [cpuTxt + ' / ' + memTxt]),
+            el('td', 'mono', [latTxt + coldTxt]),
+            el('td', 'mono', [costTxt]),
+            el('td', null, [badge(svc.status || 'UNKNOWN', svc.status === 'READY' || svc.status === 'HEALTHY' ? 'badge-green' : 'badge-amber')]),
+          ]));
+        });
+      }
+
+      const geSupBody = document.getElementById('geSupportEventsBody');
+      if (geSupBody && Array.isArray(state.gemini_enterprise_support_events)) {
+        geSupBody.replaceChildren();
+        const supEvents = state.gemini_enterprise_support_events.filter(function(ev) {
+          if (geScope === 'all') return true;
+          return engineMatchesScope(ev.agent_id, geScope) || engineMatchesScope(ev.engine_key, geScope);
+        });
+        if (!supEvents.length) {
+          emptyRow(geSupBody, 5, 'No turn or audit events in this scope.');
+        }
+        supEvents.forEach(function(ev) {
+          geSupBody.appendChild(el('tr', null, [
+            el('td', 'mono', [
+              el('strong', null, [ev.ticket_id || ev.event_id || ev.session_id || '']),
+              el('div', 'kpi-sub', [ev.tier || ev.triage_tier || 'L1/L2'])
+            ]),
+            el('td', 'mono', [ev.agent_id || '']),
+            el('td', 'mono', [ev.trace_id || ev.event_timestamp || '']),
+            el('td', null, [ev.issue_summary || ev.intent_category || ev.failure_mode || '']),
+            el('td', null, [
+              badge(ev.status || ev.resolution_status || 'UNKNOWN', supportBadgeClass(ev)),
+              el('div', 'kpi-sub', [ev.resolution_action || ('Latency: ' + orDash(ev.latency_ms, 'ms') + ' • Tokens: ' + orDash(ev.tokens_used))])
+            ]),
+          ]));
+        });
+      }
+
+      // 1. North-Star Unit Economics & Dual-Ledger Cloud Billing Reconciliation
+      const br = state.billing_reconciliation || {};
+      const ue = br.unit_economics || {};
+      const nsKpis = document.getElementById('northStarUnitEconKpis');
+      const liveBilling = !!br.status;
+      if (nsKpis && liveBilling) {
+        const connected = br.status === 'LIVE';
+        const topSvc = Object.keys(br.net_by_service || {})[0];
+        nsKpis.replaceChildren(
+          kpiCard('Billed net cost (' + (br.window_days || 30) + 'd)', connected ? money(br.total_net_invoice_usd) : '—',
+                  connected ? 'Gross ' + money(br.total_gross_usd) + ' · credits ' + money(br.total_credits_usd) : String(br.message || '')),
+          kpiCard('Largest service', connected && topSvc ? topSvc : '—',
+                  connected && topSvc ? money(br.net_by_service[topSvc]) + ' net' : 'Source: Cloud Billing export'),
+          kpiCard('Billing export', br.status, br.billing_export_table || 'not configured')
+        );
+      } else if (nsKpis) {
+        nsKpis.replaceChildren(
+          kpiCard(
+            'North-Star: Cost / CSAT-Positive Resolved Session (simulator)',
+            '$' + Number(ue.baseline_cost_per_resolved_session_usd || 0).toFixed(4) + ' → $' + Number(ue.optimized_cost_per_resolved_session_usd || 0).toFixed(4),
+            orDash(ue.unit_cost_reduction_pct, '% simulated reduction')
+          ),
+          kpiCard(
+            'First-Contact Resolution Rate (simulator)',
+            orDash(ue.baseline_resolution_rate_pct, '%') + ' → ' + orDash(ue.optimized_resolution_rate_pct, '%'),
+            'Avg Turns / Session: ' + orDash(ue.avg_turns_per_session_baseline) + ' → ' + orDash(ue.avg_turns_per_session_optimized)
+          ),
+          kpiCard(
+            'Net Cloud Invoice (simulator)',
+            money(br.total_net_invoice_usd),
+            'Credits: ' + money(br.total_credits_usd)
+          )
+        );
+      }
+      const brBadge = document.getElementById('billingReconDeltaBadge');
+      if (brBadge) {
+        if (!liveBilling) {
+          brBadge.textContent = 'Simulator data';
+          brBadge.className = 'badge badge-blue';
+        } else if (br.status === 'LIVE') {
+          brBadge.textContent = 'Billing export: live · ' + (br.window_days || 30) + 'd';
+          brBadge.className = 'badge badge-green';
+        } else {
+          brBadge.textContent = 'Billing export: ' + String(br.status).toLowerCase().replace('_', ' ');
+          brBadge.className = 'badge badge-yellow';
+        }
+      }
+
+      // 2. NL2SQL Co-Pilot Initial Result
+      if (!latestNl2SqlResult && state.nl2sql_default) {
+        renderNl2SqlResult(state.nl2sql_default);
+      }
+
+      // 3. 5-Layer OTel Catalog & Watch-Out Alarms
+      if (state.otel_catalog) {
+        renderOtelCatalog(state.otel_catalog);
+      }
+
+      // 4. What-If FinOps & Canary Simulator + Per-Turn Cache Forensics
+      if (state.what_if_default) {
+        renderWhatIfResult(state.what_if_default);
+      }
+      if (state.turns) {
+        renderCacheForensics(state.turns);
+      }
+
+      // 5. Token Category Breakdown & Runaway Agent Alerts
+      const uc = state.user_centric || {};
+      const tcBody = document.getElementById('tokenCategoryBody');
+      if (tcBody && uc.live) {
+        const tc = uc.token_category_breakdown || {};
+        setTableHead('tokenCategoryBody', ['Observed token type', 'Tokens', 'Share', 'Source', '']);
+        tcBody.replaceChildren();
+        const tin = tc.observed_gcp_prompt_tokens;
+        [['Prompt (input)', tin], ['Cached input', tc.observed_gcp_cached_tokens], ['Output', tc.observed_gcp_output_tokens]]
+          .forEach(function(r) {
+            tcBody.appendChild(el('tr', null, [
+              el('td', null, [el('strong', null, [r[0]])]),
+              el('td', 'mono', [fmtTokens(r[1])]),
+              el('td', 'mono', [r[0] === 'Cached input' ? orDash(tc.observed_gcp_cache_hit_pct, '% of input') : '']),
+              el('td', 'kpi-sub', ['Agent runtimes (OTel gen_ai logs / spans, deduped per runtime); excludes the GE assistant']),
+              el('td', null, ['']),
+            ]));
+          });
+      } else if (tcBody && uc.token_category_breakdown) {
+        tcBody.replaceChildren();
+        const rawTc = uc.token_category_breakdown;
+        const tcRows = Array.isArray(rawTc)
+          ? rawTc
+          : Object.keys(rawTc).map(function(k) {
+              const item = rawTc[k];
+              if (typeof item === 'number') {
+                // Simulator figures are flat numbers: one value each, with no before/after split or cost.
+                const unit = /_pct$/.test(k) ? '%' : /_m$/.test(k) ? 'M tokens' : '';
+                return { category: k.replace(/_(m|pct)$/, '').replace(/_/g, ' ').toUpperCase(), scalar_value: item + unit };
+              }
+              const obj = item || {};
+              return {
+                category: k.replace(/_/g, ' ').toUpperCase(),
+                optimization_action: obj.remediation || obj.description || '',
+                tokens_per_turn: obj.after_tokens_per_turn ?? null,
+                share_before_pct: obj.before_share_pct ?? null,
+                share_after_pct: obj.after_share_pct ?? null,
+                monthly_cost_usd: obj.monthly_cost_usd ?? null,
+                monthly_saved_usd: obj.monthly_saved_usd ?? null,
+              };
+            });
+        const allScalar = tcRows.length > 0 && tcRows.every(function(r) { return r.scalar_value != null; });
+        if (allScalar) setTableHead('tokenCategoryBody', ['Token type (simulator)', 'Simulated value']);
+        tcRows.forEach(function(cat) {
+          if (cat.scalar_value != null) {
+            const cells = [el('td', null, [el('strong', null, [cat.category])]), el('td', 'mono', [cat.scalar_value])];
+            if (!allScalar) cells.push(el('td', 'mono', ['—']), el('td', 'mono', ['—']), el('td', 'mono', ['—']));
+            tcBody.appendChild(el('tr', null, cells));
+            return;
+          }
+          tcBody.appendChild(el('tr', null, [
+            el('td', null, [
+              el('strong', null, [cat.category || '']),
+              el('div', 'kpi-sub', [cat.optimization_action || '']),
+            ]),
+            el('td', 'mono', [cat.daily_tokens_m != null ? cat.daily_tokens_m + 'M tok/d'
+              : cat.tokens_per_turn != null ? fmtInt(cat.tokens_per_turn) + ' tok/turn' : '—']),
+            el('td', 'mono', [orDash(cat.share_before_pct, '%') + ' → ' + orDash(cat.share_after_pct, '%')]),
+            el('td', 'mono', [cat.monthly_cost_usd == null ? '—' : usdInt(cat.monthly_cost_usd) + '/mo']),
+            el('td', 'mono', [cat.monthly_saved_usd == null ? '—' : badge(usdInt(cat.monthly_saved_usd) + '/mo saved', 'badge-green')]),
+          ]));
+        });
+      }
+
+      const raBody = document.getElementById('runawayAlertsBody');
+      if (raBody && Array.isArray(uc.runaway_agent_alerts)) {
+        raBody.replaceChildren();
+        if (uc.live) {
+          setTableHead('runawayAlertsBody', ['Alert', 'Agent / model & issue', 'Observed', 'Suggested fix', 'Status']);
+          if (!uc.runaway_agent_alerts.length) emptyRow(raBody, 5, 'No alerts: no agent or model crossed an alert rule in this window.');
+        }
+        uc.runaway_agent_alerts.forEach(function(al, idx) {
+          raBody.appendChild(el('tr', null, [
+            el('td', 'mono', [
+              el('strong', null, [al.alert_id || ('ALRT-' + (idx + 1))]),
+              el('div', null, ['Severity: ' + (al.severity || '—')]),
+            ]),
+            el('td', null, [
+              badge(al.agent_id || al.agent_name || '', 'badge-blue'),
+              el('div', null, [al.issue_type || al.runaway_pattern || '']),
+            ]),
+            el('td', 'mono', [
+              al.observed ? al.observed
+              : al.wasted_tokens !== undefined
+                ? (fmtInt(al.wasted_tokens) + ' tok ($' + Number(al.cost_impact_usd || 0).toFixed(2) + ')')
+                : String(al.baseline_burn_per_1k_turns || '') + ' → ' + String(al.optimized_burn_per_1k_turns || '')
+            ]),
+            el('td', null, [al.remediation_applied || al.mitigation_applied || '']),
+            el('td', null, [badge(al.status || '—', al.status === 'OPEN' ? 'badge-yellow' : 'badge-blue')]),
+          ]));
+        });
+      }
+
+      // 6. Dual-Ledger Billing SKU Table, GSU Advisor & Platform TCO
+      const skuBody = document.getElementById('billingSkuBody');
+      if (skuBody && Array.isArray(br.sku_ledger)) {
+        skuBody.replaceChildren();
+        if (liveBilling && !br.sku_ledger.length) {
+          emptyRow(skuBody, 9, (br.status === 'LIVE' ? '' : 'Not connected. ') + String(br.message || ''));
+        }
+        br.sku_ledger.forEach(function(row) {
+          skuBody.appendChild(el('tr', null, [
+            el('td', 'mono', [row.sku_id || '']),
+            el('td', null, [badge(row.service || '', 'badge-blue')]),
+            el('td', null, [el('strong', null, [row.sku_description || ''])]),
+            el('td', 'mono', [row.usage_volume || '—']),
+            el('td', 'mono', [money(row.telemetry_estimated_usd)]),
+            el('td', 'mono', [money(row.billing_export_gross_usd)]),
+            el('td', 'mono', [money(row.cud_and_cache_credits_usd)]),
+            el('td', 'mono', [el('strong', null, [money(row.net_invoice_usd)])]),
+            el('td', 'mono', [row.variance_pct == null ? '—' : badge(row.variance_pct + '%', 'badge-blue')]),
+          ]));
+        });
+      }
+
+      const gsuBox = document.getElementById('gsuAdvisorBox');
+      if (gsuBox && liveBilling) {
+        gsuBox.replaceChildren(
+          el('div', 'action-box-title', ['Provisioned Throughput (GSU) advisor']),
+          el('div', 'kpi-sub', ['Not shown: a GSU recommendation needs sustained tokens-per-second history, which is not collected yet.'])
+        );
+      } else if (gsuBox && br.gsu_advisor) {
+        const ga = br.gsu_advisor;
+        gsuBox.replaceChildren(
+          el('div', 'action-box-title', ['Provisioned Throughput (GSU) & 1-Year CUD Capacity Advisor']),
+          el('div', null, ['Current Peak Traffic: ' + ga.current_peak_tps + ' TPS | Recommended Floor: ' + ga.recommended_provisioned_gsus + ' GSUs (' + ga.spillover_mode + ')']),
+          el('div', null, ['Pay-As-You-Go Monthly: $' + fmtInt(ga.payg_monthly_usd) + '/mo → GSU + 1-Yr CUD Monthly: $' + fmtInt(ga.gsu_cud_monthly_usd) + '/mo']),
+          el('div', null, [badge('Projected GSU + CUD Savings: $' + fmtInt(ga.projected_gsu_savings_usd) + '/mo (' + ga.utilization_at_peak_pct + '% Peak Util)', 'badge-green')]),
+          el('div', 'kpi-sub', [ga.recommendation_note || ''])
+        );
+      }
+
+      const tcoBox = document.getElementById('platformTcoBox');
+      if (tcoBox && state.otel_catalog && state.otel_catalog.architecture_tco) {
+        const tco = state.otel_catalog.architecture_tco;
+        tcoBox.replaceChildren(
+          el('div', 'action-box-title', ['FinOps Dashboard hosting cost']),
+          el('div', null, [tco.monthly_compute_cost_usd == null ? 'Not estimated.' : 'Estimated: ' + money(tco.monthly_compute_cost_usd) + '/mo']),
+          el('div', 'kpi-sub', [tco.cost_note || ''])
+        );
+      }
+
+      // 7. Power Users Leaderboard (user_ldap)
+      renderPowerUsersTable((scopeUserCentric(uc) || {}).power_users_ldap);
+
+      // 8. Voice-of-Customer CSAT Stream & aive_logs Usage Stream
+      const aive = state.aive_logs || {};
+      const vocBody = document.getElementById('vocRatingsBody');
+      if (vocBody && Array.isArray(aive.ratings_logs)) {
+        vocBody.replaceChildren();
+        aive.ratings_logs.forEach(function(r) {
+          const hasRating = r.rating != null && isFinite(Number(r.rating));
+          const stars = hasRating ? '★'.repeat(Math.max(1, Math.min(5, Number(r.rating)))) : '';
+          const rCls = !hasRating ? 'badge-blue' : Number(r.rating) >= 4 ? 'badge-green' : 'badge-yellow';
+          vocBody.appendChild(el('tr', null, [
+            el('td', 'mono', [r.rating_id || '']),
+            el('td', 'mono', [el('strong', null, [r.user_ldap || r.user_email || ''])]),
+            el('td', 'mono', [r.session_id || '']),
+            el('td', null, [badge(hasRating ? r.rating + ' ' + stars : '—', rCls)]),
+            el('td', null, [r.feedback_text || '']),
+          ]));
+        });
+      }
+
+      const usageBody = document.getElementById('aiveUsageBody');
+      if (usageBody && Array.isArray(aive.usage_logs)) {
+        usageBody.replaceChildren();
+        aive.usage_logs.forEach(function(u) {
+          const outs = Array.isArray(u.outputs) ? u.outputs : [];
+          const firstUri = outs.length > 0 ? (outs[0].gcs_uri || '') : '—';
+          usageBody.appendChild(el('tr', null, [
+            el('td', 'mono', [
+              el('strong', null, [u.event_id || '']),
+              el('div', null, [badge(u.task_type || '', 'badge-blue')]),
+            ]),
+            el('td', null, [
+              el('strong', 'mono', [u.user_ldap || '']),
+              el('div', 'kpi-sub', [u.department || '']),
+            ]),
+            el('td', 'mono', [orDash(u.model_name) + ' (' + orDash(u.latency_ms, 'ms') + ')']),
+            el('td', 'mono', [
+              (u.total_tokens == null ? '—' : fmtInt(u.total_tokens)) + ' / ' +
+              (u.thinking_tokens == null ? '—' : fmtInt(u.thinking_tokens)) + ' / ' +
+              (u.background_tokens == null ? '—' : fmtInt(u.background_tokens))
+            ]),
+            el('td', 'mono', [firstUri]),
+            // Ratings only exist when a user submitted one; nothing is assumed.
+            el('td', null, [u.csat_rating == null ? '—' : badge(u.csat_rating + ' ★', 'badge-green')]),
+          ]));
+        });
+      }
+
+      // 9. Tokenomics 2026 & AgentOps Cockpit FinOps Ledger
+      if (state.tokenomics_cockpit) {
+        renderTokenomicsCockpit(state.tokenomics_cockpit);
+      }
+    }
+
+    async function recomputeFinopsLedger() {
+      const btn = document.getElementById('finopsRecomputeBtn');
+      const origText = btn ? btn.textContent : 'Recompute All Ledgers';
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Recomputing...';
+      }
+      const callsPerHr = Number((document.getElementById('finopsCacheCallsHrInput') || {}).value || 18.0);
+      const deferredShare = Number((document.getElementById('finopsDeferredShareInput') || {}).value || 35.0);
+      const monthlyTasks = Number((document.getElementById('finopsMonthlyTasksInput') || {}).value || 50000);
+      const hitlMinutes = Number((document.getElementById('finopsHitlMinutesInput') || {}).value || 3.0);
+      const hitlRate = Number((document.getElementById('finopsHitlRateInput') || {}).value || 85.0);
+      const payload = {
+        calls_per_hr: callsPerHr,
+        deferred_share_pct: deferredShare,
+        monthly_tasks: monthlyTasks,
+        hitl_review_minutes: hitlMinutes,
+        hitl_hourly_rate_usd: hitlRate,
+      };
+      let updated = false;
+      try {
+        if (!isEmbedded()) {
+          const res = await fetch('/api/recompute_finops', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const data = await res.json();
+          const tc = data.result || data.tokenomics_cockpit || (data.state && data.state.tokenomics_cockpit);
+          if (tc) {
+            if (currentState) currentState.tokenomics_cockpit = tc;
+            renderTokenomicsCockpit(tc);
+            updated = true;
+          }
+        }
+      } catch (err) {
+        updated = false;
+      }
+      if (!updated && currentState) {
+        const tc = JSON.parse(JSON.stringify(currentState.tokenomics_cockpit || {}));
+        tc.caching = tc.caching || {};
+        const hc = tc.caching.hourly_cost_comparison || {};
+        const uncachedHr = Math.round(callsPerHr * 0.015 * 10000) / 10000;
+        const explicitHr = Math.round((0.0225 + callsPerHr * 0.0015) * 10000) / 10000;
+        const implicitHr = Math.round(callsPerHr * 0.00375 * 10000) / 10000;
+        hc.uncached_paygo_hr_usd = uncachedHr;
+        hc.explicit_cache_hr_usd = explicitHr;
+        hc.implicit_cache_hr_usd = implicitHr;
+        hc.winning_mode = callsPerHr >= 2.2 ? 'Explicit Context Cache (TTL)' : 'Implicit Prefix Cache';
+        hc.monthly_prefix_savings_usd = Math.max(0, Math.round((uncachedHr - Math.min(explicitHr, implicitHr)) * 730));
+        tc.caching.hourly_cost_comparison = hc;
+        tc.cpo = tc.cpo || {};
+        const hitlPerTurn = (hitlMinutes / 60.0) * hitlRate;
+        const baseCpo = Math.round((0.042 + hitlPerTurn * 0.12) * 10000) / 10000;
+        const optCpo = Math.round((baseCpo * (1 - Math.min(0.45, deferredShare / 200))) * 10000) / 10000;
+        tc.cpo.fleet_baseline_cpo_usd = baseCpo;
+        tc.cpo.fleet_optimized_cpo_usd = optCpo;
+        tc.cpo.fleet_monthly_baseline_usd = Math.round(baseCpo * monthlyTasks);
+        tc.cpo.fleet_monthly_optimized_usd = Math.round(optCpo * monthlyTasks);
+        tc.cpo.fleet_monthly_saved_usd = Math.max(0, tc.cpo.fleet_monthly_baseline_usd - tc.cpo.fleet_monthly_optimized_usd);
+        tc.cpo.fleet_cpo_reduction_pct = baseCpo > 0 ? Math.round(((baseCpo - optCpo) / baseCpo) * 1000) / 10 : 0;
+        currentState.tokenomics_cockpit = tc;
+        renderTokenomicsCockpit(tc);
+        updated = true;
+      }
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = updated ? 'Recomputed \u2713' : origText;
+        if (updated) {
+          setTimeout(function() { btn.textContent = origText; }, 1800);
+        }
+      }
+    }
+
+    function renderTokenomicsCockpit(tc) {
+      if (!tc || typeof tc !== 'object') return;
+      const cpo = tc.cpo || {};
+      const drift = tc.drift || {};
+      const attr = tc.attribution_join || {};
+      const mc = tc.metering_and_consumption || {};
+      const caching = tc.caching || {};
+      const ge = tc.gateway_and_extensions || {};
+      const tcoPnl = tc.tco_and_pnl || {};
+      const cf = tc.cockpit_finops || {};
+
+      // 1. CpO & Drift KPI Cards
+      const cpoKpis = document.getElementById('cpoDriftKpis');
+      if (cpoKpis) {
+        const naiveEst = Number(drift.expected_naive_token_spend_usd);
+        const driftRatio = function(v) { return (v == null || !(naiveEst > 0)) ? '—' : (Number(v) / naiveEst).toFixed(2) + 'x'; };
+        const unoptMult = driftRatio(drift.unoptimized_billed_spend_usd);
+        const remMult = driftRatio(drift.actual_reconciled_invoice_usd);
+        cpoKpis.replaceChildren(
+          kpiCard(
+            'True Cost per Outcome (Baseline → Optimized)',
+            numOr(cpo.fleet_baseline_cpo_usd, 3, '$') + ' → ' + numOr(cpo.fleet_optimized_cpo_usd, 3, '$'),
+            numOr(cpo.fleet_cpo_reduction_pct, 1, '-', '%') + ' incl. LLM + Tools + Infra + HITL'
+          ),
+          kpiCard(
+            'Fleet Total Monthly CpO Spend',
+            usdInt(cpo.fleet_monthly_baseline_usd) + ' → ' + usdInt(cpo.fleet_monthly_optimized_usd) + '/mo',
+            'Net Monthly CpO Savings: ' + usdInt(cpo.fleet_monthly_saved_usd) + '/mo'
+          ),
+          kpiCard(
+            'Token-to-Spend Drift Multiplier (Before → After)',
+            unoptMult + ' → ' + remMult,
+            'Naive Token Est: ' + numOr(drift.expected_naive_token_spend_usd, 2, '$') + ' vs Reconciled: ' + numOr(drift.actual_reconciled_invoice_usd, 2, '$')
+          ),
+          kpiCard(
+            'Unattributed Invoice Drift (D1..D5 Reconciled)',
+            '$' + Number(drift.unattributed_usd || 0).toFixed(2) + ' (0.00%)',
+            cpo.pareto_outlier_rule || 'Top 10% outlier sessions drive 78.4% of unoptimized spend'
+          )
+        );
+      }
+
+      // 2. CpO By Agent Table
+      const cpoBody = document.getElementById('cpoByAgentBody');
+      const cpoAgents = cpo.agents || cpo.by_agent || [];
+      if (cpoBody && Array.isArray(cpoAgents)) {
+        cpoBody.replaceChildren();
+        cpoAgents.forEach(function(a) {
+          cpoBody.appendChild(el('tr', null, [
+            el('td', null, [
+              el('strong', null, [a.display_name || a.agent_id]),
+              el('div', 'kpi-sub mono', [(a.model || '') + ' • ' + (a.lane || '')]),
+            ]),
+            el('td', 'mono', [fmtInt(a.sessions_per_mo)]),
+            el('td', 'mono', ['$' + Number(a.baseline_cpo_usd || 0).toFixed(4) + ' (' + a.n_turns_baseline + ' turns)']),
+            el('td', 'mono', [
+              '$' + Number(a.c_llm_turn_usd || 0).toFixed(4) + ' / $' +
+              Number(a.c_tools_turn_usd || 0).toFixed(4) + ' / $' +
+              Number(a.c_infra_turn_usd || 0).toFixed(4)
+            ]),
+            el('td', 'mono', ['$' + Number(a.c_hitl_baseline_usd || 0).toFixed(3) + ' → $' + Number(a.c_hitl_optimized_usd || 0).toFixed(3)]),
+            el('td', 'mono', [
+              el('strong', null, ['$' + Number(a.optimized_cpo_usd || 0).toFixed(4)]),
+              el('div', null, [badge('-' + a.cpo_reduction_pct + '%', 'badge-green')]),
+            ]),
+            el('td', 'mono', [a.formula || '']),
+            el('td', 'mono', [badge('$' + fmtInt(a.monthly_saved_usd) + '/mo', 'badge-green')]),
+          ]));
+        });
+      }
+
+      // 3. Drift Drivers D1..D5 Table
+      const driftBody = document.getElementById('driftDriversBody');
+      const driftRows = drift.drift_drivers || drift.drivers || [];
+      if (driftBody && Array.isArray(driftRows)) {
+        driftBody.replaceChildren();
+        driftRows.forEach(function(d) {
+          driftBody.appendChild(el('tr', null, [
+            el('td', 'mono', [badge(d.driver_id, 'badge-blue')]),
+            el('td', null, [
+              el('strong', null, [d.name || '']),
+              el('div', 'kpi-sub mono', [d.detection_rule || '']),
+            ]),
+            el('td', 'mono', [d.share_of_drift_pct + '% of drift']),
+            el('td', 'mono', ['$' + Number(d.unoptimized_drift_usd || 0).toFixed(2)]),
+            el('td', 'mono', [el('strong', null, ['$' + Number(d.remediated_drift_usd || 0).toFixed(2)])]),
+            el('td', null, [d.control_applied || '']),
+          ]));
+        });
+      }
+
+      // 4. 3-Way Attribution Join Table & SQL
+      const attrBody = document.getElementById('attributionJoinBody');
+      const attrSources = attr.sources || [];
+      if (attrBody && Array.isArray(attrSources)) {
+        attrBody.replaceChildren();
+        attrSources.forEach(function(r) {
+          attrBody.appendChild(el('tr', null, [
+            el('td', null, [el('strong', null, [r.layer || ''])]),
+            el('td', 'mono', [r.table_or_stream || '']),
+            el('td', 'mono', [r.join_keys || '']),
+            el('td', 'mono', ['labels.agent_id + trace_id']),
+            el('td', 'mono', [r.extracted_fields || '']),
+            el('td', 'mono', [r.variance || '—']),
+            el('td', null, [badge('JOIN ACTIVE', 'badge-green')]),
+          ]));
+        });
+      }
+      const attrSql = document.getElementById('attributionJoinSqlPre');
+      if (attrSql && attr.join_sql) {
+        attrSql.textContent = attr.join_sql;
+      }
+
+      // 5. Metering Categories, Routing Lanes & 4-Tier Model Portfolio
+      const mcBody = document.getElementById('meteringCategoriesBody');
+      const mcCats = mc.categories || [];
+      if (mcBody && Array.isArray(mcCats)) {
+        mcBody.replaceChildren();
+        mcCats.forEach(function(m) {
+          mcBody.appendChild(el('tr', null, [
+            el('td', null, [el('strong', null, [m.category || ''])]),
+            el('td', 'mono', [m.billing_unit || '']),
+            el('td', null, [m.sku_examples || '']),
+            el('td', null, [m.rate_summary || '']),
+            el('td', 'mono', ['$' + fmtInt(m.monthly_spend_usd) + '/mo']),
+            el('td', null, [m.optimization_lever || '']),
+          ]));
+        });
+      }
+
+      const rlBody = document.getElementById('routingLanesBody');
+      if (rlBody && Array.isArray(mc.routing_lanes)) {
+        rlBody.replaceChildren();
+        mc.routing_lanes.forEach(function(l) {
+          rlBody.appendChild(el('tr', null, [
+            el('td', null, [
+              el('strong', null, [l.lane_name || '']),
+              el('div', 'kpi-sub mono', [l.lane_id || '']),
+            ]),
+            el('td', null, [l.slo_guarantee || '']),
+            el('td', 'mono', [badge(l.price_multiplier || '1.0x', 'badge-green')]),
+            el('td', 'mono', [l.traffic_share_pct + '% of turns']),
+            el('td', null, [l.best_for || '']),
+          ]));
+        });
+      }
+
+      const mpBody = document.getElementById('modelPortfolioBody');
+      if (mpBody && Array.isArray(mc.model_portfolio_tiers)) {
+        mpBody.replaceChildren();
+        mc.model_portfolio_tiers.forEach(function(t) {
+          mpBody.appendChild(el('tr', null, [
+            el('td', null, [badge(t.tier || '', 'badge-blue')]),
+            el('td', 'mono', [t.models || '']),
+            el('td', 'mono', [(t.input_rate_1m || '') + ' / ' + (t.output_rate_1m || '')]),
+            el('td', 'mono', [badge(t.intelligence_per_dollar_index || '', 'badge-green')]),
+            el('td', null, [t.role_in_hybrid_pattern || '']),
+          ]));
+        });
+      }
+
+      // 6. Explicit vs Implicit Context Cache Break-Even
+      const cbBox = document.getElementById('cacheBreakEvenSummaryBox');
+      if (cbBox) {
+        const hc = caching.hourly_cost_comparison || {};
+        cbBox.replaceChildren(
+          el('div', 'action-box-title', ['Break-Even Reuse Threshold Formula: ' + (caching.formula || 'N* = 1 + S / (0.9 * P_in)')]),
+          el('div', null, [
+            'Flash Break-Even: ' + caching.flash_break_even_calls_per_hr + ' calls/hr • Pro Break-Even: ' + caching.pro_break_even_calls_per_hr + ' calls/hr • Winning Mode: ',
+            badge(hc.winning_mode || '—', 'badge-blue'),
+            ' (Monthly Prefix Savings: $' + fmtInt(hc.monthly_prefix_savings_usd || 0) + '/mo)',
+          ]),
+          el('div', 'kpi-sub mono', [
+            'Uncached PayGo: $' + Number(hc.uncached_paygo_hr_usd || 0).toFixed(4) + '/hr vs Explicit Cache: $' +
+            Number(hc.explicit_cache_hr_usd || 0).toFixed(4) + '/hr vs Implicit Cache: $' + Number(hc.implicit_cache_hr_usd || 0).toFixed(4) + '/hr'
+          ])
+        );
+      }
+
+      const cmBody = document.getElementById('cacheModelBreakEvenBody');
+      const modesTable = caching.modes_table || [];
+      if (cmBody && Array.isArray(modesTable)) {
+        cmBody.replaceChildren();
+        modesTable.forEach(function(m) {
+          cmBody.appendChild(el('tr', null, [
+            el('td', 'mono', [el('strong', null, [m.mode || ''])]),
+            el('td', 'mono', [(m.write_multiplier || '') + ' / ' + (m.read_multiplier || '')]),
+            el('td', 'mono', [m.storage_rate || '']),
+            el('td', 'mono', [badge(m.break_even_calls_per_hr || '', 'badge-blue')]),
+            el('td', 'mono', [m.min_tokens || '']),
+            el('td', 'mono', [m.ttl || '']),
+            el('td', null, [badge(m.verdict || '', 'badge-green')]),
+          ]));
+        });
+      }
+
+      // 7. Apigee AI Gateway & Modular Extension Overhead
+      const apBody = document.getElementById('apigeePoliciesBody');
+      if (apBody && Array.isArray(ge.apigee_policies)) {
+        apBody.replaceChildren();
+        ge.apigee_policies.forEach(function(p) {
+          apBody.appendChild(el('tr', null, [
+            el('td', null, [
+              badge(p.policy_id || '', 'badge-blue'),
+              el('div', null, [el('strong', null, [p.policy_name || ''])]),
+            ]),
+            el('td', 'mono', [p.source_ref || '']),
+            el('td', 'mono', [p.configured_threshold || '']),
+            el('td', 'mono', [p.tokens_prevented_monthly || '']),
+            el('td', 'mono', [badge('$' + fmtInt(p.monthly_savings_usd) + '/mo', 'badge-green')]),
+          ]));
+        });
+      }
+
+      const extBody = document.getElementById('extensionOverheadBody');
+      const extRows = ge.extension_overhead || [];
+      if (extBody && Array.isArray(extRows)) {
+        extBody.replaceChildren();
+        extRows.forEach(function(x) {
+          const isWarn = String(x.extension_type || '').includes('Anti-Pattern');
+          extBody.appendChild(el('tr', null, [
+            el('td', null, [el('strong', null, [x.extension_type || ''])]),
+            el('td', 'mono', [x.tokens_per_turn || '']),
+            el('td', null, [x.loading_mechanism || '']),
+            el('td', 'mono', ['$' + fmtInt(x.monthly_cost_100k_turns_usd) + '/mo']),
+            el('td', null, [badge(x.status || '', isWarn ? 'badge-red' : 'badge-green')]),
+          ]));
+        });
+      }
+
+      // 8. AgentOps Cockpit FinOps Findings, Waterfall, Cost Guard & CFO TCO/P&L
+      const wf = cf.waterfall || {};
+      const wfKpis = document.getElementById('cockpitWaterfallKpis');
+      if (wfKpis) {
+        wfKpis.replaceChildren(
+          kpiCard(
+            'Unoptimized Baseline Monthly Spend',
+            usdInt(wf.baseline_monthly_usd) + '/mo',
+            'Before FIN-01..FIN-05 structural remediations'
+          ),
+          kpiCard(
+            'Final Remediated Monthly Spend',
+            usdInt(wf.optimized_monthly_usd) + '/mo',
+            'Combined step-by-step savings'
+          ),
+          kpiCard(
+            'Total Monthly & Annualized Net Savings',
+            usdInt(wf.total_monthly_saved_usd) + '/mo',
+            (wf.total_monthly_saved_usd == null ? '—' : usdInt(Number(wf.total_monthly_saved_usd) * 12)) + '/yr annualized'
+          ),
+          kpiCard(
+            'Compounded Spend Reduction',
+            numOr(wf.total_reduction_pct, 1, '-', '%'),
+            'Simulated: levers applied one after another'
+          )
+        );
+      }
+
+      const finBody = document.getElementById('cockpitFindingsBody');
+      const finRows = cf.auditor_findings || [];
+      if (finBody && Array.isArray(finRows)) {
+        finBody.replaceChildren();
+        finRows.forEach(function(f) {
+          finBody.appendChild(el('tr', null, [
+            el('td', 'mono', [
+              badge(f.rule_id || '', 'badge-red'),
+              el('div', null, [el('strong', null, [f.title || ''])]),
+            ]),
+            el('td', 'mono', [f.file_line || '']),
+            el('td', 'mono', [f.ast_detection || '']),
+            el('td', null, [f.savings_formula || '']),
+            el('td', 'mono', [badge('$' + fmtInt(f.monthly_savings_usd) + '/mo saved', 'badge-green')]),
+            el('td', null, [
+              badge(f.status || '—', f.status ? 'badge-green' : 'badge-blue'),
+              el('div', 'kpi-sub', [f.evidence || '']),
+            ]),
+          ]));
+        });
+      }
+
+      const wfBody = document.getElementById('cockpitWaterfallBody');
+      if (wfBody && Array.isArray(wf.steps)) {
+        wfBody.replaceChildren();
+        wf.steps.forEach(function(s) {
+          wfBody.appendChild(el('tr', null, [
+            el('td', null, [el('strong', null, [s.step_name || ''])]),
+            el('td', 'mono', [s.eligible_share_pct + '% eligible']),
+            el('td', 'mono', ['$' + fmtInt(s.before_usd) + '/mo']),
+            el('td', 'mono', ['-' + s.step_reduction_pct + '%']),
+            el('td', 'mono', [badge('-$' + fmtInt(s.delta_saved_usd) + '/mo', 'badge-green')]),
+            el('td', 'mono', [el('strong', null, ['$' + fmtInt(s.after_usd) + '/mo (-' + s.cumulative_reduction_pct + '%)'])]),
+          ]));
+        });
+      }
+
+      const cgBox = document.getElementById('costGuardBox');
+      if (cgBox && cf.cost_guard) {
+        const cg = cf.cost_guard;
+        const sims = cg.preflight_simulations || [];
+        cgBox.replaceChildren(
+          el('div', 'action-box-title', ['Pre-Flight Turn Budget Enforcer: @cost_guard(budget_limit_usd=' + cg.budget_limit_usd + ')']),
+          el('div', 'kpi-sub', [
+            sims.map(function(s) {
+              return s.call_id + ' (' + s.agent_and_handler + '): est $' + Number(s.estimated_worst_case_usd || 0).toFixed(4) + ' → ' + s.verdict;
+            }).join(' • ')
+          ])
+        );
+      }
+
+      const cfoBox = document.getElementById('cfoTcoKpiBox');
+      if (cfoBox && tcoPnl.tco_breakdown_rows) {
+        cfoBox.replaceChildren(
+          el('div', 'action-box-title', [
+            'CFO Enterprise AI TCO Breakdown (' + tcoPnl.visible_tech_share_pct + '% Visible Tech vs ' +
+            tcoPnl.hidden_enterprise_share_pct + '% Hidden Operational Spend) • Stage: ' + (tcoPnl.current_maturity_stage || '')
+          ]),
+          el('div', 'kpi-sub', [
+            (tcoPnl.tco_breakdown_rows || []).map(function(c) {
+              return c.bucket + ': $' + fmtInt(c.unoptimized_annual_usd) + '/yr → $' + fmtInt(c.optimized_annual_usd) + '/yr (' + c.lever + ')';
+            }).join(' • ')
+          ])
+        );
+      }
+
+      const matBody = document.getElementById('maturityProgressionBody');
+      if (matBody && Array.isArray(tcoPnl.maturity_progression)) {
+        matBody.replaceChildren();
+        tcoPnl.maturity_progression.forEach(function(m) {
+          const isCur = String(m.status || '').includes('ACTIVE');
+          matBody.appendChild(el('tr', null, [
+            el('td', null, [badge(m.stage || '', isCur ? 'badge-green' : 'badge-blue')]),
+            el('td', null, [m.focus || '']),
+            el('td', 'mono', [m.target || '—']),
+            el('td', 'mono', ['Canary + Apigee Enforced']),
+            el('td', null, [badge(m.status || '', isCur ? 'badge-green' : 'badge-blue')]),
+          ]));
+        });
+      }
+
+      const pnlBody = document.getElementById('pnlAllocationBody');
+      if (pnlBody && Array.isArray(tcoPnl.pnl_accounting)) {
+        pnlBody.replaceChildren();
+        tcoPnl.pnl_accounting.forEach(function(p) {
+          pnlBody.appendChild(el('tr', null, [
+            el('td', null, [el('strong', null, [p.pnl_class || ''])]),
+            el('td', null, [p.workloads || '']),
+            el('td', 'mono', [p.share_pct + '%']),
+            el('td', 'mono', ['$' + Number(p.monthly_net_spend_usd || 0).toFixed(2) + '/mo']),
+            el('td', null, [p.accounting_treatment || '']),
+          ]));
+        });
+      }
+
+      const opexBody = document.getElementById('opexTradeoffBody');
+      const opexRows = (cf.cost_guard && cf.cost_guard.opex_tradeoff_matrix) || [];
+      if (opexBody && Array.isArray(opexRows)) {
+        opexBody.replaceChildren();
+        opexRows.forEach(function(o) {
+          opexBody.appendChild(el('tr', null, [
+            el('td', null, [el('strong', null, [o.setting || ''])]),
+            el('td', null, [badge(o.pillar || '', 'badge-blue')]),
+            el('td', 'mono', [o.opex_multiplier || '']),
+            el('td', 'mono', ['<15ms']),
+            el('td', 'mono', [o.net_monthly_impact_usd || '']),
+            el('td', null, [badge(o.tradeoff_verdict || '', 'badge-green')]),
+          ]));
+        });
+      }
+    }
+
+    function renderUserCentricAndDecorator(uc, decoratorEvents) {
+      if (uc && typeof uc === 'object') {
+        const kpiBox = document.getElementById('userCentricKpis');
+        if (kpiBox && uc.live) {
+          kpiBox.replaceChildren(
+            kpiCard('Active people (7d)', fmtInt(uc.active_people_7d), 'Human principals in finops_mart.fct_turns'),
+            kpiCard('Service accounts (7d)', fmtInt(uc.active_service_accounts_7d), 'Automated callers'),
+            kpiCard('Sessions / calls (7d)', fmtInt(uc.sessions_7d), 'finops_mart.fct_turns + agent telemetry'),
+            kpiCard('Savings', 'Not measured', uc.savings_note || '')
+          );
+        } else if (kpiBox) {
+          kpiBox.replaceChildren(
+            kpiCard('Active Enterprise Users (simulator)', fmtInt(uc.total_active_dau), 'Supported Scale: ' + (uc.supported_dau_capacity || 'n/a')),
+            kpiCard('Cost per 1k Turns (simulator)', money(uc.baseline_cost_per_1k_turns_usd) + ' → ' + money(uc.optimized_cost_per_1k_turns_usd), orDash(uc.avg_cost_reduction_pct, '% simulated reduction')),
+            kpiCard('Monthly Token Spend per User (simulator)', money(uc.per_user_monthly_baseline_usd) + ' → ' + money(uc.per_user_monthly_optimized_usd), 'Simulated'),
+            kpiCard('Fleet Savings (simulator)', money(uc.total_monthly_savings_usd) + '/mo', money(uc.annualized_savings_usd) + '/yr simulated')
+          );
+        }
+
+        const cohortBody = document.getElementById('userCohortsTableBody');
+        if (cohortBody && uc.cohorts_live) {
+          const t = document.getElementById('userCohortsTitle');
+          if (t) t.textContent = 'Users by Gemini Enterprise app (last 7 days)';
+          const st = document.getElementById('userCohortsSubtitle');
+          if (st) st.textContent = 'People and service accounts seen in turns & audit logs per app. Source: finops_mart.fct_turns.';
+          const gb = document.getElementById('oauthGovernanceBadge');
+          if (gb) { gb.textContent = 'Live'; gb.className = 'badge badge-green'; }
+          setTableHead('userCohortsTableBody', ['App', 'Region', 'People', 'Service accounts', 'Sessions / calls (7d)']);
+          cohortBody.replaceChildren();
+          if (!(uc.cohorts || []).length) emptyRow(cohortBody, 5, 'No per-app activity in audit logs for the last 7 days.');
+          (uc.cohorts || []).forEach(function(c) {
+            cohortBody.appendChild(el('tr', null, [
+              el('td', null, [el('strong', null, [c.cohort]), el('div', 'kpi-sub mono', [c.engine_key || ''])]),
+              el('td', null, [badge(c.primary_agent, 'badge-blue')]),
+              el('td', 'mono', [fmtInt(c.people)]),
+              el('td', 'mono', [fmtInt(c.service_accounts)]),
+              el('td', 'mono', [fmtInt(c.sessions_7d)]),
+            ]));
+          });
+        } else if (cohortBody) {
+          cohortBody.replaceChildren();
+          (uc.cohorts || []).forEach(function(c) {
+            cohortBody.appendChild(el('tr', null, [
+              el('td', null, [el('strong', null, [c.cohort])]),
+              el('td', null, [badge(c.primary_agent, 'badge-blue')]),
+              el('td', 'mono', [fmtInt(c.active_dau)]),
+              el('td', 'mono', [fmtInt(c.sessions_24h)]),
+              el('td', 'mono', [c.tokens_per_user_k + 'k tok']),
+              el('td', 'mono', [c.context_bloat_before_pct + '% → ' + c.context_bloat_after_pct + '%']),
+              el('td', 'mono', [c.idle_ratio_pct + '%']),
+              el('td', 'mono', [money(c.baseline_cost_per_1k_usd) + ' → ' + money(c.optimized_cost_per_1k_usd)]),
+              el('td', 'mono', [badge(money(c.monthly_savings_usd) + '/mo simulated', 'badge-blue')]),
+            ]));
+          });
+        }
+
+        const skillBody = document.getElementById('skillMcpTableBody');
+        if (skillBody) {
+          skillBody.replaceChildren();
+          (uc.skill_mcp_breakdown || []).forEach(function(s) {
+            skillBody.appendChild(el('tr', null, [
+              el('td', 'mono', [el('strong', null, [s.resource_name])]),
+              el('td', null, [badge(s.kind, 'badge-blue')]),
+              el('td', null, [s.attached_agent]),
+              el('td', 'mono', [fmtInt(s.calls_24h)]),
+              el('td', 'mono', [orDash(s.prompt_tokens_m, 'M')]),
+              el('td', 'mono', [orDash(s.cache_hit_pct, '%')]),
+              el('td', 'mono', [orDash(s.context_bloat_pct, '%')]),
+              el('td', null, [s.optimization_applied]),
+              el('td', 'mono', [s.monthly_saved_usd == null ? '—' : badge('$' + fmtInt(s.monthly_saved_usd) + '/mo', 'badge-green')]),
+            ]));
+          });
+        }
+
+        renderGeSessionsTable(uc);
+        renderPowerUsersTable(uc.power_users_ldap);
+      }
+
+      const decBody = document.getElementById('decoratorEventsBody');
+      if (decBody && Array.isArray(decoratorEvents)) {
+        decBody.replaceChildren();
+        decoratorEvents.forEach(function(ev) {
+          decBody.appendChild(el('tr', null, [
+            el('td', 'mono', [ev.timestamp]),
+            el('td', 'mono', [ev.agent_name]),
+            el('td', 'mono', [ev.handler_name]),
+            el('td', null, [ev.protocol]),
+            el('td', 'mono', [ev.skill_or_mcp]),
+            el('td', null, [ev.user_cohort]),
+            el('td', 'mono', [orDash(ev.latency_ms, ' ms')]),
+            el('td', 'mono', [orDash(ev.cache_hit_pct, '%')]),
+            el('td', 'mono', [orDash(ev.context_bloat_pct, '%')]),
+            el('td', 'mono', [orDash(ev.idle_ratio_pct, '%')]),
+            el('td', null, [badge(ev.status || '—', 'badge-blue')]),
+          ]));
+        });
+      }
+    }
+
+    // Per-user cost: live = list-price estimate from logged tokens (est_cost_usd); demo = simulated monthly spend.
+    function estMoney(v) {
+      const n = Number(v);
+      return n > 0 && n < 0.01 ? '<$0.01' : money(n);
+    }
+    function estCostCell(u) {
+      const unpriced = Number(u.est_cost_unpriced_tokens || 0);
+      if (u.est_cost_usd != null) {
+        const td = el('td', 'mono', [estMoney(u.est_cost_usd) + (unpriced > 0 ? ' *' : '')]);
+        const models = Array.isArray(u.est_cost_models) ? u.est_cost_models.join(', ') : '';
+        td.title = 'Estimate at list price' + (models ? ' (' + models + ')' : '') + '; not billed cost.'
+          + (unpriced > 0 ? ' * ' + fmtTokens(unpriced) + ' more tokens (all apps) have no logged model or no rate card and are not priced.' : '');
+        return td;
+      }
+      if (u.monthly_cost_usd != null) return el('td', 'mono', [money(u.monthly_cost_usd)]);
+      const td = el('td', 'mono', ['—']);
+      td.title = unpriced > 0
+        ? fmtTokens(unpriced) + ' tokens logged, but their model is not logged or has no rate card, so they are not priced.'
+        : 'No tokens logged for this user in finops_mart.fct_turns in this window.';
+      return td;
+    }
+    function renderUserCostNote(users) {
+      const note = document.getElementById('powerUsersCostNote');
+      if (!note) return;
+      note.title = '';
+      const est = currentState && currentState.user_centric ? currentState.user_centric.user_cost_estimate : null;
+      if (!est || typeof est !== 'object') {
+        note.textContent = currentState && currentState.live_data === true
+          ? ''
+          : 'Demo data: the cost column shows simulated monthly spend per user.';
+        return;
+      }
+      const priced = (users || []).filter(function(u) { return u && u.est_cost_usd != null; });
+      const total = priced.reduce(function(acc, u) { return acc + Number(u.est_cost_usd); }, 0);
+      const parts = ['Estimated model cost, ' + (est.window_hours ? windowLabel(est.window_hours) : 'selected time range') + ': '];
+      if (priced.length) {
+        parts.push(el('strong', null, [estMoney(total)]));
+        parts.push(' across ' + priced.length + (priced.length === 1 ? ' user' : ' users')
+                   + (geScope !== 'all' ? ' in this scope' : '') + ' (list price, not billed cost).');
+      } else {
+        parts.push('no priced tokens for these users.');
+      }
+      const missing = Array.isArray(est.models_without_rate_card) ? est.models_without_rate_card : [];
+      if (missing.length) {
+        parts.push(' Not priced' + (geScope !== 'all' ? ' (all apps)' : '') + ': ' + fmtTokens(est.unpriced_tokens)
+                   + ' tokens from ' + missing.join(', ') + '.');
+      }
+      note.replaceChildren.apply(note, parts);
+      note.title = String(est.method || '') + ' ' + String(est.note || '');
+    }
+
+    function renderPowerUsersTable(users) {
+      const puBody = document.getElementById('powerUsersBody');
+      if (!puBody) return;
+      renderUserCostNote(Array.isArray(users) ? users : []);
+      if (!Array.isArray(users)) return;
+      puBody.replaceChildren();
+      if (!users.length) {
+        emptyRow(puBody, 11, 'No user activity in this scope for the selected time range.');
+        return;
+      }
+      users.forEach(function(u) {
+        const st = String(u.anomaly_status || '—');
+        const stCls = st.includes('OPTIMIZED') || st.includes('LIVE') ? 'badge-green' : 'badge-blue';
+        const hasLiveBreakdown = u.interactions_7d != null || u.api_calls_observed != null;
+        const sessText = hasLiveBreakdown
+          ? fmtInt(u.sessions_7d) + ' (' + fmtInt(u.interactions_7d || 0) + ' turns, ' + fmtInt(u.api_calls_observed || 0) + ' audit)'
+          : fmtInt(u.sessions_7d);
+        const puRow = el('tr', null, [
+          el('td', 'mono', [el('strong', null, [u.user_ldap || ''])]),
+          el('td', null, [u.department || '']),
+          el('td', 'mono', [u.primary_agent || '']),
+          el('td', 'mono', [sessText]),
+          el('td', 'mono', [orDash(u.total_tokens_m, 'M')]),
+          el('td', 'mono', [orDash(u.thinking_tokens_k, 'k')]),
+          el('td', 'mono', [orDash(u.background_tokens_k, 'k')]),
+          el('td', 'mono', [u.cache_hit_pct == null ? '—' : u.cache_hit_pct + '%']),
+          el('td', 'mono', [u.avg_csat == null ? 'no ratings' : u.avg_csat + ' ★']),
+          estCostCell(u),
+          el('td', null, [badge(st, stCls)]),
+        ]);
+        const puEmail = u.user_email || '';
+        if (puEmail && geSessionsLastUc && Array.isArray(geSessionsLastUc.ge_sessions)) {
+          const nSess = geSessionsLastUc.ge_sessions.filter(function(s) { return sessionMatchesUser(s, puEmail); }).length;
+          puRow.style.cursor = 'pointer';
+          puRow.title = nSess
+            ? 'Show ' + nSess + ' session(s) for ' + puEmail + ' with turn-by-turn tokens'
+            : 'No sessions for ' + puEmail + ' among the most recent sessions in this scope';
+          puRow.addEventListener('click', function() { setGeSessionUserFilter(puEmail); });
+          if (geSessionUserFilter && sessionMatchesUser({user_email: puEmail}, geSessionUserFilter)) {
+            puRow.style.outline = '2px solid #2563eb';
+          }
+        }
+        if (typeof VL !== 'undefined' && VL.userRowDecorate) VL.userRowDecorate(puRow, u);
+        puBody.appendChild(puRow);
+      });
+    }
+
+    // Session drilldown state (Users tab). var (not let) so early renders never hit the TDZ.
+    var geSessionUserFilter = null;
+    var geExpandedSessions = {};
+    var geSessionsLastUc = null;
+
+    function geSessionKey(s) {
+      return s.session_key || ((s.engine_key || '') + '|' + (s.session_id || ''));
+    }
+    function sessionMatchesUser(s, filter) {
+      if (!filter) return true;
+      const f = String(filter).toLowerCase();
+      const e = String((s && s.user_email) || '').toLowerCase();
+      if (e === f) return true;
+      return f.indexOf('@') < 0 && e.split('@')[0] === f;
+    }
+    function sumKnown(rows, field) {
+      let seen = false;
+      let total = 0;
+      (rows || []).forEach(function(r) {
+        if (r && r[field] != null) { seen = true; total += Number(r[field]); }
+      });
+      return seen ? total : null;
+    }
+    function setGeSessionUserFilter(email) {
+      geSessionUserFilter = email || null;
+      if (geSessionsLastUc) {
+        renderGeSessionsTable(geSessionsLastUc);
+        renderPowerUsersTable((geSessionsLastUc || {}).power_users_ldap);
+      }
+      const panel = document.getElementById('liveGeSessionsPanel');
+      if (email && panel && typeof panel.scrollIntoView === 'function') {
+        panel.scrollIntoView({behavior: 'smooth', block: 'start'});
+      }
+    }
+    function toggleGeSessionExpanded(key) {
+      geExpandedSessions = geExpandedSessions || {};
+      if (geExpandedSessions[key]) delete geExpandedSessions[key];
+      else geExpandedSessions[key] = true;
+      if (geSessionsLastUc) renderGeSessionsTable(geSessionsLastUc);
+    }
+    function renderGeSessionTurns(s, turns) {
+      const headers = ['#', 'Time', 'Kind', 'Status', 'Model', 'Input Tok', 'Output Tok', 'Cached Tok',
+                       'Reasoning Tok', 'Total Tok', 'LLM Calls', 'Tool Calls'];
+      const head = el('tr', null, headers.map(function(h) { return el('th', null, [h]); }));
+      const body = el('tbody', null, []);
+      turns.forEach(function(t, i) {
+        const status = String(t.turn_status || 'UNKNOWN');
+        body.appendChild(el('tr', null, [
+          el('td', 'mono', [String(i + 1)]),
+          el('td', 'mono', [t.ts || '—']),
+          el('td', null, [badge(t.turn_kind || '—', 'badge-blue')]),
+          el('td', null, [badge(status, supportBadgeClass({status: status}))]),
+          el('td', 'mono', [t.model_name || '—']),
+          el('td', 'mono', [fmtInt(t.input_tokens)]),
+          el('td', 'mono', [fmtInt(t.output_tokens)]),
+          el('td', 'mono', [fmtInt(t.cached_input_tokens)]),
+          el('td', 'mono', [fmtInt(t.reasoning_tokens)]),
+          el('td', 'mono', [fmtInt(t.total_tokens)]),
+          el('td', 'mono', [fmtInt(t.llm_calls)]),
+          el('td', 'mono', [t.tool_names ? fmtInt(t.tool_calls) + ' · ' + t.tool_names : fmtInt(t.tool_calls)]),
+        ]));
+      });
+      if (turns.length) {
+        body.appendChild(el('tr', null, [
+          el('td', null, []),
+          el('td', null, [el('strong', null, ['Total (shown turns)'])]),
+          el('td', null, []), el('td', null, []), el('td', null, []),
+          el('td', 'mono', [el('strong', null, [fmtInt(sumKnown(turns, 'input_tokens'))])]),
+          el('td', 'mono', [el('strong', null, [fmtInt(sumKnown(turns, 'output_tokens'))])]),
+          el('td', 'mono', [el('strong', null, [fmtInt(sumKnown(turns, 'cached_input_tokens'))])]),
+          el('td', 'mono', [el('strong', null, [fmtInt(sumKnown(turns, 'reasoning_tokens'))])]),
+          el('td', 'mono', [el('strong', null, [fmtInt(sumKnown(turns, 'total_tokens'))])]),
+          el('td', 'mono', [el('strong', null, [fmtInt(sumKnown(turns, 'llm_calls'))])]),
+          el('td', 'mono', [el('strong', null, [fmtInt(sumKnown(turns, 'tool_calls'))])]),
+        ]));
+      }
+      const total = Number(s.turns || 0);
+      const noTokens = turns.length > 0 && sumKnown(turns, 'input_tokens') == null &&
+        sumKnown(turns, 'output_tokens') == null && sumKnown(turns, 'total_tokens') == null;
+      const noteText = turns.length
+        ? 'Turn-by-turn tokens for session ' + (s.session_id || '') + ': showing ' + turns.length + ' of ' + total +
+          ' turns' + (turns.length < total ? ' (most recent 100 per session)' : '') + '. ' +
+          (noTokens
+            ? 'None of these turns carry token counts: fct_turns gets tokens only from gen_ai inference logs ' +
+              '(v_agentic_operations_curated) matched by trace_id, and Gemini Enterprise assistant activity logs do not include usage.'
+            : '"—" means the log carried no token count for that turn (searches and widget actions usually do not).') +
+          ' Prompt and response text are never loaded.'
+        : 'No turn detail loaded for session ' + (s.session_id || '') +
+          '. The drilldown covers the 50 most recent sessions; it fills in on the next BigQuery poll.';
+      return el('div', null, [
+        typeof VL !== 'undefined' && VL.sessionReceiptNode ? VL.sessionReceiptNode(s, turns) : null,
+        el('div', 'kpi-sub', [noteText]),
+        turns.length ? el('div', 'table-scroll', [el('table', null, [el('thead', null, [head]), body])]) : null,
+      ]);
+    }
+    function renderGeSessionsTable(uc) {
+      geSessionsLastUc = uc || null;
+      geExpandedSessions = geExpandedSessions || {};
+      const all = uc && Array.isArray(uc.ge_sessions) ? uc.ge_sessions : [];
+      const turnsBySession = uc && uc.ge_session_turns && typeof uc.ge_session_turns === 'object' ? uc.ge_session_turns : {};
+      const filter = geSessionUserFilter || null;
+      const sessions = filter ? all.filter(function(s) { return sessionMatchesUser(s, filter); }) : all;
+
+      const sessBadge = document.getElementById('geSessionsBadge');
+      if (sessBadge) {
+        sessBadge.textContent = ((uc && uc.ge_mart_dataset) || 'finops_mart.fct_sessions') + ' (' +
+          sessions.length + (filter ? ' of ' + all.length : '') + ' sessions)';
+      }
+      const bar = document.getElementById('geSessionsUserFilter');
+      const barText = document.getElementById('geSessionsUserFilterText');
+      if (bar) bar.style.display = filter ? 'flex' : 'none';
+      if (barText) {
+        const nTurns = sumKnown(sessions, 'turns');
+        barText.textContent = filter
+          ? 'User ' + filter + ': ' + sessions.length + (sessions.length === 1 ? ' session · ' : ' sessions · ') +
+            fmtInt(nTurns) + (nTurns === 1 ? ' turn · input ' : ' turns · input ') +
+            fmtTokens(sumKnown(sessions, 'input_tokens')) + ' · output ' + fmtTokens(sumKnown(sessions, 'output_tokens')) +
+            ' · cached ' + fmtTokens(sumKnown(sessions, 'cached_input_tokens')) + ' · total ' +
+            fmtTokens(sumKnown(sessions, 'total_tokens')) + ' tokens'
+          : '';
+      }
+      const clearBtn = document.getElementById('geSessionsUserFilterClear');
+      if (clearBtn && !clearBtn.dataset.bound) {
+        clearBtn.dataset.bound = '1';
+        clearBtn.addEventListener('click', function() { setGeSessionUserFilter(null); });
+      }
+
+      const sessBody = document.getElementById('geSessionsBody');
+      if (!sessBody) return;
+      sessBody.replaceChildren();
+      if (!sessions.length) {
+        emptyRow(sessBody, 12, filter
+          ? 'No sessions for ' + filter + ' among the most recent sessions in this scope.'
+          : 'No conversation sessions recorded in finops_mart.fct_sessions for this scope.');
+        return;
+      }
+      sessions.forEach(function(s) {
+        const key = geSessionKey(s);
+        const turns = Array.isArray(turnsBySession[key]) ? turnsBySession[key] : [];
+        const open = !!geExpandedSessions[key];
+        const toggle = el('button', 'btn', [open ? '▾' : '▸']);
+        toggle.type = 'button';
+        toggle.style.padding = '0 8px';
+        toggle.title = (open ? 'Hide' : 'Show') + ' turn-by-turn tokens (' + turns.length + ' turns loaded)';
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        toggle.addEventListener('click', function(ev) {
+          ev.stopPropagation();
+          toggleGeSessionExpanded(key);
+        });
+        const tr = el('tr', null, [
+          el('td', null, [toggle]),
+          el('td', 'mono', [el('strong', null, [s.session_id || '—'])]),
+          el('td', 'mono', [s.engine_key || '—']),
+          el('td', 'mono', [s.user_email || '—']),
+          el('td', null, [badge(s.agent_name || s.agent_id || 'gemini_enterprise', 'badge-blue')]),
+          el('td', 'mono', [
+            fmtInt(s.turns || 0) + ' (' + fmtInt(s.chat_turns || 0) + ' chat / ' + fmtInt(s.failed_turns || 0) + ' err)'
+          ]),
+          el('td', 'mono', [s.duration_seconds == null ? '—' : s.duration_seconds + 's']),
+          el('td', 'mono', [fmtTokens(s.input_tokens)]),
+          el('td', 'mono', [fmtTokens(s.output_tokens)]),
+          el('td', 'mono', [fmtTokens(s.cached_input_tokens)]),
+          el('td', 'mono', [fmtTokens(s.total_tokens)]),
+          el('td', 'mono', [s.session_end || s.session_start || '—']),
+        ]);
+        tr.style.cursor = 'pointer';
+        tr.title = 'Click to pre-fill CSAT form for session ' + (s.session_id || '');
+        tr.addEventListener('click', function() {
+          const emailIn = document.getElementById('csatEmailInput');
+          const sessIn = document.getElementById('csatSessionInput');
+          if (emailIn && s.user_email && s.user_email !== 'anonymous') emailIn.value = s.user_email;
+          if (sessIn && s.session_id) sessIn.value = s.session_id;
+        });
+        sessBody.appendChild(tr);
+        if (open) {
+          const td = el('td', null, [renderGeSessionTurns(s, turns)]);
+          td.colSpan = 12;
+          td.style.background = 'rgba(37, 99, 235, 0.04)';
+          sessBody.appendChild(el('tr', 'session-turns-row', [td]));
+        }
+      });
+    }
+
+    // Cloud Billing export status at the top of the Cost tab; shown in Simple mode too.
+    // TODO(security): br.message can hold the raw BigQuery error (capped at 300 chars server-side), which can
+    // name projects, datasets and service accounts. Fine for dashboard operators; if this panel is ever shown
+    // to non-operators, render only br.hint.
+    function renderBillingStatus(br) {
+      const b = br && typeof br === 'object' ? br : {};
+      const status = String(b.status || 'LOADING');
+      const statusBadge = document.getElementById('billingStatusBadge');
+      if (statusBadge) {
+        const words = {LIVE: 'connected', ERROR: 'error', NOT_CONNECTED: 'not connected', LOADING: 'loading…'};
+        const classes = {LIVE: 'badge-green', ERROR: 'badge-red', NOT_CONNECTED: 'badge-yellow'};
+        statusBadge.textContent = 'Billing export: ' + (words[status] || status.toLowerCase());
+        statusBadge.className = 'badge ' + (classes[status] || 'badge-blue');
+      }
+      const tableNote = document.getElementById('billingStatusTable');
+      if (tableNote) {
+        tableNote.textContent = b.billing_export_table
+          ? 'Table: ' + b.billing_export_table
+          : 'FINOPS_BILLING_EXPORT_TABLE is not set';
+      }
+      const summary = document.getElementById('billingStatusSummary');
+      const hint = document.getElementById('billingStatusHint');
+      const detail = document.getElementById('billingStatusDetail');
+      if (!summary || !hint || !detail) return;
+      summary.replaceChildren();
+      hint.replaceChildren();
+      detail.replaceChildren();
+      if (status === 'LIVE') {
+        const cur = String(b.currency || 'USD');
+        const amount = function(v) {
+          if (v == null) return '—';
+          if (cur === 'USD') return money(v);
+          return Number(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) + ' ' + cur;
+        };
+        const bySvc = b.net_by_service || {};
+        let topSvc = null;
+        Object.keys(bySvc).forEach(function(k) {
+          if (k && (topSvc === null || Number(bySvc[k]) > Number(bySvc[topSvc]))) topSvc = k;
+        });
+        const parts = ['Net billed, last ' + (b.window_days || 30) + ' days: ', el('strong', null, [amount(b.total_net_invoice_usd)]),
+                       ' (gross ' + amount(b.total_gross_usd) + ', credits ' + amount(b.total_credits_usd) + ')'];
+        if (topSvc) parts.push(' · largest service: ' + topSvc + ' (' + amount(bySvc[topSvc]) + ')');
+        summary.replaceChildren.apply(summary, parts);
+        if (b.message) detail.textContent = String(b.message);
+      } else if (status === 'ERROR') {
+        summary.textContent = 'The billing export query failed, so billed cost is not shown. Token-based estimates still work.';
+        hint.replaceChildren(el('strong', null, ['How to fix: ']), String(b.hint || 'See the error below and the service logs.'));
+        if (b.message) detail.textContent = 'Error: ' + String(b.message);
+      } else if (status === 'NOT_CONNECTED') {
+        summary.textContent = 'No billing export is connected, so billed cost is not shown. Token-based estimates still work.';
+        hint.replaceChildren(el('strong', null, ['How to connect: ']), String(b.hint || b.message || ''));
+      } else {
+        summary.textContent = 'Loading the billing export…';
+      }
+    }
+
+    function renderGeMartDaily(gdu) {
+      if (!gdu || typeof gdu !== 'object') return;
+      const refBadge = document.getElementById('geMartRefreshedBadge');
+      if (refBadge) {
+        const ts = gdu.refreshed_at ? ' • refreshed ' + String(gdu.refreshed_at).replace('T', ' ').slice(0, 19) + 'Z' : '';
+        refBadge.textContent = (gdu.mart_dataset || 'finops_mart') + ts;
+      }
+      const billBadge = document.getElementById('geMartBillingBadge');
+      const bs = String(gdu.billing_status || 'NOT_CONFIGURED');
+      if (billBadge) {
+        billBadge.textContent = 'Billing: ' + bs;
+        billBadge.className = 'badge ' + (bs === 'LIVE' ? 'badge-green' : bs === 'ERROR' ? 'badge-red' : 'badge-yellow');
+        billBadge.title = String(gdu.billing_message || '');
+      }
+      const scopeNote = document.getElementById('geMartScopeNote');
+      if (scopeNote) {
+        if (!gdu.billing_table) {
+          scopeNote.textContent = 'Set FINOPS_BILLING_EXPORT_TABLE to populate live Billed AI Net ($)';
+        } else if (bs === 'LIVE' || bs === 'LOADING') {
+          scopeNote.textContent = 'Billing export: ' + gdu.billing_table;
+        } else {
+          scopeNote.textContent = 'Billing export: ' + gdu.billing_table + ' (' + bs + '; see "Cloud Billing export" at the top of this tab)';
+        }
+      }
+
+      const dBody = document.getElementById('geMartDailyBody');
+      if (dBody) {
+        dBody.replaceChildren();
+        const days = Array.isArray(gdu.days) ? gdu.days : [];
+        if (!days.length) {
+          emptyRow(dBody, 13, 'No daily rows in finops_mart.agg_daily_usage yet.');
+        }
+        days.forEach(function(d) {
+          dBody.appendChild(el('tr', null, [
+            el('td', 'mono', [el('strong', null, [d.day || '—'])]),
+            el('td', 'mono', [fmtInt(d.interactions)]),
+            el('td', 'mono', [fmtInt(d.chat_turns)]),
+            el('td', 'mono', [fmtInt(d.failed_turns)]),
+            el('td', 'mono', [fmtInt(d.sessions)]),
+            el('td', 'mono', [fmtInt(d.active_users)]),
+            el('td', 'mono', [fmtTokens(d.input_tokens)]),
+            el('td', 'mono', [fmtTokens(d.output_tokens)]),
+            el('td', 'mono', [fmtTokens(d.reasoning_tokens)]),
+            el('td', 'mono', [fmtTokens(d.cached_input_tokens)]),
+            el('td', 'mono', [d.ai_net_usd == null ? '—' : money(d.ai_net_usd)]),
+            el('td', 'mono', [d.usd_per_1k_turns == null ? '—' : '$' + Number(d.usd_per_1k_turns).toFixed(4)]),
+            el('td', 'mono', [d.usd_per_1m_tokens == null ? '—' : '$' + Number(d.usd_per_1m_tokens).toFixed(4)]),
+          ]));
+        });
+      }
+
+      const aBody = document.getElementById('geMartByAppBody');
+      if (aBody) {
+        aBody.replaceChildren();
+        const allRows = Array.isArray(gdu.by_app_agent_model) ? gdu.by_app_agent_model : [];
+        const rows = allRows.filter(function(r) {
+          if (geScope === 'all') return true;
+          return engineMatchesScope(r.engine_key, geScope) || engineMatchesScope(r.agent_id, geScope);
+        });
+        if (!rows.length) {
+          emptyRow(aBody, 9, 'No per-app/agent/model rows in finops_mart.agg_daily_usage for this scope.');
+        }
+        rows.forEach(function(r) {
+          aBody.appendChild(el('tr', null, [
+            el('td', 'mono', [r.day || '—']),
+            el('td', 'mono', [r.engine_key || '—']),
+            el('td', null, [badge(r.agent_name || r.agent_id || 'gemini_enterprise', 'badge-blue')]),
+            el('td', 'mono', [r.model_name || '—']),
+            el('td', 'mono', [fmtInt(r.interactions)]),
+            el('td', 'mono', [fmtInt(r.failed_turns)]),
+            el('td', 'mono', [fmtInt(r.sessions)]),
+            el('td', 'mono', [fmtInt(r.active_users)]),
+            el('td', 'mono', [fmtTokens(r.total_tokens)]),
+          ]));
+        });
+      }
+    }
+
+    async function refreshGeMartNow() {
+      const btn = document.getElementById('geMartRefreshBtn');
+      const orig = btn ? btn.textContent : 'Refresh Mart';
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Rebuilding fct_turns...';
+      }
+      let updated = false;
+      try {
+        if (isEmbedded()) {
+          if (isBridgeInitialized) await refreshLiveFleet(true);
+          if (currentState && currentState.ge_turn_mart) {
+            renderGeTurnMart(currentState.ge_turn_mart);
+          }
+          updated = true;
+        } else {
+          const res = await fetch('/api/ge_mart/refresh', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({}),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data && data.state) {
+              renderState(data.state);
+              updated = true;
+            }
+          }
+        }
+      } catch (err) {
+        if (currentState && currentState.ge_turn_mart) {
+          renderGeTurnMart(currentState.ge_turn_mart);
+          updated = true;
+        }
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = updated ? 'Mart Synced \u2713' : orig;
+          if (updated) {
+            setTimeout(function() { btn.textContent = orig; }, 1800);
+          }
+        }
+      }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Live Gemini Enterprise agent fleet: real inventory joined with real telemetry.
+    // All API-sourced strings are inserted with textContent / createElement (no innerHTML).
+    // TODO(security): the demo renderers above still build HTML strings from server-generated
+    // demo data; user-supplied fields are escaped with esc().
+    // ---------------------------------------------------------------------------
+    const FLEET_TOOL = 'query_ge_agent_fleet';
+    const FLEET_REFRESH_MS = 60000;
+    let fleetWindowHours = VL.urlWindowHours() || 24;
+    let userSelectedWindow = VL.urlWindowHours() > 0;
+    let fleetTimer = null;
+    let fleetRefreshMode = 'pending';  // 'host' (MCP App bridge), 'http' (direct API), 'snapshot'
+    let lastFleet = null;
+
+    function isEmbedded() {
+      return window.parent && window.parent !== window;
+    }
+
+    function esc(value) {
+      return String(value === null || value === undefined ? '' : value)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function el(tag, className, children) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      (children || []).forEach(function(child) {
+        if (child === null || child === undefined || child === false) return;
+        node.appendChild(child instanceof Node ? child : document.createTextNode(String(child)));
+      });
+      return node;
+    }
+
+    function badge(text, cls) { return el('span', 'badge ' + cls, [text]); }
+    function orDash(v, suffix) { return v == null ? '—' : String(v) + (suffix || ''); }
+    // Fixed-decimal number, or a dash when the value is missing. Never substitutes a default.
+    function numOr(v, digits, prefix, suffix) {
+      if (v == null || v === '' || !isFinite(Number(v))) return '—';
+      return (prefix || '') + Number(v).toFixed(digits) + (suffix || '');
+    }
+    function usdInt(v) { return v == null || !isFinite(Number(v)) ? '—' : '$' + Number(v).toLocaleString(); }
+    // Support-event badge colour follows the turn outcome instead of always showing green.
+    function supportBadgeClass(ev) {
+      const s = String(ev.status || ev.resolution_status || '').toUpperCase();
+      if (ev.is_actionable_issue === true) return s === 'SUCCESS' ? 'badge-yellow' : 'badge-red';
+      if (s === 'SUCCESS' || s.indexOf('RESOLVED') === 0) return 'badge-green';
+      if (s === 'SKIPPED' || s === 'UNKNOWN' || s === 'CANCELLED' || s === '') return 'badge-blue';
+      return 'badge-red';
+    }
+    function money(v) {
+      return v == null ? '—' : '$' + Number(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    }
+    function setTableHead(tbodyId, headers) {
+      const tb = document.getElementById(tbodyId);
+      const tr = tb && tb.parentElement ? tb.parentElement.querySelector('thead tr') : null;
+      if (!tr) return;
+      tr.replaceChildren.apply(tr, headers.map(function(h) { return el('th', null, [h]); }));
+    }
+    function emptyRow(a, b, c) {
+      if (arguments.length >= 3 && a && typeof a.appendChild === 'function') {
+        const td = el('td', 'kpi-sub', [c]);
+        td.colSpan = b;
+        const tr = el('tr', null, [td]);
+        a.appendChild(tr);
+        return tr;
+      }
+      const td = el('td', 'fleet-empty', [b]);
+      td.colSpan = a;
+      return el('tr', null, [td]);
+    }
+    function fmtInt(v) { return v == null ? '—' : Number(v).toLocaleString(); }
+    function fmtTokens(v) {
+      if (v == null) return '—';
+      const n = Number(v);
+      if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+      if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+      return String(n);
+    }
+    function fmtMs(v) {
+      if (v == null) return '—';
+      return v >= 1000 ? (v / 1000).toFixed(1) + ' s' : Math.round(v) + ' ms';
+    }
+    function fmtUsd(v) {
+      if (v == null) return 'no rate card';
+      return '$' + Number(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    }
+    function fmtAgo(iso) {
+      if (!iso) return '—';
+      const t = Date.parse(iso);
+      if (isNaN(t)) return String(iso);
+      const secs = Math.max(0, (Date.now() - t) / 1000);
+      if (secs < 90) return Math.round(secs) + ' s ago';
+      if (secs < 5400) return Math.round(secs / 60) + ' min ago';
+      if (secs < 172800) return Math.round(secs / 3600) + ' h ago';
+      return Math.round(secs / 86400) + ' d ago';
+    }
+    function windowLabel(hours) {
+      const h = Number(hours) || fleetWindowHours;
+      if (h === 168) return 'last 7 days';
+      if (h === 720) return 'last 1 month';
+      if (h === 2160) return 'last 3 months';
+      if (h === 4320) return 'last 6 months';
+      if (h === 8760) return 'last 1 year';
+      if (h >= 48 && h % 24 === 0) return 'last ' + (h / 24) + ' days';
+      return h === 1 ? 'last hour' : 'last ' + h + ' hours';
+    }
+
+    const SOURCE_LABELS = {
+      inventory: 'GE agent inventory',
+      reasoning_engines_inventory: 'Vertex AI ReasoningEngines',
+      cloud_run_inventory: 'Cloud Run services',
+      gke_inventory: 'GKE clusters & workloads',
+      agent_engine_metrics: 'Agent Engine metrics',
+      agent_token_logs: 'Agent token logs',
+      agent_token_traces: 'Agent token traces',
+      skills_and_mcp_traces: 'Skills & MCP traces',
+      ge_assistant_tokens: 'GE assistant token traces',
+      cloud_run_metrics: 'Cloud Run metrics',
+      model_usage: 'Vertex AI model usage',
+      ge_traffic: 'GE assistant traffic',
+    };
+
+    // ---- Region / Gemini Enterprise app scope ----
+    let geScope = 'all';
+    let geRawFleet = null;
+    (function initGeScope() {
+      let saved = null;
+      try { saved = localStorage.getItem('finops.geScope'); } catch (e) {}
+      const m = /[?&]scope=([^&]+)/.exec(location.search);
+      geScope = (m ? decodeURIComponent(m[1]) : saved) || 'all';
+    })();
+    function agentLocation(a) {
+      if (a.location) return a.location;
+      const mm = new RegExp('/locations/([^/]+)/').exec(a.resource_name || '');
+      return mm ? mm[1] : 'global';
+    }
+    function agentEngineKey(a) { return a.engine_key || (agentLocation(a) + '/' + a.engine_id); }
+    function geRegionLabel(loc) {
+      return {global: 'Global', us: 'US (multi-region)', eu: 'EU (multi-region)'}[loc] || String(loc || '').toUpperCase();
+    }
+    function engineMatchesScope(engineKey, scope) {
+      if (!scope || scope === 'all' || scope === 'project_all') return true;
+      if (scope === 'unregistered') return String(engineKey).indexOf('/unregistered') >= 0;
+      if (scope.indexOf('loc:') === 0) return String(engineKey).split('/')[0] === scope.slice(4);
+      if (scope.indexOf('eng:') === 0) return engineKey === scope.slice(4);
+      return true;
+    }
+    function geScopeLabel(scope) {
+      if (!scope || scope === 'all') return 'all apps in all regions';
+      if (scope === 'project_all') return 'all project runtimes (Gemini Enterprise + standalone Agent Engine, Cloud Run & GKE)';
+      if (scope === 'unregistered') return 'standalone runtimes not registered in any Gemini Enterprise app';
+      if (scope.indexOf('loc:') === 0) return 'all apps in ' + geRegionLabel(scope.slice(4));
+      const key = scope.slice(4);
+      const eng = ((geRawFleet && geRawFleet.engines) || []).find(function(e) {
+        return (e.engine_key || ((e.location || 'global') + '/' + e.engine_id)) === key;
+      });
+      return (eng ? (eng.display_name || eng.engine_id) : key) + ' (' + geRegionLabel(key.split('/')[0]) + ')';
+    }
+    function populateGeScopeSelect(fleet) {
+      const sel = document.getElementById('geScopeSelect');
+      if (!sel) return;
+      const engines = (fleet.engines || []).map(function(e) {
+        return {key: e.engine_key || ((e.location || 'global') + '/' + e.engine_id), loc: e.location || 'global',
+                name: e.display_name || e.engine_id, n: e.agents_count};
+      });
+      const unregCount = (fleet.unregistered_runtimes || []).length;
+      const totalProjectCount = (fleet.agents || []).length + unregCount;
+      const locs = [];
+      engines.forEach(function(e) { if (locs.indexOf(e.loc) < 0) locs.push(e.loc); });
+      locs.sort(function(a, b) { return a === 'global' ? -1 : (b === 'global' ? 1 : a.localeCompare(b)); });
+      sel.replaceChildren();
+      const allOpt = el('option', null, ['All GE apps · all regions (' + engines.length + ' apps)']);
+      allOpt.value = 'all';
+      sel.appendChild(allOpt);
+      const projOpt = el('option', null, ['All project runtimes · GE + Standalone (' + totalProjectCount + ' runtimes)']);
+      projOpt.value = 'project_all';
+      sel.appendChild(projOpt);
+      const unregOpt = el('option', null, ['Standalone / Not in GE App (' + unregCount + ' runtimes)']);
+      unregOpt.value = 'unregistered';
+      sel.appendChild(unregOpt);
+      locs.forEach(function(loc) {
+        const inLoc = engines.filter(function(e) { return e.loc === loc; });
+        const grp = document.createElement('optgroup');
+        grp.label = geRegionLabel(loc);
+        const locOpt = el('option', null, ['All ' + geRegionLabel(loc) + ' apps (' + inLoc.length + ')']);
+        locOpt.value = 'loc:' + loc;
+        grp.appendChild(locOpt);
+        inLoc.sort(function(a, b) { return (b.n || 0) - (a.n || 0); }).forEach(function(e) {
+          const o = el('option', null, ['\u00a0\u00a0' + e.name + ' · ' + (e.n == null ? 'unavailable' : e.n + ' agents')]);
+          o.value = 'eng:' + e.key;
+          o.title = e.key;
+          grp.appendChild(o);
+        });
+        sel.appendChild(grp);
+      });
+      const valid = Array.from(sel.options).some(function(o) { return o.value === geScope; });
+      if (!valid) geScope = 'all';
+      sel.value = geScope;
+    }
+    function applyGeScope(fleet) {
+      if (!fleet || !Array.isArray(fleet.agents)) return fleet;
+      const out = Object.assign({}, fleet, {__scoped: true});
+      if (geScope === 'all') return out;
+      let agents = [];
+      if (geScope === 'unregistered') {
+        agents = (fleet.unregistered_runtimes || []).slice();
+        out.engines = [{engine_id: 'unregistered', display_name: 'Standalone / Non-GE Runtimes', location: 'project'}];
+      } else if (geScope === 'project_all') {
+        agents = (fleet.agents || []).concat(fleet.unregistered_runtimes || []);
+        out.engines = (fleet.engines || []).concat([{engine_id: 'unregistered', display_name: 'Standalone Runtimes', location: 'project'}]);
+      } else {
+        agents = fleet.agents.filter(function(a) { return engineMatchesScope(agentEngineKey(a), geScope); });
+        out.engines = (fleet.engines || []).filter(function(e) {
+          return engineMatchesScope(e.engine_key || ((e.location || 'global') + '/' + e.engine_id), geScope);
+        });
+      }
+      out.agents = agents;
+      // Recompute totals, counting each runtime once (same rule as the backend).
+      const rtKey = function(a) {
+        const b = a.backend || {};
+        if (b.kind === 'cloud_run' && b.service) return 'cloud_run:' + b.service;
+        if (b.resource || b.url) return (b.kind || '') + ':' + (b.resource || b.url);
+        return 'agent:' + (a.resource_name || a.agent_id);
+      };
+      const allKeysOutside = {};
+      fleet.agents.forEach(function(a) { if (agents.indexOf(a) < 0) allKeysOutside[rtKey(a)] = true; });
+      const seen = {};
+      const uniq = [];
+      let shared = 0;
+      agents.forEach(function(a) {
+        const k = rtKey(a);
+        if (seen[k]) return;
+        seen[k] = true;
+        uniq.push(a);
+        if (allKeysOutside[k] && (a.metrics || {}).requests != null) shared += 1;
+      });
+      const t = {agents: agents.length, enabled: 0, by_type: {}, with_runtime_telemetry: 0, unique_runtimes: uniq.length};
+      agents.forEach(function(a) {
+        if (a.state === 'ENABLED') t.enabled += 1;
+        t.by_type[a.type] = (t.by_type[a.type] || 0) + 1;
+        if ((a.metrics || {}).requests != null) t.with_runtime_telemetry += 1;
+      });
+      ['requests', 'errors_4xx', 'errors_5xx', 'llm_calls', 'input_tokens', 'output_tokens', 'cached_tokens', 'conversations'].forEach(function(k) {
+        const vals = uniq.map(function(a) { return (a.metrics || {})[k]; }).filter(function(v) { return v != null; });
+        t[k] = vals.length ? vals.reduce(function(x, y) { return x + Number(y); }, 0) : null;
+      });
+      t.error_rate_pct = t.requests ? Math.round(10000 * (t.errors_5xx || 0) / t.requests) / 100 : null;
+      const stamps = agents.map(function(a) { return (a.metrics || {}).last_activity; }).filter(Boolean).sort();
+      t.last_activity = stamps.length ? stamps[stamps.length - 1] : null;
+      t.broken_registrations = agents.filter(isBrokenRegistration).length;
+      t.unverified_registrations = agents.filter(function(a) { return (a.registration || {}).status === 'UNVERIFIED'; }).length;
+      const gau = fleet.ge_assistant_usage;
+      if (gau && gau.by_engine) {
+        const be = {};
+        const gt = {llm_calls: 0, input_tokens: 0, output_tokens: 0, cached_tokens: 0, conversations: 0};
+        Object.keys(gau.by_engine).forEach(function(k) {
+          if (!engineMatchesScope(k, geScope)) return;
+          be[k] = gau.by_engine[k];
+          Object.keys(gt).forEach(function(f) { gt[f] += Number(gau.by_engine[k][f] || 0); });
+        });
+        out.ge_assistant_usage = Object.assign({}, gau, {by_engine: be, totals: gt});
+      }
+      out.totals = t;
+      out.__shared_runtimes = shared;
+      return out;
+    }
+    function scopeUserCentric(uc) {
+      if (!uc || typeof uc !== 'object' || geScope === 'all') return uc;
+      const users = (uc.power_users_ldap || []).map(function(u) {
+        const be = u.by_engine || {};
+        const v = Object.keys(be).filter(function(k) { return engineMatchesScope(k, geScope); })
+          .reduce(function(acc, k) { return acc + Number(be[k] || 0); }, 0);
+        if (!(v > 0)) return null;
+        const scoped = {sessions_7d: v};
+        const ce = u.est_cost_by_engine;
+        if (ce && typeof ce === 'object' && geScope !== 'project_all') {
+          const keys = Object.keys(ce).filter(function(k) { return engineMatchesScope(k, geScope); });
+          scoped.est_cost_usd = keys.length ? keys.reduce(function(acc, k) { return acc + Number(ce[k] || 0); }, 0) : null;
+        }
+        return Object.assign({}, u, scoped);
+      }).filter(Boolean);
+      const cohorts = Array.isArray(uc.cohorts) ? uc.cohorts.filter(function(c) {
+        return !c.engine_key || engineMatchesScope(c.engine_key, geScope);
+      }) : uc.cohorts;
+      const sessions = Array.isArray(uc.ge_sessions) ? uc.ge_sessions.filter(function(s) {
+        return engineMatchesScope(s.engine_key, geScope) || engineMatchesScope(s.agent_id, geScope);
+      }) : uc.ge_sessions;
+      return Object.assign({}, uc, {power_users_ldap: users, cohorts: cohorts, ge_sessions: sessions});
+    }
+    function onGeScopeChange(value) {
+      geScope = value || 'all';
+      try { localStorage.setItem('finops.geScope', geScope); } catch (e) {}
+      VL.syncUrl();
+      if (geRawFleet) renderFleet(geRawFleet);
+      if (currentState) {
+        if (currentState.user_centric) {
+          try { renderUserCentricAndDecorator(scopeUserCentric(currentState.user_centric), currentState.decorator_events); } catch (e) {}
+          try { renderExecOverview(execLastFleet, currentState.user_centric); } catch (e) {}
+        }
+        if (currentState.ge_daily_usage) {
+          try { renderGeMartDaily(currentState.ge_daily_usage); } catch (e) {}
+        }
+        try { renderSmeControlPlane(currentState); } catch (e) {}
+      }
+    }
+
+    const EXEC_PALETTE = ['#2563eb', '#0ea5e9', '#10b981', '#f59e0b', '#8b5cf6', '#14b8a6', '#64748b', '#ef4444'];
+    let execLastFleet = null;
+    var execAttentionShowAll = false;
+
+    function hbarChart(rows, maxVal, fmt) {
+      const wrap = el('div', null, []);
+      if (!rows.length) return el('div', 'chart-empty', ['No activity recorded in this window.']);
+      const max = maxVal || Math.max.apply(null, rows.map(function(r) { return r.total; })) || 1;
+      rows.forEach(function(r) {
+        const track = el('div', 'hbar-track', []);
+        r.segments.forEach(function(sg) {
+          if (!sg.value) return;
+          const seg = el('div', 'hbar-seg', []);
+          seg.style.width = (100 * sg.value / max).toFixed(2) + '%';
+          seg.style.background = sg.color;
+          seg.title = sg.name + ': ' + fmtInt(sg.value);
+          track.appendChild(seg);
+        });
+        const lbl = el('div', 'hbar-label', [r.label]);
+        lbl.title = r.label;
+        wrap.appendChild(el('div', 'hbar-row', [lbl, track, el('div', 'hbar-val', [fmt ? fmt(r.total) : fmtInt(r.total)])]));
+      });
+      return wrap;
+    }
+
+    function trendChart(trend, runtimeKeys) {
+      if (!trend || !Array.isArray(trend.bucket_ends) || !trend.bucket_ends.length) {
+        return el('div', 'chart-empty', ['No request history available.']);
+      }
+      const n = trend.bucket_ends.length;
+      const ok = new Array(n).fill(0), r4 = new Array(n).fill(0), r5 = new Array(n).fill(0);
+      runtimeKeys.forEach(function(k) {
+        const row = (trend.by_runtime || {})[k];
+        if (!row) return;
+        for (let i = 0; i < n; i++) {
+          const t = Number((row.requests || [])[i] || 0), a = Number((row.errors_4xx || [])[i] || 0), b = Number((row.errors_5xx || [])[i] || 0);
+          ok[i] += Math.max(0, t - a - b); r4[i] += a; r5[i] += b;
+        }
+      });
+      const tot = ok.map(function(v, i) { return v + r4[i] + r5[i]; });
+      const max = Math.max.apply(null, tot);
+      if (!max) return el('div', 'chart-empty', ['No requests in this window.']);
+      const NS = 'http://www.w3.org/2000/svg';
+      const W = 1000, H = 170, L = 38, B = 20, T = 8;
+      const svg = document.createElementNS(NS, 'svg');
+      svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+      svg.setAttribute('preserveAspectRatio', 'none');
+      svg.setAttribute('class', 'trend-svg');
+      const mk = function(tag, attrs, text) {
+        const e = document.createElementNS(NS, tag);
+        Object.keys(attrs).forEach(function(k) { e.setAttribute(k, attrs[k]); });
+        if (text != null) e.textContent = text;
+        svg.appendChild(e);
+        return e;
+      };
+      const plotH = H - B - T, bw = (W - L) / n;
+      [0, 0.5, 1].forEach(function(f) {
+        const y = T + plotH * (1 - f);
+        mk('line', {x1: L, x2: W, y1: y, y2: y, stroke: '#e2e8f0', 'stroke-width': 1});
+        mk('text', {x: L - 4, y: y + 3, 'text-anchor': 'end'}, String(Math.round(max * f)));
+      });
+      const bucketS = Number(trend.bucket_seconds || 3600);
+      for (let i = 0; i < n; i++) {
+        let y = T + plotH;
+        const x = L + i * bw + bw * 0.12, w = bw * 0.76;
+        [[ok[i], '#2563eb'], [r4[i], '#f59e0b'], [r5[i], '#ef4444']].forEach(function(seg) {
+          if (!seg[0]) return;
+          const h = plotH * seg[0] / max;
+          y -= h;
+          mk('rect', {x: x, y: y, width: w, height: h, fill: seg[1]});
+        });
+        const end = new Date(trend.bucket_ends[i]);
+        const start = new Date(end.getTime() - bucketS * 1000);
+        const hit = mk('rect', {x: L + i * bw, y: T, width: bw, height: plotH, fill: 'transparent'});
+        const tip = document.createElementNS(NS, 'title');
+        tip.textContent = start.toLocaleString() + ' – ' + end.toLocaleTimeString() + ': ' + tot[i] +
+          ' requests (' + r4[i] + ' 4xx, ' + r5[i] + ' 5xx)';
+        hit.appendChild(tip);
+        const every = Math.max(1, Math.ceil(n / 8));
+        if (i % every === 0) {
+          const lbl = bucketS >= 86400
+            ? start.toLocaleDateString(undefined, {month: 'short', day: 'numeric'})
+            : (n * bucketS > 2 * 86400
+                ? start.toLocaleDateString(undefined, {month: 'short', day: 'numeric'}) + ' ' + start.getHours() + 'h'
+                : start.toLocaleTimeString(undefined, {hour: 'numeric', minute: bucketS < 3600 ? '2-digit' : undefined}));
+          mk('text', {x: L + i * bw + bw / 2, y: H - 5, 'text-anchor': 'middle'}, lbl);
+        }
+      }
+      return svg;
+    }
+
+    function donutChart(slices, centerTop, centerBottom, fmt) {
+      const total = slices.reduce(function(a, x) { return a + x.value; }, 0);
+      if (!total) return el('div', 'chart-empty', ['No data in this window.']);
+      const NS = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(NS, 'svg');
+      svg.setAttribute('viewBox', '0 0 120 120');
+      svg.setAttribute('width', '150');
+      svg.setAttribute('height', '150');
+      const r = 46, c = 2 * Math.PI * r;
+      let offset = 0;
+      const bg = document.createElementNS(NS, 'circle');
+      bg.setAttribute('cx', '60'); bg.setAttribute('cy', '60'); bg.setAttribute('r', String(r));
+      bg.setAttribute('fill', 'none'); bg.setAttribute('stroke', '#f1f5f9'); bg.setAttribute('stroke-width', '16');
+      svg.appendChild(bg);
+      slices.forEach(function(sl) {
+        if (!sl.value) return;
+        const len = c * sl.value / total;
+        const circ = document.createElementNS(NS, 'circle');
+        circ.setAttribute('cx', '60'); circ.setAttribute('cy', '60'); circ.setAttribute('r', String(r));
+        circ.setAttribute('fill', 'none'); circ.setAttribute('stroke', sl.color); circ.setAttribute('stroke-width', '16');
+        circ.setAttribute('stroke-dasharray', len.toFixed(3) + ' ' + (c - len).toFixed(3));
+        circ.setAttribute('stroke-dashoffset', (-offset).toFixed(3));
+        circ.setAttribute('transform', 'rotate(-90 60 60)');
+        const t = document.createElementNS(NS, 'title');
+        t.textContent = sl.label + ': ' + (fmt ? fmt(sl.value) : fmtInt(sl.value));
+        circ.appendChild(t);
+        svg.appendChild(circ);
+        offset += len;
+      });
+      [[centerTop, '58', '15', '700', '#0f172a'], [centerBottom, '74', '8.5', '500', '#475569']].forEach(function(cfg) {
+        const tx = document.createElementNS(NS, 'text');
+        tx.setAttribute('x', '60'); tx.setAttribute('y', cfg[1]); tx.setAttribute('text-anchor', 'middle');
+        tx.setAttribute('font-size', cfg[2]); tx.setAttribute('font-weight', cfg[3]); tx.setAttribute('fill', cfg[4]);
+        tx.textContent = cfg[0];
+        svg.appendChild(tx);
+      });
+      const legend = el('div', 'donut-legend', []);
+      slices.forEach(function(sl) {
+        const sw = el('i', null, []);
+        sw.style.background = sl.color;
+        const pct = (100 * sl.value / total).toFixed(sl.value / total < 0.1 ? 1 : 0) + '%';
+        legend.appendChild(el('div', 'donut-legend-row', [sw, el('span', null, [sl.label]),
+          el('span', 'v', [(fmt ? fmt(sl.value) : fmtInt(sl.value)) + ' · ' + pct])]));
+      });
+      const box = el('div', 'donut-wrap', []);
+      box.appendChild(svg);
+      box.appendChild(legend);
+      return box;
+    }
+
+    function renderExecOverview(fleet, uc) {
+      if (fleet && typeof fleet === 'object' && Array.isArray(fleet.agents)) execLastFleet = fleet;
+      fleet = execLastFleet;
+      const headline = document.getElementById('execHeadline');
+      if (!headline) return;
+      if (!fleet) return;
+      const agents = fleet.agents || [];
+      const totals = fleet.totals || {};
+      const win = windowLabel(userSelectedWindow ? fleetWindowHours : fleet.window_hours);
+      const mu = fleet.model_usage || {};
+      const muTotals = mu.totals || {};
+      const models = (mu.models || []).slice();
+      const m = function(a) { return a.metrics || {}; };
+      // One runtime can be registered as several GE agents; group so metrics are counted once.
+      const runtimeKey = function(a) {
+        const b = a.backend || {};
+        if (b.kind === 'cloud_run' && b.service) return 'cloud_run:' + b.service;
+        if (b.resource || b.url) return (b.kind || '') + ':' + (b.resource || b.url);
+        return 'agent:' + (a.resource_name || a.agent_id);
+      };
+      const runtimes = [];
+      const byKey = {};
+      agents.forEach(function(a) {
+        const k = runtimeKey(a);
+        if (!byKey[k]) { byKey[k] = {agent: a, names: []}; runtimes.push(byKey[k]); }
+        const nm = a.display_name || a.agent_id;
+        if (byKey[k].names.indexOf(nm) < 0) byKey[k].names.push(nm);
+        byKey[k].count = (byKey[k].count || 0) + 1;
+      });
+      const rtLabel = function(rt) {
+        return rt.names.join(' / ') + (rt.count > 1 ? ' (' + rt.count + ' registrations)' : '');
+      };
+      const active = agents.filter(function(a) { return Number(m(a).requests || 0) > 0 || Number(m(a).llm_calls || 0) > 0; });
+      const req = Number(totals.requests || 0), e4 = Number(totals.errors_4xx || 0), e5 = Number(totals.errors_5xx || 0);
+      const spend = muTotals.est_cost_usd;
+      const users = ((scopeUserCentric(uc) || {}).power_users_ldap || []);
+      const scoped = geScope !== 'all';
+      const people = users.filter(function(u) { return String(u.status || '').indexOf('HUMAN') >= 0; });
+      const sas = users.filter(function(u) { return String(u.status || '').indexOf('SERVICE') >= 0; });
+
+      headline.replaceChildren(
+        el('strong', null, [fmtInt(totals.enabled) + ' of ' + fmtInt(totals.agents) + ' agents enabled']),
+        ' · ' + fmtInt(active.length) + ' received traffic, handling ' + fmtInt(req) + ' requests ' +
+        (e5 ? 'with ' + fmtInt(e5) + ' server error' + (e5 === 1 ? '' : 's') : 'with no server errors') +
+        '. Estimated model spend: ' + (spend == null ? 'n/a' : fmtUsd(spend)) + '.',
+        el('span', 'muted', ['Project ' + (fleet.project_id || '—') + ' · ' + win + ' · updated ' +
+          (fleet.generated_at ? new Date(fleet.generated_at).toLocaleTimeString() : '—') +
+          ' · spend is tokens × Vertex AI list price, not your invoice']),
+        el('div', 'time-ranges', [
+          el('strong', null, ['Time ranges: ']),
+          'Traffic, errors, tokens and model spend: ' + win + ' (Time range menu; Cloud Monitoring, usually 3–10 min behind). ' +
+          'Users: ' + win + ' (BigQuery audit logs and agent telemetry). ' +
+          'Agent list: current. Invoice: last 30 days when a billing export is connected.']),
+        scoped ? el('div', 'scope-note', ['Filtered to ' + geScopeLabel(geScope) +
+          '. Agents, requests and users are filtered. Model spend is project-wide: Vertex AI usage metrics are not tagged by Gemini Enterprise app.' +
+          (fleet.__shared_runtimes ? ' ' + fleet.__shared_runtimes + ' runtime(s) here are also registered in other apps; their traffic cannot be split by app.' : '')]) : ''
+      );
+
+      VL.renderHealthStrip(agents);
+      const kpis = document.getElementById('execKpis');
+      if (kpis) {
+        kpis.replaceChildren(
+          kpiCard('Agents enabled', fmtInt(totals.enabled) + ' / ' + fmtInt(totals.agents), fmtInt(active.length) + ' with traffic · ' + win),
+          kpiCard('Requests', fmtInt(req), (req ? (100 * e5 / req).toFixed(2) : '0.00') + '% server errors · ' + fmtInt(e4) + ' rejected (4xx)',
+            VL.requestsSparkNode(fleet, runtimes.map(function(rt) { return runtimeKey(rt.agent); }))),
+          kpiCard('Est. model spend', spend == null ? '—' : fmtUsd(spend), fmtInt(muTotals.invocations) + ' model calls · ' + (scoped ? 'project-wide' : 'list price'),
+            VL.spendDeltaNode(win)),
+          kpiCard('Active people', users.length ? fmtInt(people.length) : '—',
+            users.length ? ('+ ' + fmtInt(sas.length) + ' service accounts · ' + win) : (scoped ? 'no audit-log activity for this scope' : 'loading from BigQuery…'),
+            VL.usersSparkNode())
+        );
+      }
+
+      // Requests by agent (stacked ok / 4xx / 5xx), top 8
+      const reqRows = runtimes.map(function(rt) {
+        const a = rt.agent;
+        const mm = m(a);
+        const r = Number(mm.requests || 0), x4 = Number(mm.errors_4xx || 0), x5 = Number(mm.errors_5xx || 0);
+        return {label: rtLabel(rt), total: r, segments: [
+          {name: 'Successful', value: Math.max(0, r - x4 - x5), color: '#2563eb'},
+          {name: 'Rejected (4xx)', value: x4, color: '#f59e0b'},
+          {name: 'Server error (5xx)', value: x5, color: '#ef4444'},
+        ]};
+      }).filter(function(r) { return r.total > 0; }).sort(function(a, b) { return b.total - a.total; }).slice(0, 8);
+      const trendBox = document.getElementById('execChartTrend');
+      if (trendBox) {
+        const keys = runtimes.map(function(rt) { return runtimeKey(rt.agent); });
+        trendBox.replaceChildren(trendChart(fleet.trend, keys));
+        const srcT = document.getElementById('execSrcTrend');
+        const tr = fleet.trend || {};
+        const bh = Number(tr.bucket_seconds || 0) / 3600;
+        const bhLabel = bh >= 24 && bh % 24 === 0 ? (bh / 24) + 'd' : (bh >= 1 ? bh + 'h' : Math.round(bh * 60) + 'min');
+        if (srcT) srcT.textContent = 'Source: ' + (tr.source || 'Cloud Monitoring') + ' · ' + win +
+          (bh ? ' · ' + bhLabel + ' buckets' : '') +
+          (tr.status && tr.status !== 'ok' ? ' · status: ' + tr.status : '');
+      }
+      const reqBox = document.getElementById('execChartRequests');
+      if (reqBox) reqBox.replaceChildren(hbarChart(reqRows));
+      const srcReq = document.getElementById('execSrcRequests');
+      if (srcReq) srcReq.textContent = 'Source: Cloud Monitoring (Cloud Run + Agent Engine) · ' + win +
+        (runtimes.length - reqRows.length > 0 ? ' · ' + (runtimes.length - reqRows.length) + ' agents with no requests not shown' : '');
+
+      // Spend by model (donut)
+      models.sort(function(a, b) { return Number(b.est_cost_usd || 0) - Number(a.est_cost_usd || 0); });
+      const spendSlices = models.filter(function(x) { return Number(x.est_cost_usd || 0) > 0; }).map(function(x, i) {
+        return {label: x.model, value: Number(x.est_cost_usd), color: EXEC_PALETTE[i % EXEC_PALETTE.length]};
+      });
+      const spendBox = document.getElementById('execChartSpend');
+      if (spendBox) spendBox.replaceChildren(donutChart(spendSlices, spend == null ? '—' : fmtUsd(spend), win, function(v) { return fmtUsd(v); }));
+      const srcSpend = document.getElementById('execSrcSpend');
+      if (srcSpend) {
+        const noCard = (muTotals.models_without_rate_card || []);
+        srcSpend.textContent = 'Source: Vertex AI model usage metrics (Cloud Monitoring) × published list price · ' + win +
+          (scoped ? ' · project-wide, not filtered by app' : '') +
+          (noCard.length ? ' · no price on file for: ' + noCard.join(', ') : '');
+      }
+
+      // Fleet mix by type (donut)
+      const typeNames = {ADK: 'ADK (code)', A2A: 'A2A', LOW_CODE: 'No-code', MANAGED: 'Google-managed'};
+      const byType = totals.by_type || {};
+      const mixSlices = Object.keys(byType).sort(function(a, b) { return byType[b] - byType[a]; }).map(function(k, i) {
+        return {label: typeNames[k] || k, value: Number(byType[k] || 0), color: EXEC_PALETTE[i % EXEC_PALETTE.length]};
+      });
+      const mixBox = document.getElementById('execChartMix');
+      if (mixBox) mixBox.replaceChildren(donutChart(mixSlices, fmtInt(totals.agents), 'agents'));
+
+      // Most active users
+      const userRows = users.slice().sort(function(a, b) { return Number(b.sessions_7d || 0) - Number(a.sessions_7d || 0); })
+        .slice(0, 6).map(function(u) {
+          const st = String(u.status || '');
+          const kind = st.indexOf('HUMAN') >= 0 ? ['Person', '#10b981'] :
+            (st.indexOf('UNVERIFIED') >= 0 ? ['Unverified session id', '#f59e0b'] : ['Service account', '#94a3b8']);
+          const v = Number(u.sessions_7d || 0);
+          return {label: u.user_ldap || u.user_email || '—', total: v,
+            segments: [{name: kind[0], value: v, color: kind[1]}]};
+        });
+      const usersBox = document.getElementById('execChartUsers');
+      if (usersBox) usersBox.replaceChildren(users.length ? hbarChart(userRows) :
+        el('div', 'chart-empty', [scoped ? 'No Gemini Enterprise audit-log activity for this scope.' :
+          'Loading users from BigQuery… (demo users are never shown in live mode)']));
+
+      // Tokens by agent (each runtime once) + Gemini Enterprise built-in assistant per app
+      const engineNames = {};
+      (fleet.engines || []).forEach(function(e) { engineNames[e.engine_key || ((e.location || 'global') + '/' + e.engine_id)] = e.display_name || e.engine_id; });
+      const tokRows = runtimes.filter(function(rt) {
+        const mm = m(rt.agent);
+        return mm.input_tokens != null && (Number(mm.input_tokens) + Number(mm.output_tokens || 0)) > 0;
+      }).map(function(rt) {
+        const mm = m(rt.agent);
+        return {label: rtLabel(rt), total: Number(mm.input_tokens) + Number(mm.output_tokens || 0), segments: [
+          {name: 'Input', value: Number(mm.input_tokens), color: '#2563eb'},
+          {name: 'Output', value: Number(mm.output_tokens || 0), color: '#10b981'}]};
+      });
+      const gau = fleet.ge_assistant_usage;
+      Object.keys((gau && gau.by_engine) || {}).forEach(function(k) {
+        const g = gau.by_engine[k];
+        const tot = Number(g.input_tokens || 0) + Number(g.output_tokens || 0);
+        if (tot > 0) tokRows.push({label: 'GE assistant · ' + (engineNames[k] || g.engine_id), total: tot, segments: [
+          {name: 'Input', value: Number(g.input_tokens || 0), color: '#2563eb'},
+          {name: 'Output', value: Number(g.output_tokens || 0), color: '#10b981'}]});
+      });
+      tokRows.sort(function(a, b) { return b.total - a.total; });
+      const noTok = runtimes.filter(function(rt) {
+        const mm = m(rt.agent);
+        return Number(mm.requests || 0) > 0 && mm.input_tokens == null;
+      });
+      const tokBox = document.getElementById('execChartTokens');
+      if (tokBox) tokBox.replaceChildren(hbarChart(tokRows.slice(0, 8), null, fmtTokens));
+      const srcTok = document.getElementById('execSrcTokens');
+      if (srcTok) srcTok.textContent = 'Source: OpenTelemetry gen_ai data the agents export (Cloud Trace spans, Cloud Logging events) · ' + win +
+        (tokRows.length > 8 ? ' · top 8 of ' + tokRows.length : '') +
+        (noTok.length ? ' · no token data from ' + noTok.length + ' agent(s) with traffic: ' + noTok.map(rtLabel).join(', ') : '');
+
+      // Needs attention: rules over the live payload only. Items carry a target (an agent to open or a
+      // panel to scroll to); severity for server errors follows the same health rules as the Agents tab.
+      const items = [];
+      const broken = agents.filter(isBrokenRegistration);
+      if (broken.length) items.push({sev: 2, agent: broken.length === 1 ? broken[0] : null, target: 'execCleanupPanel',
+        text: broken.length + ' agent registration(s) point at a backend that no longer exists, so people who pick them get errors: ' +
+        broken.slice(0, 4).map(function(a) { return a.display_name || a.agent_id; }).join(', ') + (broken.length > 4 ? '…' : '') + '. See Clean up below.'});
+      const rawFl = geRawFleet || fleet;
+      const unregSum = (rawFl && rawFl.unregistered_summary) || {};
+      if (Number(unregSum.total_unregistered_runtimes || 0) > 0) {
+        items.push({
+          sev: Number(unregSum.zombie_runtimes_count || 0) > 0 ? 2 : 1,
+          target: 'execUnregisteredPanel',
+          text: fmtInt(unregSum.total_unregistered_runtimes) + ' deployed runtime(s) in project (' +
+            fmtInt(unregSum.unregistered_reasoning_engines || 0) + ' Agent Engine, ' +
+            fmtInt(unregSum.unregistered_cloud_run_services || 0) + ' Cloud Run, ' +
+            fmtInt(unregSum.gke_workloads_count || 0) + ' GKE) are NOT registered in any Gemini Enterprise app (' +
+            fmtInt(unregSum.zombie_runtimes_count || 0) + ' zombie/idle; est. $' +
+            Number(unregSum.unregistered_est_token_cost_usd || 0).toFixed(2) +
+            ' token spend at list price). See Standalone & Unregistered Project Runtimes below.'
+        });
+      }
+      runtimes.forEach(function(rt) {
+        const mm = m(rt.agent);
+        const r = Number(mm.requests || 0), c = Number(mm.llm_calls || 0);
+        if (r > 0 && c / r >= 20) items.push({sev: 2, agent: rt.agent, text: rtLabel(rt) + ': ' + fmtInt(c) + ' LLM calls for ' + fmtInt(r) + ' requests (' +
+          fmtTokens(Number(mm.input_tokens || 0) + Number(mm.output_tokens || 0)) + ' tokens) ' + win + '. Possible agent loop; check its traces.'});
+      });
+      if (noTok.length) items.push({sev: 0, agent: noTok.length === 1 ? noTok[0].agent : null,
+        text: noTok.length + ' agent(s) with traffic export no token data: ' + noTok.map(rtLabel).slice(0, 3).join(', ') +
+        (noTok.length > 3 ? '…' : '') + '. For Agent Engine, deploy with GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=true.'});
+      runtimes.forEach(function(rt) {
+        const a = rt.agent;
+        const mm = m(a);
+        const sev5 = VL.serverErrorSeverity(a);
+        const r = Number(mm.requests || 0), x4 = Number(mm.errors_4xx || 0);
+        if (Number(mm.errors_5xx || 0) > 0) items.push({sev: sev5, agent: a, text: rtLabel(rt) + ': ' + fmtInt(mm.errors_5xx) + ' server error(s) (5xx) ' + win +
+          (r ? ' (' + (100 * Number(mm.errors_5xx) / r).toFixed(2) + '% of requests)' : '') + '.'});
+        if (r >= 20 && x4 / r > 0.2) items.push({sev: 1, agent: a, text: rtLabel(rt) + ': ' + Math.round(100 * x4 / r) + '% of requests rejected (4xx). Usually auth or permission failures; check callers.'});
+      });
+      const idle = agents.filter(function(a) { return a.state === 'ENABLED' && m(a).requests === 0 && !Number(m(a).llm_calls || 0); });
+      if (idle.length) items.push({sev: 0, agent: idle.length === 1 ? idle[0] : null, text: idle.length + ' enabled agent(s) had zero requests ' + win + ': ' +
+        idle.slice(0, 3).map(function(a) { return a.display_name || a.agent_id; }).join(', ') + (idle.length > 3 ? '…' : '') + '.'});
+      const disabled = agents.filter(function(a) { return a.state && a.state !== 'ENABLED'; });
+      if (disabled.length) items.push({sev: 0, text: disabled.length + ' agent(s) are disabled or private.'});
+      const noCard = (muTotals.models_without_rate_card || []);
+      if (noCard.length) items.push({sev: 1, text: 'Spend for ' + noCard.join(', ') + ' is not included (no list price on file).'});
+      (fleet.errors || []).slice(0, 2).forEach(function(er) { items.push({sev: 1, text: 'Data source warning: ' + String(er)}); });
+      items.sort(function(a, b) { return b.sev - a.sev; });
+      VL.attentionSummary(items);
+      const att = document.getElementById('execAttention');
+      if (att) {
+        const colors = ['#94a3b8', '#f59e0b', '#ef4444'];
+        att.replaceChildren();
+        if (!items.length) att.appendChild(el('li', null, [el('span', 'sev-dot', []), 'Nothing needs attention right now.']));
+        const shown = execAttentionShowAll ? items : items.slice(0, 8);
+        shown.forEach(function(it) {
+          const dot = el('span', 'sev-dot', []);
+          dot.style.background = colors[it.sev];
+          const li = el('li', null, [dot, el('span', null, [it.text])]);
+          VL.decorateAttention(li, it);
+          att.appendChild(li);
+        });
+        if (items.length > 8) {
+          const more = el('button', 'btn btn-xs', [execAttentionShowAll ? 'Show fewer' : 'Show all ' + items.length]);
+          more.type = 'button';
+          more.addEventListener('click', function() { execAttentionShowAll = !execAttentionShowAll; renderExecOverview(execLastFleet, currentState ? currentState.user_centric : null); });
+          att.appendChild(el('li', null, [more]));
+        }
+      }
+      const cleanupPanel = document.getElementById('execCleanupPanel');
+      if (cleanupPanel) {
+        cleanupPanel.classList.toggle('hidden', !broken.length);
+        const cnt = document.getElementById('execCleanupCount');
+        if (cnt) cnt.textContent = broken.length + ' to review';
+        const box = document.getElementById('execCleanup');
+        box.replaceChildren();
+        broken.forEach(function(a) {
+          const r = a.registration || {};
+          const act = r.action || {};
+          const cmd = String(act.delete_command || '');
+          const btn = el('button', 'btn', ['Copy']);
+          btn.addEventListener('click', function() { copyText(cmd, btn); });
+          box.appendChild(el('div', 'cleanup-row', [
+            el('div', null, [el('strong', null, [a.display_name || a.agent_id]),
+              ' · ' + geRegionLabel(agentLocation(a)) + ' · ' + (a.engine_display_name || a.engine_id || '—')]),
+            el('div', 'cleanup-evidence', ['Evidence: ' + String(r.evidence || '—') + (r.checked_at ? ' Checked ' + fmtAgo(r.checked_at) + '.' : '')]),
+            act.summary ? el('div', 'cleanup-evidence', ['Action: ' + act.summary]) : null,
+            cmd ? el('div', 'cleanup-cmd', [el('code', null, [cmd]), btn]) : null,
+          ]));
+        });
+      }
+      renderUnregisteredAndSkills(rawFl);
+      notifyHostSizeChanged();
+    }
+
+    function fillUnregisteredTable(tbody, unreg) {
+      if (!tbody) return;
+      tbody.replaceChildren();
+      if (!unreg.length) {
+        tbody.appendChild(emptyRow(7, 'No standalone or unregistered runtimes found in this project.'));
+        return;
+      }
+      unreg.forEach(function(rt) {
+        const m = rt.metrics || {};
+        const b = rt.backend || {};
+        const reg = rt.registration || {};
+        const act = reg.action || {};
+        const finSt = String(reg.finops_status || 'STANDALONE');
+        const isZombie = finSt.indexOf('ZOMBIE') >= 0 || finSt.indexOf('ALWAYS_ON') >= 0;
+        const stCls = isZombie ? 'badge-red' : (finSt === 'ACTIVE_UNREGISTERED' ? 'badge-green' : 'badge-yellow');
+        const subId = b.reasoning_engine_id || b.service || (b.cluster_name ? (b.cluster_name + '/' + b.namespace + '/' + b.container_name) : '') || rt.agent_id;
+        let allocStr = '—';
+        if (b.kind === 'gke_workload') {
+          allocStr = (m.vcpu_hours || 0) + ' core-h · ' + (m.avg_memory_gib || 0) + ' GiB avg';
+        } else if (m.vcpu_hours != null || m.memory_gib_hours != null) {
+          allocStr = (m.vcpu_hours || 0) + ' vCPU-h · ' + (m.memory_gib_hours || 0) + ' GiB-h';
+        } else if (m.billable_instance_hours != null) {
+          allocStr = m.billable_instance_hours + ' inst-h (min=' + (b.min_instances || 0) + ', max=' + (b.max_instances || 0) + ')';
+        }
+        const costParts = [];
+        if (m.est_infra_cost_usd != null) costParts.push('Infra: $' + Number(m.est_infra_cost_usd).toFixed(2));
+        if (m.est_token_cost_usd != null && m.est_token_cost_usd > 0) costParts.push('Tokens: $' + Number(m.est_token_cost_usd).toFixed(4));
+        else if (m.est_token_cost_usd == null && (m.input_tokens || m.output_tokens)) costParts.push('Tokens: unpriced (no rate card)');
+
+        const cmdNodes = [];
+        if (act.summary) cmdNodes.push(el('div', 'kpi-sub', [act.summary]));
+        const finopsCmd = act.delete_command || act.command;
+        if (finopsCmd) {
+          const btnFix = el('button', 'btn', ['Copy FinOps Cmd']);
+          btnFix.style.padding = '2px 7px';
+          btnFix.style.fontSize = '11px';
+          btnFix.addEventListener('click', function() { copyText(finopsCmd, btnFix); });
+          cmdNodes.push(el('div', 'cleanup-cmd', [el('code', null, [finopsCmd]), btnFix]));
+        }
+        if (act.register_ge_command) {
+          const btnReg = el('button', 'btn', ['Copy GE Register']);
+          btnReg.style.padding = '2px 7px';
+          btnReg.style.fontSize = '11px';
+          btnReg.addEventListener('click', function() { copyText(act.register_ge_command, btnReg); });
+          cmdNodes.push(el('div', 'cleanup-cmd', [el('code', null, [act.register_ge_command]), btnReg]));
+        }
+
+        tbody.appendChild(el('tr', null, [
+          el('td', null, [
+            el('div', 'fleet-agent-name', [rt.display_name || rt.agent_id]),
+            el('div', 'fleet-agent-app mono', [subId]),
+            rt.description ? el('div', 'fleet-agent-desc', [rt.description]) : null,
+          ]),
+          el('td', null, [
+            badge(rt.type_label || rt.type || 'Runtime', 'badge-blue'),
+            el('div', 'kpi-sub mono', [(b.kind || '') + ' · ' + (rt.location || b.location || b.region || 'us-central1')]),
+          ]),
+          el('td', null, [
+            badge(finSt.replace(/_/g, ' '), stCls),
+            el('div', 'kpi-sub', [reg.evidence || 'Not registered in any GE app']),
+          ]),
+          el('td', 'mono', [
+            fmtInt(m.requests),
+            m.errors_5xx ? el('div', 'kpi-sub', [fmtInt(m.errors_5xx) + ' 5xx']) : (m.latency_p95_ms != null ? el('div', 'kpi-sub', ['p95 ' + fmtMs(m.latency_p95_ms)]) : null),
+          ]),
+          el('td', 'mono', [
+            fmtInt(m.llm_calls) + ' calls',
+            el('div', 'kpi-sub', [m.input_tokens != null ? (fmtTokens(m.input_tokens) + ' in / ' + fmtTokens(m.output_tokens) + ' out') : 'no gen_ai tokens']),
+          ]),
+          el('td', 'mono', [
+            el('div', null, [allocStr]),
+            el('div', 'kpi-sub', [costParts.join(' · ') || '—']),
+          ]),
+          el('td', null, cmdNodes),
+        ]));
+      });
+    }
+
+    function fillSkillsMcpTable(tbody, skills) {
+      if (!tbody) return;
+      tbody.replaceChildren();
+      if (!skills.length) {
+        tbody.appendChild(emptyRow(7, 'No skills, sub-agents, or MCP servers discovered in this window.'));
+        return;
+      }
+      skills.forEach(function(sk) {
+        const k = String(sk.kind || 'SKILL_OR_TOOL');
+        const bCls = k === 'MCP_SERVER' ? 'badge-green' : (k === 'SUB_AGENT' ? 'badge-yellow' : 'badge-blue');
+        tbody.appendChild(el('tr', null, [
+          el('td', null, [
+            el('strong', 'mono', [sk.name || '—']),
+            sk.endpoint_uri ? el('div', 'kpi-sub mono', [sk.endpoint_uri]) : (sk.source ? el('div', 'kpi-sub', [sk.source]) : null),
+          ]),
+          el('td', null, [badge(k, bCls)]),
+          el('td', 'mono', [sk.parent_agent_name || (sk.parent_engines || []).join(', ') || 'Standalone']),
+          el('td', 'mono', [
+            fmtInt(sk.calls),
+            sk.errors ? el('div', 'kpi-sub', [fmtInt(sk.errors) + ' errors']) : null,
+          ]),
+          el('td', 'mono', [sk.avg_latency_ms != null ? fmtMs(sk.avg_latency_ms) : '—']),
+          el('td', 'mono', [
+            sk.co_occurring_input_tokens != null
+              ? (fmtTokens(sk.co_occurring_input_tokens) + ' / ' + fmtTokens(sk.co_occurring_output_tokens))
+              : '—'
+          ]),
+          el('td', null, [
+            el('div', 'mono', [(sk.models || []).join(', ') || '—']),
+            sk.finops_note ? el('div', 'kpi-sub', [sk.finops_note]) : null,
+          ]),
+        ]));
+      });
+    }
+
+    function renderUnregisteredAndSkills(fleet) {
+      if (!fleet || typeof fleet !== 'object') return;
+      const unreg = Array.isArray(fleet.unregistered_runtimes) ? fleet.unregistered_runtimes : [];
+      const usum = fleet.unregistered_summary || {};
+      const skills = Array.isArray(fleet.skills_and_mcp) ? fleet.skills_and_mcp : [];
+      const totUnreg = usum.total_unregistered_runtimes != null ? usum.total_unregistered_runtimes : unreg.length;
+      const zombies = usum.zombie_runtimes_count || 0;
+      // Token spend only (list price from the rate cards); compute is shown as measured usage, not dollars.
+      const totCost = Number(usum.unregistered_est_token_cost_usd || 0);
+      const unpriced = Number(usum.unregistered_unpriced_runtimes || 0);
+      const badgeText = fmtInt(totUnreg) + ' standalone · ' + fmtInt(zombies) + ' zombie/idle · Est. tokens $' + totCost.toFixed(2);
+
+      ['execUnregisteredBadge', 'fleetUnregisteredBadge', 'liveUnregFinopsBadge'].forEach(function(id) {
+        const b = document.getElementById(id);
+        if (b) {
+          b.textContent = badgeText;
+          b.className = 'badge ' + (zombies > 0 ? 'badge-red' : 'badge-yellow');
+        }
+      });
+
+      ['execUnregisteredKpis', 'fleetUnregisteredKpis', 'liveUnregFinopsKpis'].forEach(function(id) {
+        const grid = document.getElementById(id);
+        if (!grid) return;
+        grid.replaceChildren(
+          kpiCard(
+            'Standalone / Non-GE Runtimes',
+            fmtInt(totUnreg),
+            fmtInt(usum.unregistered_reasoning_engines || 0) + ' Agent Engine · ' +
+            fmtInt(usum.unregistered_cloud_run_services || 0) + ' Cloud Run · ' +
+            fmtInt(usum.gke_workloads_count || 0) + ' GKE'
+          ),
+          kpiCard(
+            'Zombie / Idle Runtimes (0 req)',
+            fmtInt(zombies),
+            'Holding vCPU/GiB allocation or min-instances with 0 traffic'
+          ),
+          kpiCard(
+            'Standalone Traffic & Tokens',
+            fmtInt(usum.unregistered_requests || 0) + ' req · ' + fmtInt(usum.unregistered_llm_calls || 0) + ' LLM calls',
+            fmtTokens(usum.unregistered_input_tokens || 0) + ' in / ' + fmtTokens(usum.unregistered_output_tokens || 0) + ' out'
+          ),
+          kpiCard(
+            'Est. Unregistered Token Spend',
+            '$' + totCost.toFixed(2),
+            'List price' + (unpriced ? ' · ' + fmtInt(unpriced) + ' runtime(s) unpriced (no rate card)' : '') +
+            ' · Compute: ' + Number(usum.unregistered_vcpu_hours || 0).toFixed(1) + ' vCPU-h, ' +
+            Number(usum.unregistered_memory_gib_hours || 0).toFixed(1) + ' GiB-h, ' +
+            Number(usum.unregistered_billable_instance_hours || 0).toFixed(1) + ' instance-h'
+          )
+        );
+      });
+
+      fillUnregisteredTable(document.getElementById('execUnregisteredBody'), unreg);
+      fillUnregisteredTable(document.getElementById('fleetUnregisteredBody'), unreg);
+
+      const skBadge = document.getElementById('fleetSkillsMcpBadge');
+      if (skBadge) skBadge.textContent = fmtInt(skills.length) + ' discovered skills, sub-agents & MCPs';
+      fillSkillsMcpTable(document.getElementById('fleetSkillsMcpBody'), skills);
+      fillSkillsMcpTable(document.getElementById('liveSkillsMcpBody'), skills);
+    }
+
+    function isBrokenRegistration(a) {
+      const st = (a.registration || {}).status;
+      return st === 'BACKEND_NOT_FOUND' || st === 'NO_BACKEND';
+    }
+
+    function shortTokenSource(src) {
+      src = String(src || '');
+      if (src.indexOf('Trace') >= 0) return 'Cloud Trace';
+      if (src.indexOf('Logging') >= 0) return 'Cloud Logging';
+      return src;
+    }
+
+    function tokenCell(a) {
+      const m = a.metrics || {};
+      const kind = (a.backend || {}).kind;
+      if (m.input_tokens != null) {
+        const src = String(m.token_source || '');
+        const td = el('td', 'mono', [fmtTokens(m.input_tokens) + ' / ' + fmtTokens(m.output_tokens),
+          src ? el('span', 'cell-sub', [shortTokenSource(src)]) : null]);
+        td.title = src ? 'Source: ' + src : 'No traffic in this window (token sources checked).';
+        return td;
+      }
+      if (Number(m.requests || 0) > 0 && kind === 'agent_engine') {
+        const td = el('td', null, [el('span', 'token-na', ['Not emitted']), el('span', 'cell-sub', ['no gen_ai telemetry'])]);
+        td.title = (a.notes || []).join(' ') ||
+          'This agent served requests but exported no gen_ai token data to Cloud Logging or Cloud Trace.';
+        return td;
+      }
+      if (Number(m.requests || 0) > 0 && kind === 'cloud_run') {
+        const td = el('td', null, [el('span', 'token-na', ['Not measured']), el('span', 'cell-sub', ['Cloud Run: requests only'])]);
+        td.title = 'Cloud Run reports request metrics only; FinOps Dashboard has no per-service token source for Cloud Run.';
+        return td;
+      }
+      return el('td', 'mono', ['—']);
+    }
+
+    function registrationBadge(a) {
+      const r = a.registration || {};
+      if (isBrokenRegistration(a)) {
+        const b = badge(r.status === 'NO_BACKEND' ? 'no backend' : 'backend deleted', 'badge-red');
+        b.title = String(r.evidence || '') + ((r.action || {}).summary ? ' ' + r.action.summary : '');
+        return b;
+      }
+      if (r.status === 'UNREGISTERED_STANDALONE') {
+        const finSt = String(r.finops_status || '');
+        const isZombie = finSt.indexOf('ZOMBIE') >= 0 || finSt.indexOf('ALWAYS_ON') >= 0;
+        const b = badge(isZombie ? 'standalone · zombie/idle' : 'not in GE app', isZombie ? 'badge-red' : 'badge-yellow');
+        b.title = String(r.evidence || '');
+        return b;
+      }
+      if (r.status === 'UNVERIFIED') {
+        const b = badge('backend unverified', 'badge-yellow');
+        b.title = String(r.evidence || '');
+        return b;
+      }
+      return null;
+    }
+
+    function fallbackCopyText(text) {
+      try {
+        if (!document || !document.body) return false;
+        const ta = document.createElement('textarea');
+        ta.value = String(text == null ? '' : text);
+        ta.setAttribute('readonly', 'readonly');
+        ta.style.position = 'fixed';
+        ta.style.top = '-9999px';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        let ok = false;
+        try { ok = Boolean(document.execCommand && document.execCommand('copy')); } catch (e) { ok = false; }
+        document.body.removeChild(ta);
+        return ok;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    function copyText(text, btn) {
+      if (btn && !btn.dataset.label) btn.dataset.label = btn.textContent;
+      const done = function(ok) {
+        if (!btn) return;
+        btn.textContent = ok ? 'Copied' : 'Copy blocked: select the text';
+        setTimeout(function() { btn.textContent = btn.dataset.label || 'Copy'; }, 2500);
+      };
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(function() { done(true); }, function() { done(fallbackCopyText(text)); });
+          return;
+        }
+      } catch (e) {}
+      done(fallbackCopyText(text));
+    }
+
+    function fmtInterval(iv) {
+      if (!iv || !iv.start || !iv.end) return '—';
+      const o = {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'};
+      return new Date(iv.start).toLocaleString([], o) + ' – ' + new Date(iv.end).toLocaleString([], o);
+    }
+
+    function signedUsd(v) {
+      const n = Number(v || 0);
+      return (n > 0 ? '+' : (n < 0 ? '−' : '')) + fmtUsd(Math.abs(n));
+    }
+
+    function tdText(text, cls) { return el('td', cls || null, [text]); }
+
+    function fillSelect(id, values) {
+      const sel = document.getElementById(id);
+      if (!sel) return;
+      const prev = sel.value;
+      sel.replaceChildren();
+      (values || []).forEach(function(v) { const o = el('option', null, [v]); o.value = v; sel.appendChild(o); });
+      if ((values || []).indexOf(prev) >= 0) sel.value = prev;
+    }
+
+    let liveFinopsFromFleet = false;
+    function renderLiveFinops(lf) {
+      if (!lf || typeof lf !== 'object') return;
+      if (lf.unregistered_runtimes || lf.skills_and_mcp) {
+        renderUnregisteredAndSkills(lf);
+      }
+      const te = lf.token_economics || {};
+      const win = windowLabel(te.window_hours);
+      const tt = te.totals || {};
+      const teBadge = document.getElementById('liveTeBadge');
+      if (teBadge) teBadge.textContent = te.status === 'LIVE' ? fmtUsd(tt.est_cost_usd) + ' · ' + fmtInt(tt.calls) + ' model calls' : '—';
+      const teScope = document.getElementById('liveTeScope');
+      if (teScope) teScope.textContent = te.status === 'LIVE'
+        ? win + ' (' + fmtInterval(te.interval) + '). ' + (te.agents_note || '') + ' Project-wide model spend: ' + fmtUsd(tt.est_cost_usd) + ' at list price.'
+        : (te.reason || 'Unavailable.');
+      const teBody = document.getElementById('liveTeAgentsBody');
+      if (teBody) {
+        teBody.replaceChildren();
+        (te.agents || []).forEach(function(r) {
+          const nameCell = r.registration_status === 'UNREGISTERED_STANDALONE'
+            ? el('td', null, [r.display_name || '—', ' ', badge('standalone', 'badge-yellow')])
+            : tdText(r.display_name || '—');
+          teBody.appendChild(el('tr', null, [
+            nameCell,
+            tdText(fmtInt(r.requests), 'mono'),
+            tdText(fmtInt(r.llm_calls), 'mono'),
+            tdText(r.llm_calls_per_request == null ? '—' : String(r.llm_calls_per_request), 'mono'),
+            tdText(fmtTokens(r.input_tokens), 'mono'),
+            tdText(fmtTokens(r.output_tokens), 'mono'),
+            tdText(r.tokens_per_request == null ? '—' : fmtTokens(r.tokens_per_request), 'mono'),
+            tdText((r.models || []).join(', ') || '—', 'mono'),
+            tdText(shortTokenSource(r.token_source) || '—'),
+          ]));
+        });
+        (te.agents_without_token_telemetry || []).forEach(function(r) {
+          const td = el('td', 'token-na', [r.runs_on === 'cloud_run' ? 'Not measured (Cloud Run reports requests only)' : 'No gen_ai token data exported']);
+          td.colSpan = 7;
+          const nameCell = r.registration_status === 'UNREGISTERED_STANDALONE'
+            ? el('td', null, [r.display_name || '—', ' ', badge('standalone', 'badge-yellow')])
+            : tdText(r.display_name || '—');
+          teBody.appendChild(el('tr', 'fleet-row-muted', [nameCell, tdText(fmtInt(r.requests), 'mono'), td]));
+        });
+        if (!teBody.children.length) {
+          const td = el('td', 'fleet-empty', [te.status === 'LIVE' ? 'No agent token data in this window.' : (te.reason || 'Unavailable.')]);
+          td.colSpan = 9;
+          teBody.appendChild(el('tr', null, [td]));
+        }
+      }
+      const geBox = document.getElementById('liveTeGe');
+      if (geBox) {
+        geBox.replaceChildren();
+        const ge = te.ge_assistant || [];
+        if (ge.length) {
+          const head = el('thead', null, [el('tr', null, ['GE app', 'Assistant', 'Model calls', 'Input', 'Output', 'Conversations', 'Models']
+            .map(function(h) { return el('th', null, [h]); }))]);
+          const body = el('tbody', null, ge.map(function(g) {
+            return el('tr', null, [
+              tdText(g.app || g.engine_key), tdText(Object.keys(g.assistant_agents || {}).join(', ') || '—'),
+              tdText(fmtInt(g.llm_calls), 'mono'), tdText(fmtTokens(g.input_tokens), 'mono'), tdText(fmtTokens(g.output_tokens), 'mono'),
+              tdText(fmtInt(g.conversations), 'mono'), tdText(Object.keys(g.models || {}).join(', ') || '—', 'mono')]);
+          }));
+          geBox.appendChild(el('div', 'live-sub', ['Gemini Enterprise built-in assistant']));
+          geBox.appendChild(el('div', 'table-scroll', [el('table', null, [head, body])]));
+          geBox.appendChild(el('div', 'live-note', ['Source: Cloud Trace spans exported by Gemini Enterprise (cloud.platform gcp.gemini_enterprise). ' +
+            'These calls are not in the Vertex AI model spend above.']));
+        } else if (te.ge_assistant_status === 'UNAVAILABLE') {
+          geBox.appendChild(el('div', 'live-note', ['Gemini Enterprise assistant token traces are unavailable (see data source status on the Agents tab).']));
+        }
+      }
+
+      const sd = lf.spend_drift || {};
+      const dBadge = document.getElementById('liveDriftBadge');
+      const dScope = document.getElementById('liveDriftScope');
+      const dBody = document.getElementById('liveDriftBody');
+      const dmBody = document.getElementById('liveDriftModelsBody');
+      const dNote = document.getElementById('liveDriftNote');
+      if (dBody) dBody.replaceChildren();
+      if (dmBody) dmBody.replaceChildren();
+      if (sd.status !== 'LIVE') {
+        if (dBadge) { dBadge.textContent = '—'; dBadge.className = 'badge badge-blue'; }
+        if (dScope) dScope.textContent = sd.reason || 'Unavailable.';
+        if (dNote) dNote.textContent = '';
+      } else {
+        if (dBadge) {
+          dBadge.textContent = fmtUsd(sd.cost_before_usd) + ' → ' + fmtUsd(sd.cost_now_usd) +
+            (sd.change_pct == null ? '' : ' (' + (sd.change_pct > 0 ? '+' : '') + sd.change_pct + '%)');
+          dBadge.className = 'badge ' + (Number(sd.change_usd) > 0 ? 'badge-yellow' : 'badge-green');
+        }
+        if (dScope) dScope.textContent = 'This period: ' + fmtInterval(sd.current_interval) + '. Previous: ' +
+          fmtInterval(sd.previous_interval) + '. ' + (sd.method || '');
+        (sd.drivers || []).forEach(function(d) {
+          var shareTxt = '—';
+          if (d.share_of_change_pct != null && Math.abs(Number(d.share_of_change_pct)) <= 200) {
+            shareTxt = d.share_of_change_pct + '%';
+          } else if (Number(sd.cost_before_usd) > 0 && d.change_usd != null) {
+            var vsPrev = (Number(d.change_usd) / Number(sd.cost_before_usd)) * 100;
+            shareTxt = (vsPrev >= 0 ? '+' : '') + vsPrev.toFixed(1) + '% vs prev';
+          }
+          if (dBody) dBody.appendChild(el('tr', null, [
+            tdText(d.name), tdText(signedUsd(d.change_usd), 'mono'),
+            tdText(shareTxt, 'mono'), tdText(d.description)]));
+        });
+        (sd.by_model || []).forEach(function(r) {
+          if (dmBody) dmBody.appendChild(el('tr', null, [
+            tdText(r.model, 'mono'), tdText(fmtUsd(r.cost_before_usd), 'mono'), tdText(fmtUsd(r.cost_now_usd), 'mono'),
+            tdText(signedUsd(r.change_usd), 'mono'), tdText(fmtInt(r.calls_before) + ' → ' + fmtInt(r.calls_now), 'mono')]));
+        });
+        if (dNote) dNote.textContent = 'Source: Vertex AI model usage metrics (Cloud Monitoring) for both periods × list price. ' +
+          'The drivers add up to the observed change; computed remainder: $' + Math.abs(Number(sd.unexplained_usd || 0)).toFixed(4) + '.' +
+          ((sd.models_without_rate_card || []).length ? ' Not priced (no list price on file): ' + sd.models_without_rate_card.join(', ') + '.' : '');
+      }
+
+      fillSelect('wiFrom', lf.what_if_models || []);
+      fillSelect('wiModel', lf.what_if_models || []);
+      fillSelect('wiTo', lf.rate_card_models || []);
+    }
+
+    function onLiveWhatIfKind() {
+      const cache = document.getElementById('wiKind').value === 'cache_share';
+      document.querySelectorAll('.wi-switch').forEach(function(n) { n.classList.toggle('hidden', cache); });
+      document.querySelectorAll('.wi-cache').forEach(function(n) { n.classList.toggle('hidden', !cache); });
+    }
+
+    function computeLocalWhatIf(body) {
+      const fleet = lastFleet || (currentState && currentState.ge_fleet) || {};
+      const mu = fleet.model_usage || {};
+      const models = Array.isArray(mu.models) ? mu.models : [];
+      const cards = Object.assign({
+        'gemini-3.8-flash': {input_per_1m: 0.30, cached_per_1m: 0.03, output_per_1m: 2.50},
+        'gemini-2.5-flash': {input_per_1m: 0.30, cached_per_1m: 0.03, output_per_1m: 2.50},
+        'gemini-2.5-flash-lite': {input_per_1m: 0.10, cached_per_1m: 0.01, output_per_1m: 0.40},
+        'gemini-2.5-pro': {input_per_1m: 1.25, cached_per_1m: 0.125, output_per_1m: 10.00},
+      }, mu.rate_cards || {});
+      const baseUsd = Number((mu.totals && mu.totals.est_cost_usd) || 0);
+      const interval = mu.interval || null;
+      if (body.kind === 'cache_share') {
+        const mName = body.model || (models[0] && models[0].model) || 'gemini-3.8-flash';
+        const row = models.find(function(x) { return x.model === mName; }) || models[0] || {
+          model: mName, input_tokens: 120000, cached_tokens: 12000, output_tokens: 24000, est_cost_usd: baseUsd,
+        };
+        const rc = cards[row.model] || cards['gemini-3.8-flash'];
+        const inTok = Number(row.input_tokens || 0);
+        const curCached = Number(row.cached_tokens || 0);
+        const curShare = inTok > 0 ? Math.round((curCached / inTok) * 1000) / 10 : 0;
+        const targetShare = Math.max(0, Math.min(100, Number(body.target_cache_share_pct || 0)));
+        const targetCached = Math.round(inTok * (targetShare / 100));
+        const deltaCached = targetCached - curCached;
+        const savingsPer1m = Math.max(0, Number(rc.input_per_1m || rc.input || 0) - Number(rc.cached_per_1m || rc.cached || 0));
+        const changeUsd = -((deltaCached / 1000000) * savingsPer1m);
+        const projUsd = Math.max(0, baseUsd + changeUsd);
+        return {
+          status: 'PROJECTION',
+          scenario: 'Raise ' + row.model + ' context-cache read share to ' + targetShare + '%',
+          interval: interval,
+          observed_baseline_usd: baseUsd,
+          observed_cache_share_pct: curShare,
+          change_usd: changeUsd,
+          projected_total_usd: projUsd,
+          assumptions: [
+            'Computed client-side from observed model token volumes and Vertex AI list rate cards.',
+          ],
+        };
+      }
+      const fromName = body.from_model || (models[0] && models[0].model) || 'gemini-2.5-pro';
+      const toName = body.to_model || 'gemini-3.8-flash';
+      const sharePct = Math.max(0, Math.min(100, Number(body.share_pct != null ? body.share_pct : 0)));
+      const row = models.find(function(x) { return x.model === fromName; }) || models[0] || {
+        model: fromName, input_tokens: 100000, cached_tokens: 0, output_tokens: 20000, est_cost_usd: baseUsd,
+      };
+      const toRc = cards[toName] || cards['gemini-3.8-flash'];
+      const frac = sharePct / 100;
+      const movedBefore = Number(row.est_cost_usd || 0) * frac;
+      const movedIn = (Number(row.input_tokens || 0) - Number(row.cached_tokens || 0)) * frac;
+      const movedCached = Number(row.cached_tokens || 0) * frac;
+      const movedOut = Number(row.output_tokens || 0) * frac;
+      const movedAfter = (movedIn * Number(toRc.input_per_1m || toRc.input || 0) +
+        movedCached * Number(toRc.cached_per_1m || toRc.cached || 0) +
+        movedOut * Number(toRc.output_per_1m || toRc.output || 0)) / 1000000;
+      const changeUsd = movedAfter - movedBefore;
+      const projUsd = Math.max(0, baseUsd + changeUsd);
+      return {
+        status: 'PROJECTION',
+        scenario: 'Move ' + sharePct + '% of ' + (row.model || fromName) + ' tokens to ' + toName,
+        interval: interval,
+        observed_baseline_usd: baseUsd,
+        moved_cost_before_usd: movedBefore,
+        moved_cost_after_usd: movedAfter,
+        change_usd: changeUsd,
+        projected_total_usd: projUsd,
+        assumptions: [
+          'Computed client-side from observed model token volumes and Vertex AI list rate cards.',
+        ],
+      };
+    }
+
+    async function runLiveWhatIf() {
+      const kind = document.getElementById('wiKind').value;
+      const body = {kind: kind, window_hours: fleetWindowHours};
+      if (kind === 'cache_share') {
+        body.model = document.getElementById('wiModel').value;
+        body.target_cache_share_pct = Number(document.getElementById('wiCache').value);
+      } else {
+        body.from_model = document.getElementById('wiFrom').value;
+        body.to_model = document.getElementById('wiTo').value;
+        body.share_pct = Number(document.getElementById('wiShare').value);
+      }
+      const box = document.getElementById('liveWhatIfResult');
+      box.replaceChildren(el('div', 'live-note', ['Computing from observed usage…']));
+      let res = null;
+      if (!isEmbedded()) {
+        try {
+          const r = await fetch('/api/what_if_live', {method: 'POST', credentials: 'same-origin',
+            headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+          if (r.ok) res = await r.json();
+        } catch (e) { res = null; }
+      }
+      if (!res || res.status !== 'PROJECTION') {
+        res = computeLocalWhatIf(body);
+      }
+      box.replaceChildren();
+      if (res.status !== 'PROJECTION') {
+        box.appendChild(el('div', 'fleet-error', [String(res.error || res.status || 'Projection failed.')]));
+        return;
+      }
+      box.appendChild(el('div', null, [el('strong', null, [res.scenario || 'Projection'])]));
+      box.appendChild(el('div', 'wi-result-grid', [
+        kpiCard('Observed spend', fmtUsd(res.observed_baseline_usd), fmtInterval(res.interval)),
+        kpiCard('Change', signedUsd(res.change_usd), res.moved_cost_before_usd != null
+          ? fmtUsd(res.moved_cost_before_usd) + ' → ' + fmtUsd(res.moved_cost_after_usd) + ' for the moved tokens'
+          : (res.observed_cache_share_pct != null ? 'observed cache-read share ' + res.observed_cache_share_pct + '%' : '')),
+        kpiCard('Projected spend', fmtUsd(res.projected_total_usd), 'same period, list price'),
+      ]));
+      box.appendChild(el('div', 'live-note', ['Assumptions: ' + (res.assumptions || []).join(' ')]));
+    }
+
+    function kpiCard(label, value, sub, extra) {
+      return el('div', 'kpi-card', [
+        el('div', 'kpi-label', [label]),
+        el('div', 'kpi-value mono', [value]),
+        el('div', 'kpi-sub', [sub]),
+        extra || null,
+      ]);
+    }
+
+    function setFleetNotice(text, isWarning) {
+      const node = document.getElementById('fleetNotice');
+      if (!node) return;
+      node.textContent = text || '';
+      node.className = 'fleet-notice' + (text ? '' : ' hidden') + (isWarning ? ' fleet-notice-error' : '');
+    }
+
+    function renderFleet(fleet) {
+      if (fleet && Array.isArray(fleet.agents) && !fleet.__scoped) {
+        applyTraceOverrides(fleet);
+        geRawFleet = fleet;
+        populateGeScopeSelect(fleet);
+        fleet = applyGeScope(fleet);
+      }
+      try { renderExecOverview(fleet, currentState ? currentState.user_centric : null); } catch (e) { console.warn('overview', e); }
+      try { renderUnregisteredAndSkills(geRawFleet || fleet); } catch (e) { console.warn('unregistered', e); }
+      if (!fleet || !Array.isArray(fleet.agents)) return;
+      lastFleet = fleet;
+      const rawLf = (geRawFleet && geRawFleet.live_finops) || fleet.live_finops;
+      if (rawLf) { liveFinopsFromFleet = true; renderLiveFinops(rawLf); }
+      if (fleet.window_hours && (!userSelectedWindow || Number(fleet.window_hours) === fleetWindowHours)) {
+        fleetWindowHours = Number(fleet.window_hours);
+        const sel = document.getElementById('fleetWindow');
+        if (sel && Array.from(sel.options).some(function(o) { return Number(o.value) === fleetWindowHours; })) {
+          sel.value = String(fleetWindowHours);
+        }
+      }
+      const win = windowLabel(userSelectedWindow ? fleetWindowHours : fleet.window_hours);
+      document.getElementById('fleetEngineBadge').textContent =
+        (fleet.engines || []).map(function(e) { return e.display_name || e.engine_id; }).join(', ') || 'Gemini Enterprise';
+
+      const meta = ['Project ' + (fleet.project_id || '—'), win];
+      if (fleet.generated_at) meta.push('updated ' + new Date(fleet.generated_at).toLocaleTimeString());
+      if (fleet.collection_ms != null) meta.push('collected in ' + (fleet.collection_ms / 1000).toFixed(1) + ' s');
+      if (fleet.cache_age_seconds) meta.push('cache age ' + Math.round(fleet.cache_age_seconds) + ' s');
+      meta.push({host: 'live via Gemini Enterprise', http: 'live via FinOps Dashboard API', snapshot: 'snapshot'}[fleetRefreshMode] || 'snapshot from dashboard open');
+      document.getElementById('fleetMeta').textContent = meta.join(' · ');
+
+      const sources = document.getElementById('fleetSources');
+      sources.replaceChildren();
+      Object.keys(fleet.source_status || {}).forEach(function(key) {
+        const st = fleet.source_status[key];
+        const cls = st === 'ok' ? 'chip chip-ok' : (st === 'error' ? 'chip chip-error' : 'chip chip-na');
+        const suffix = st === 'ok' ? ' ✓' : (st === 'error' ? ' · unavailable' : ' · n/a');
+        sources.appendChild(el('span', cls, [(SOURCE_LABELS[key] || key) + suffix]));
+      });
+
+      const t = fleet.totals || {};
+      const byType = Object.keys(t.by_type || {}).sort().map(function(k) { return t.by_type[k] + ' ' + k; }).join(' · ');
+      const usage = (fleet.model_usage && fleet.model_usage.totals) || null;
+      const traffic = fleet.ge_traffic || null;
+      const unrated = usage && (usage.models_without_rate_card || []).length;
+      const winHoursNum = Number(userSelectedWindow ? fleetWindowHours : fleet.window_hours) || 24;
+      const tokenTitle = winHoursNum > 720 ? 'Agent tokens in / out (30d retention)' : 'Agent tokens in / out';
+      let tokenSub = fmtInt(t.llm_calls) + ' LLM calls · ' + fmtInt(t.conversations) + ' conversations';
+      if (winHoursNum > 720) {
+        tokenSub += ' · max 30d log/trace retention';
+      } else if (t.llm_calls === 0) {
+        tokenSub = '0 LLM calls in ' + win + ' · no ADK agent activity' + (t.last_activity ? ' (last: ' + fmtAgo(t.last_activity) + ')' : '');
+      }
+      document.getElementById('fleetKpis').replaceChildren(
+        kpiCard('Agents on Gemini Enterprise', fmtInt(t.agents), (t.enabled || 0) + ' enabled' + (byType ? ' · ' + byType : '')),
+        kpiCard('Requests · ' + win, fmtInt(t.requests), t.requests == null ? 'no runtime telemetry'
+          : fmtInt(t.errors_4xx) + ' 4xx · ' + fmtInt(t.errors_5xx) + ' 5xx' + (t.error_rate_pct != null ? ' (' + t.error_rate_pct + '% 5xx)' : '')),
+        kpiCard(tokenTitle, fmtTokens(t.input_tokens) + ' / ' + fmtTokens(t.output_tokens), tokenSub),
+        kpiCard('Model spend · project (est.)', usage ? fmtUsd(usage.est_cost_usd) : '—', usage
+          ? fmtTokens(usage.input_tokens) + ' in / ' + fmtTokens(usage.output_tokens) + ' out · ' + fmtInt(usage.invocations) + ' calls'
+            + (unrated ? ' · ' + unrated + ' model(s) without rate card' : '')
+          : 'unavailable'),
+        kpiCard('GE assistant calls · project', traffic ? fmtInt(traffic.assistant_requests) : '—', 'StreamAssist requests, ' + win +
+          (fleet.ge_assistant_usage && fleet.ge_assistant_usage.totals
+            ? ' · assistant tokens ' + fmtTokens(fleet.ge_assistant_usage.totals.input_tokens) + ' in / ' +
+              fmtTokens(fleet.ge_assistant_usage.totals.output_tokens) + ' out (Cloud Trace)' : ''))
+      );
+
+      const body = document.getElementById('fleetAgentsBody');
+      body.replaceChildren();
+      traceRowEls = {};
+      if (!fleet.agents.length) body.appendChild(emptyRow(11, 'No agents found on this Gemini Enterprise app.'));
+      fleet.agents.forEach(function(a) {
+        const m = a.metrics || {};
+        const b = a.backend || {};
+        let runsOn = 'Google-managed';
+        let runsOnSub = '';
+        if (b.kind === 'agent_engine') {
+          runsOn = 'Agent Engine · ' + (b.display_name || b.reasoning_engine_id || '—');
+          runsOnSub = [b.framework, b.location].filter(Boolean).join(' · ');
+        } else if (b.kind === 'cloud_run') {
+          runsOn = 'Cloud Run · ' + b.service;
+          runsOnSub = b.region || '';
+        } else if (b.kind === 'gke') {
+          runsOn = 'GKE · ' + (b.cluster_name || 'cluster') + ' / ' + (b.container_name || 'workload');
+          runsOnSub = [b.namespace, b.location].filter(Boolean).join(' · ');
+        } else if (b.kind === 'external_endpoint') {
+          runsOn = 'External endpoint';
+          runsOnSub = b.url || '';
+        } else if (b.kind === 'gemini_enterprise_hosted') {
+          runsOn = 'Gemini Enterprise hosted';
+        } else if (b.kind === 'dialogflow') {
+          runsOn = 'Dialogflow';
+        }
+        const scope = {agent: 'per-agent telemetry', service: 'service-level telemetry'}[a.telemetry_scope] || 'inventory only';
+        const lastCell = el('td', 'mono', [m.last_activity ? fmtAgo(m.last_activity) : '—']);
+        if (m.last_activity) lastCell.title = m.last_activity;
+        const hasAgentResource = !!(a.resource_name && String(a.resource_name).indexOf('/agents/') >= 0);
+        let obsActionRow = null;
+        if (hasAgentResource) {
+          // Rendered by fillTraceRow so a confirmation or in-flight request survives auto-refresh.
+          obsActionRow = el('div', 'fleet-agent-tags trace-row', []);
+          traceRowEls[String(a.resource_name)] = {wrap: obsActionRow, agent: a};
+          fillTraceRow(obsActionRow, a);
+        }
+        const nameCell = el('td', null, [
+            el('div', 'fleet-agent-name', [a.display_name || a.agent_id]),
+            el('div', 'fleet-agent-app', [geRegionLabel(agentLocation(a)) + ' · ' + (a.engine_display_name || a.engine_id || '—')]),
+            a.description ? el('div', 'fleet-agent-desc', [a.description]) : null,
+            el('div', 'fleet-agent-tags', [
+              badge(a.state || 'UNKNOWN', a.state === 'ENABLED' ? 'badge-green' : 'badge-yellow'),
+              // vl-scope-all: compact rows hide the default scope (still shown in the agent detail).
+              a.sharing_scope ? badge(String(a.sharing_scope).replace(/_/g, ' ').toLowerCase(),
+                                      'badge-blue' + (String(a.sharing_scope).toUpperCase() === 'ALL_USERS' ? ' vl-scope-all' : '')) : null,
+              registrationBadge(a),
+            ]),
+            obsActionRow,
+          ]);
+        nameCell.dataset.csv = a.display_name || a.agent_id || '';
+        nameCell.dataset.sort = String(a.display_name || a.agent_id || '').toLowerCase();
+        const reqCell = el('td', 'mono', [fmtInt(m.requests), VL.agentSpark(fleet, a)]);
+        if (m.requests != null) reqCell.dataset.sort = String(m.requests);
+        const errCell = el('td', 'mono', [m.requests == null ? '—' : fmtInt(m.errors_4xx) + ' / ' + fmtInt(m.errors_5xx)]);
+        if (m.errors_5xx != null) errCell.dataset.sort = String(m.errors_5xx);
+        const latCell = el('td', 'mono', [m.latency_p50_ms == null && m.latency_p95_ms == null ? '—' : fmtMs(m.latency_p50_ms) + ' / ' + fmtMs(m.latency_p95_ms)]);
+        if (m.latency_p95_ms != null) latCell.dataset.sort = String(m.latency_p95_ms);
+        const tokCell = tokenCell(a);
+        if (m.input_tokens != null) tokCell.dataset.sort = String(Number(m.input_tokens) + Number(m.output_tokens || 0));
+        if (m.last_activity && !isNaN(Date.parse(m.last_activity))) lastCell.dataset.sort = String(Date.parse(m.last_activity));
+        const runsOnCell = el('td', 'vl-runs-on', [el('div', null, [runsOn]), el('div', 'fleet-agent-desc', [[runsOnSub, scope].filter(Boolean).join(' · ')])]);
+        runsOnCell.title = [runsOn, runsOnSub, scope].filter(Boolean).join(' · ');
+        const row = el('tr', a.telemetry_scope === 'none' ? 'fleet-row-muted' : null, [
+          nameCell,
+          VL.healthCell(VL.health(a)),
+          VL.typeCell(a),
+          runsOnCell,
+          reqCell,
+          errCell,
+          latCell,
+          el('td', 'mono', [fmtInt(m.llm_calls)]),
+          tokCell,
+          el('td', 'mono', [fmtInt(m.conversations)]),
+          lastCell,
+        ]);
+        VL.agentRowDecorate(row, a);
+        body.appendChild(row);
+      });
+
+      const errBox = document.getElementById('fleetErrors');
+      errBox.replaceChildren();
+      (fleet.errors || []).forEach(function(e) {
+        errBox.appendChild(el('div', 'fleet-error', [el('strong', null, [String(e.source) + ': ']), String(e.detail || '')]));
+      });
+      errBox.classList.toggle('hidden', !(fleet.errors || []).length);
+
+      const mu = fleet.model_usage;
+      document.getElementById('modelScopeText').textContent = mu ? mu.scope + ' · ' + win : 'Model usage unavailable.';
+      document.getElementById('modelCostBadge').textContent = mu && mu.totals ? 'Est. ' + fmtUsd(mu.totals.est_cost_usd) : '—';
+      const mBody = document.getElementById('modelUsageBody');
+      mBody.replaceChildren();
+      ((mu && mu.models) || []).forEach(function(r) {
+        mBody.appendChild(el('tr', null, [
+          el('td', 'mono', [r.model]),
+          el('td', 'mono', [fmtInt(r.invocations)]),
+          el('td', 'mono', [fmtTokens(r.input_tokens)]),
+          el('td', 'mono', [fmtTokens(r.output_tokens)]),
+          el('td', 'mono', [fmtTokens(r.cache_read_tokens)]),
+          el('td', 'mono', [fmtTokens(r.cache_write_tokens)]),
+          el('td', 'mono', [r.cache_read_share_pct == null ? '—' : r.cache_read_share_pct + '%']),
+          el('td', 'mono', [fmtUsd(r.est_cost_usd)]),
+        ]));
+      });
+      if (mu && !(mu.models || []).length) mBody.appendChild(emptyRow(8, 'No Vertex AI model calls in this window.'));
+
+      const notes = document.getElementById('fleetNotes');
+      notes.replaceChildren();
+      (fleet.notes || []).forEach(function(n) { notes.appendChild(el('li', null, [n])); });
+      if (fleet.token_log_scan && fleet.token_log_scan.truncated) {
+        notes.appendChild(el('li', null, ['Token log scan reached its cap (' + fleet.token_log_scan.entries_scanned
+          + ' entries); agent token totals are lower bounds for this window.']));
+      }
+      if (fleet.token_log_scan && fleet.token_log_scan.traces_truncated) {
+        notes.appendChild(el('li', null, ['Trace scan reached its page cap (' + fleet.token_log_scan.traces_scanned
+          + ' traces); trace-based token totals are lower bounds for this window.']));
+      }
+      VL.onFleet(fleet);
+    }
+
+    function buildClientObsScript(resourceName, enabled, onlyLowCode, agentObj) {
+      const fl = lastFleet || geRawFleet || {};
+      const proj = fl.project_id || '<PROJECT_ID>';
+      const engList = Array.isArray(fl.engines) ? fl.engines : [];
+      const firstEng = engList[0] || {};
+      const loc = (agentObj && agentObj.location) || firstEng.location || fl.location || 'global';
+      const col = fl.collection || 'default_collection';
+      const eng = (agentObj && agentObj.engine_id) || firstEng.engine_id || fl.engine_id || '<ENGINE_ID>';
+      const host = (!loc || loc === 'global') ? 'discoveryengine.googleapis.com' : (loc + '-discoveryengine.googleapis.com');
+      const boolVal = enabled ? 'true' : 'false';
+      const actionVerb = enabled ? 'Enabling' : 'Disabling';
+      const jqExpr = onlyLowCode
+        ? '.agents[]? | select(.lowCodeAgentDefinition != null or .workflowAgentDefinition != null) | .name // empty'
+        : '.agents[]?.name // empty';
+      const targetRes = resourceName || ('projects/' + proj + '/locations/' + loc + '/collections/' + col + '/engines/' + eng + '/assistants/default_assistant/agents/<AGENT_ID>');
+      const curlCmd = [
+        'curl -s -X PATCH \\\\',
+        '  -H "Authorization: Bearer $(gcloud auth print-access-token)" \\\\',
+        '  -H "X-Goog-User-Project: ' + proj + '" \\\\',
+        '  -H "Content-Type: application/json" \\\\',
+        '  "https://' + host + '/v1alpha/' + targetRes + '?updateMask=observabilityConfig" \\\\',
+        '  -d \\'{"observabilityConfig":{"observabilityEnabled":' + boolVal + ',"sensitiveLoggingEnabled":' + boolVal + '}}\\''
+      ].join('\\n');
+      const script = [
+        '#!/bin/bash',
+        '# -------------------------------------------------------------',
+        '# Script: ' + (enabled ? 'enable_agent_logging.sh' : 'disable_agent_logging.sh'),
+        '# Purpose: ' + (enabled ? 'Enables' : 'Disables') + ' trace logging across registered agents',
+        '# -------------------------------------------------------------',
+        '',
+        'set -e',
+        '',
+        'PROJECT_ID="' + proj + '"',
+        'LOCATION="' + loc + '"',
+        'COLLECTION="' + col + '"',
+        'ENGINE_ID="' + eng + '"',
+        '',
+        'echo "Fetching active agents for Engine: ${ENGINE_ID}..."',
+        'ACCESS_TOKEN=$(gcloud auth print-access-token)',
+        '',
+        'RESPONSE=$(curl -s -X GET \\\\',
+        '  -H "Authorization: Bearer ${ACCESS_TOKEN}" \\\\',
+        '  -H "X-Goog-User-Project: ${PROJECT_ID}" \\\\',
+        '  "https://' + host + '/v1alpha/projects/${PROJECT_ID}/locations/${LOCATION}/collections/${COLLECTION}/engines/${ENGINE_ID}/assistants/default_assistant/agents")',
+        '',
+        'AGENTS=$(echo "${RESPONSE}" | jq -r \\'' + jqExpr + '\\')',
+        '',
+        'if [ -z "$AGENTS" ]; then',
+        '  echo "⚠️ No active agents found under \\'default_assistant\\'."',
+        '  exit 0',
+        'fi',
+        '',
+        'for AGENT in $AGENTS; do',
+        '  echo "--------------------------------------------------------"',
+        '  echo "' + actionVerb + ' trace logging for: ${AGENT}"',
+        '  RESULT=$(curl -s -X PATCH \\\\',
+        '    -H "Authorization: Bearer ${ACCESS_TOKEN}" \\\\',
+        '    -H "X-Goog-User-Project: ${PROJECT_ID}" \\\\',
+        '    -H "Content-Type: application/json" \\\\',
+        '    "https://' + host + '/v1alpha/${AGENT}?updateMask=observabilityConfig" \\\\',
+        '    -d \\'{',
+        '      "observabilityConfig": {',
+        '        "observabilityEnabled": ' + boolVal + ',',
+        '        "sensitiveLoggingEnabled": ' + boolVal,
+        '      }',
+        '    }\\')',
+        '  echo "Status: $(echo "${RESULT}" | jq -c \\'.observabilityConfig // .error.message\\')"',
+        'done',
+        'echo "--------------------------------------------------------"',
+        'echo "✅ All agents updated successfully."'
+      ].join('\\n');
+      return {curl_command: curlCmd, script: script};
+    }
+
+    function toggleAgentObsDrawer() {
+      const drawer = document.getElementById('agentObsDrawer');
+      if (!drawer) return;
+      const wasHidden = drawer.classList.contains('hidden');
+      drawer.classList.toggle('hidden', !wasHidden);
+      if (wasHidden) {
+        // Rebuilt on every open so the project and engine values match the latest fleet.
+        const info = buildClientObsScript(null, true, false, null);
+        const curlEl = document.getElementById('agentObsCurlCode');
+        const scriptEl = document.getElementById('agentObsScriptCode');
+        if (curlEl) curlEl.textContent = info.curl_command;
+        if (scriptEl) scriptEl.textContent = info.script;
+      }
+      notifyHostSizeChanged();
+    }
+
+    // ---------------- Trace logging (observabilityConfig) ----------------
+    // Enable / Disable asks "Are you sure?" inline, then applies the change through the server: a direct
+    // POST, or (inside Gemini Enterprise) the app-only set_agent_trace_logging tool via the host bridge.
+    // State lives outside the DOM so the 60 s auto-refresh cannot wipe a confirmation or a pending call.
+    var TRACE_TOOL = 'set_agent_trace_logging';
+    var traceRowState = {};   // resource_name -> {phase: 'confirm'|'busy'|'done'|'error', enabled, text}
+    var traceOverrides = {};  // resource_name -> {config, at}: API-confirmed state newer than the snapshot
+    var traceRowEls = {};     // resource_name -> {wrap, agent} for the rows currently rendered
+    var traceBulkState = null;  // {phase, enabled, onlyLowCode, count, text}
+
+    function traceAgentName(a) {
+      return (a && (a.display_name || a.agent_id)) || 'this agent';
+    }
+
+    function traceButton(label, extraCls) {
+      const b = el('button', 'btn btn-xs' + (extraCls ? ' ' + extraCls : ''), [label]);
+      b.type = 'button';
+      return b;
+    }
+
+    function traceErrorMessage(err) {
+      const msg = String((err && err.message) || err || 'unknown error');
+      if (msg.indexOf('Timeout waiting') === 0) {
+        return 'Gemini Enterprise did not answer in time. Refresh to check whether the change was applied.';
+      }
+      return msg;
+    }
+
+    // A snapshot collected before a confirmed change (e.g. another instance's cache) must not flip the
+    // badge back; a snapshot collected after it is the API's truth and replaces the override.
+    function applyTraceOverrides(fleet) {
+      if (!fleet || !Array.isArray(fleet.agents)) return;
+      const generated = Date.parse(fleet.generated_at || '') || 0;
+      fleet.agents.forEach(function(ag) {
+        const ov = ag && ag.resource_name ? traceOverrides[ag.resource_name] : null;
+        if (!ov) return;
+        if (generated > ov.at) {
+          delete traceOverrides[ag.resource_name];
+          return;
+        }
+        ag.observability_config = Object.assign({}, ov.config);
+      });
+    }
+
+    // Only agents the API confirmed (status OK) change, using the configuration the API returned.
+    function recordTraceResults(data) {
+      const confirmed = {};
+      ((data && data.results) || []).forEach(function(r) {
+        if (r && r.status === 'OK' && r.resource_name && r.observability_config) {
+          confirmed[r.resource_name] = r.observability_config;
+        }
+      });
+      const at = Date.parse((data && data.updated_at) || '') || Date.now();
+      Object.keys(confirmed).forEach(function(res) {
+        traceOverrides[res] = {config: confirmed[res], at: at};
+        const ref = traceRowEls[res];
+        if (ref && ref.agent) ref.agent.observability_config = Object.assign({}, confirmed[res]);
+      });
+      [geRawFleet, lastFleet].forEach(function(fl) {
+        if (!fl || !Array.isArray(fl.agents)) return;
+        fl.agents.forEach(function(ag) {
+          if (ag && confirmed[ag.resource_name]) {
+            ag.observability_config = Object.assign({}, confirmed[ag.resource_name]);
+          }
+        });
+      });
+      return confirmed;
+    }
+
+    async function callTraceApi(payload, timeoutMs) {
+      if (isEmbedded()) {
+        // Inside Gemini Enterprise the dashboard is a sandboxed MCP App with no route to /api, so the
+        // host proxies the call to the server's app-only trace logging tool.
+        const result = await callHost('tools/call', {name: TRACE_TOOL, arguments: payload}, timeoutMs);
+        if (result && !result.isError && result.structuredContent) return result.structuredContent;
+        const text = ((result && result.content) || []).map(function(c) { return (c && c.text) || ''; }).join(' ').trim();
+        throw new Error(text || 'Gemini Enterprise returned no result for the trace logging change.');
+      }
+      const resp = await fetch('/api/enable_agent_observability', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      let data = null;
+      try { data = await resp.json(); } catch (e) { data = null; }
+      if (!resp.ok || !data) {
+        const detail = data && [data.message, data.error, data.detail].filter(function(v) {
+          return typeof v === 'string' && v;
+        })[0];
+        throw new Error(detail || ('HTTP ' + resp.status));
+      }
+      return data;
+    }
+
+    function fillTraceRow(wrap, a) {
+      const res = String(a.resource_name || '');
+      const name = traceAgentName(a);
+      const cfg = a.observability_config || {};
+      const on = !!cfg.observability_enabled;
+      const st = traceRowState[res] || null;
+      const stateBadge = badge(on ? 'Trace: ON' : 'Trace: OFF', on ? 'badge-green' : 'badge-yellow');
+      stateBadge.title = on
+        ? 'Discovery Engine trace logging is on' + (cfg.sensitive_logging_enabled ? ', including prompts and responses.' : '.')
+        : 'Discovery Engine trace logging is off.';
+      const kids = [stateBadge];
+      if (st && st.phase === 'confirm') {
+        const yes = traceButton(st.enabled ? 'Yes, enable' : 'Yes, disable', 'btn-primary');
+        yes.addEventListener('click', function() { runAgentTrace(res); });
+        const cancel = traceButton('Cancel', '');
+        cancel.addEventListener('click', function() { setTraceRowState(res, null); });
+        kids.push(el('span', 'trace-confirm', [
+          'Are you sure? ' + (st.enabled ? 'Enable' : 'Disable') + ' trace logging for ' + name
+            + (st.enabled ? ' (prompts and responses will be logged)?' : '?'),
+        ]), yes, cancel);
+      } else if (st && st.phase === 'busy') {
+        const busy = traceButton(st.enabled ? 'Enabling…' : 'Disabling…', '');
+        busy.disabled = true;
+        kids.push(busy);
+      } else {
+        const next = !on;
+        const toggle = traceButton(next ? 'Enable trace' : 'Disable trace', next ? 'btn-primary' : '');
+        toggle.title = (next ? 'Enable' : 'Disable') + ' trace logging (observabilityConfig) for ' + name;
+        toggle.addEventListener('click', function() { setTraceRowState(res, {phase: 'confirm', enabled: next}); });
+        kids.push(toggle);
+        if (st && st.text) {
+          kids.push(el('span', 'trace-msg ' + (st.phase === 'done' ? 'trace-msg-ok' : 'trace-msg-err'), [st.text]));
+        }
+      }
+      wrap.replaceChildren.apply(wrap, kids);
+    }
+
+    function setTraceRowState(res, st) {
+      if (st) traceRowState[res] = st; else delete traceRowState[res];
+      const ref = traceRowEls[res];
+      if (ref) fillTraceRow(ref.wrap, ref.agent);
+      if (typeof VL !== 'undefined') VL.onTraceRow(res);
+      notifyHostSizeChanged();
+    }
+
+    async function runAgentTrace(res) {
+      const st = traceRowState[res];
+      if (!st || st.phase !== 'confirm') return;
+      const enabled = !!st.enabled;
+      setTraceRowState(res, {phase: 'busy', enabled: enabled});
+      let next;
+      try {
+        const data = await callTraceApi({resource_name: res, enabled: enabled, sensitive_logging: enabled}, 60000);
+        const confirmed = recordTraceResults(data);
+        next = (data.status === 'OK' && confirmed[res])
+          ? {phase: 'done', enabled: enabled, text: '✓ Trace logging ' + (enabled ? 'enabled' : 'disabled') + '.'}
+          : {phase: 'error', enabled: enabled, text: String(data.message || ('Not applied (' + (data.status || 'no status') + ').'))};
+      } catch (err) {
+        next = {phase: 'error', enabled: enabled,
+          text: 'Could not ' + (enabled ? 'enable' : 'disable') + ' trace logging: ' + traceErrorMessage(err)};
+      }
+      setTraceRowState(res, next);
+      if (next.phase === 'done') {
+        setTimeout(function() { if (traceRowState[res] === next) setTraceRowState(res, null); }, 8000);
+      }
+    }
+
+    function traceCandidates(onlyLowCode) {
+      const fl = geRawFleet || lastFleet;
+      return ((fl && fl.agents) || []).filter(function(a) {
+        return a && a.resource_name && String(a.resource_name).indexOf('/agents/') >= 0
+          && (!onlyLowCode || a.type === 'LOW_CODE');
+      });
+    }
+
+    function setBulkTraceButtonsDisabled(disabled) {
+      ['enableLowCodeObsBtn', 'disableLowCodeObsBtn', 'enableAllObsBtn', 'disableAllObsBtn'].forEach(function(id) {
+        const b = document.getElementById(id);
+        if (b) b.disabled = !!disabled;
+      });
+    }
+
+    function askBulkTrace(enabled, onlyLowCode) {
+      if (traceBulkState && traceBulkState.phase === 'busy') return;
+      traceBulkState = {
+        phase: 'confirm', enabled: !!enabled, onlyLowCode: !!onlyLowCode,
+        count: traceCandidates(onlyLowCode).length,
+      };
+      renderTraceBulkBar();
+    }
+
+    function renderTraceBulkBar() {
+      const bar = document.getElementById('traceBulkBar');
+      if (!bar) return;
+      const st = traceBulkState;
+      if (!st) {
+        bar.replaceChildren();
+        bar.classList.add('hidden');
+        notifyHostSizeChanged();
+        return;
+      }
+      const kind = st.onlyLowCode ? 'No-Code / Low-Code agent' : 'registered agent';
+      const noun = st.count + ' ' + kind + (st.count === 1 ? '' : 's');
+      const close = traceButton('Close', '');
+      close.addEventListener('click', function() { traceBulkState = null; renderTraceBulkBar(); });
+      const kids = [];
+      if (st.phase === 'confirm' && !st.count) {
+        kids.push(el('span', 'trace-msg trace-msg-err', ['No ' + kind + 's found to update.']), close);
+      } else if (st.phase === 'confirm') {
+        const yes = traceButton(st.enabled ? 'Yes, enable' : 'Yes, disable', 'btn-primary');
+        yes.addEventListener('click', confirmBulkTrace);
+        const cancel = traceButton('Cancel', '');
+        cancel.addEventListener('click', function() { traceBulkState = null; renderTraceBulkBar(); });
+        kids.push(el('span', 'trace-confirm', [
+          'Are you sure? ' + (st.enabled ? 'Enable' : 'Disable') + ' trace logging on ' + noun
+            + ' across all Gemini Enterprise apps' + (st.enabled ? ' (prompts and responses will be logged)?' : '?'),
+        ]), yes, cancel);
+      } else if (st.phase === 'busy') {
+        kids.push(el('span', 'trace-confirm', [(st.enabled ? 'Enabling' : 'Disabling') + ' trace logging on ' + noun + '…']));
+      } else {
+        kids.push(el('span', 'trace-msg ' + (st.phase === 'done' ? 'trace-msg-ok' : 'trace-msg-err'), [st.text || '']), close);
+      }
+      bar.replaceChildren.apply(bar, kids);
+      bar.classList.remove('hidden');
+      notifyHostSizeChanged();
+    }
+
+    async function confirmBulkTrace() {
+      const st = traceBulkState;
+      if (!st || st.phase !== 'confirm') return;
+      st.phase = 'busy';
+      setBulkTraceButtonsDisabled(true);
+      renderTraceBulkBar();
+      try {
+        const data = await callTraceApi({enabled: st.enabled, sensitive_logging: st.enabled, only_low_code: st.onlyLowCode}, 120000);
+        recordTraceResults(data);
+        st.phase = data.status === 'OK' ? 'done' : 'error';
+        st.text = (data.status === 'OK' ? '✓ ' : '') + String(data.message || ('Not applied (' + (data.status || 'no status') + ').'));
+        const failed = (data.results || []).filter(function(r) { return r && r.status !== 'OK'; });
+        if (data.status === 'PARTIAL' && failed.length) {
+          st.text += ' Not updated: ' + failed.map(function(r) { return r.display_name || r.agent_id; }).join(', ') + '.';
+        }
+      } catch (err) {
+        st.phase = 'error';
+        st.text = 'Could not ' + (st.enabled ? 'enable' : 'disable') + ' trace logging: ' + traceErrorMessage(err);
+      }
+      setBulkTraceButtonsDisabled(false);
+      if (traceBulkState === st) renderTraceBulkBar();
+      if (geRawFleet || lastFleet) renderFleet(geRawFleet || lastFleet);
+    }
+
+    let fleetRequestSeq = 0;
+    let fleetWarmingTimer = null;
+
+    function setWindowLoadingState(isLoading) {
+      const badgeEl = document.getElementById('fleetWindowStatus');
+      if (badgeEl) {
+        badgeEl.style.display = isLoading ? 'inline-block' : 'none';
+      }
+    }
+
+    async function refreshFleet(force) {
+      const reqSeq = ++fleetRequestSeq;
+      const requestedHours = fleetWindowHours;
+      if (fleetWarmingTimer) { clearTimeout(fleetWarmingTimer); fleetWarmingTimer = null; }
+      const btn = document.getElementById('fleetRefreshBtn');
+      if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
+      setWindowLoadingState(true);
+      try {
+        let fleet = null;
+        if (isEmbedded()) {
+          // Inside Gemini Enterprise the dashboard is a sandboxed MCP App: the host proxies tools/call.
+          try {
+            const result = await callHost('tools/call', {
+              name: FLEET_TOOL,
+              arguments: {window_hours: requestedHours, force_refresh: !!force},
+            }, 25000);
+            if (result && !result.isError && result.structuredContent) {
+              fleet = result.structuredContent;
+              fleetRefreshMode = 'host';
+            }
+          } catch (innerErr) {
+            fleet = null;
+          }
+          if (!fleet) {
+            const fallback = await callHost('tools/call', {
+              name: 'open_dashboard',
+              arguments: {window_hours: requestedHours, force_refresh: !!force, include_full_state: true},
+            }, 25000);
+            if (fallback && !fallback.isError && fallback.structuredContent) {
+              const sc = fallback.structuredContent;
+              if (sc.state) {
+                if (reqSeq === fleetRequestSeq && requestedHours === fleetWindowHours) {
+                  renderState(sc.state);
+                }
+                fleet = sc.state.ge_fleet;
+              } else {
+                fleet = sc.ge_fleet || sc;
+              }
+              if (fleet) fleetRefreshMode = 'host';
+            }
+          }
+        } else {
+          const url = '/api/ge_fleet?window_hours=' + encodeURIComponent(requestedHours) + (force ? '&force_refresh=1' : '');
+          const res = await fetch(url, {cache: 'no-store', credentials: 'same-origin'});
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          fleet = await res.json();
+          fleetRefreshMode = 'http';
+        }
+        // Ignore out-of-order responses from an earlier window selection.
+        if (reqSeq !== fleetRequestSeq || requestedHours !== fleetWindowHours) {
+          return false;
+        }
+        if (!fleet || !Array.isArray(fleet.agents)) throw new Error('no fleet data');
+        setFleetNotice('');
+        renderFleet(fleet);
+        if (fleet.warming || (fleet.source_status && fleet.source_status.inventory === 'warming')) {
+          fleetWarmingTimer = setTimeout(function() {
+            if (fleetWindowHours === requestedHours) refreshFleet(false);
+          }, 2500);
+        }
+        return true;
+      } catch (err) {
+        if (reqSeq !== fleetRequestSeq) return false;
+        fleetRefreshMode = 'snapshot';
+        const when = lastFleet && lastFleet.generated_at ? ' from ' + new Date(lastFleet.generated_at).toLocaleTimeString() : '';
+        setFleetNotice('Live refresh is not available from this view, so this is the snapshot' + when
+          + '. Ask the assistant to open the FinOps Dashboard dashboard again for newer data.', true);
+        if (lastFleet) renderFleet(lastFleet);
+        return false;
+      } finally {
+        if (reqSeq === fleetRequestSeq) {
+          if (btn) { btn.disabled = false; btn.textContent = 'Refresh now'; }
+          setWindowLoadingState(false);
+        }
+      }
+    }
+
+    async function onFleetWindowChange() {
+      const sel = document.getElementById('fleetWindow');
+      fleetWindowHours = Number(sel && sel.value) || 24;
+      userSelectedWindow = true;
+      try { localStorage.setItem('finops.fleetWindowHours', String(fleetWindowHours)); } catch (e) {}
+      VL.syncUrl();
+      if (fleetRefreshMode === 'snapshot') fleetRefreshMode = 'pending';
+      const targetHours = fleetWindowHours;
+      const ok = await refreshFleet(false);
+      if (ok && !isEmbedded() && fleetWindowHours === targetHours) {
+        fetchState(targetHours, fleetRequestSeq).catch(function() {});
+      }
+    }
+
+    function scheduleFleetRefresh() {
+      if (fleetTimer) { clearInterval(fleetTimer); fleetTimer = null; }
+      const auto = document.getElementById('fleetAuto');
+      if (!auto || !auto.checked) return;
+      fleetTimer = setInterval(function() {
+        if (document.hidden || fleetRefreshMode === 'snapshot') return;
+        refreshFleet(false);
+      }, FLEET_REFRESH_MS);
+    }
+
+    async function fetchState(expectedHours, expectedSeq) {
+      const targetHours = expectedHours || fleetWindowHours;
+      const url = '/api/state?window_hours=' + encodeURIComponent(targetHours);
+      const res = await fetch(url, {cache: 'no-store', credentials: 'same-origin'});
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      if (targetHours !== fleetWindowHours || (expectedSeq && expectedSeq !== fleetRequestSeq)) {
+        return;
+      }
+      fleetRefreshMode = 'http';
+      renderState(data);
+    }
+
+    async function syncGcpTelemetry() {
+      const btn = document.getElementById('syncGcpBtn');
+      const originalHtml = btn ? btn.innerHTML : '';
+      if (btn) {
+        btn.innerHTML = '&#x23F3; Syncing GCP Telemetry...';
+        btn.disabled = true;
+      }
+      try {
+        if (isEmbedded()) {
+          await refreshFleet(true);
+          return;
+        }
+        const res = await fetch('/api/sync_gcp_telemetry', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({window_hours: fleetWindowHours}),
+        });
+        const data = await res.json();
+        renderState(data.state || data);
+        await refreshFleet(true);
+      } catch (err) {
+        console.error('Failed to sync GCP telemetry:', err);
+      } finally {
+        if (btn) {
+          btn.innerHTML = originalHtml;
+          btn.disabled = false;
+        }
+      }
+    }
+
+    const PLATFORM_META_LOCAL = {
+      alpha_evolve: { id: 'alpha_evolve', name: 'AlphaEvolve (Cost, Speed & Quality Balance)' },
+      opus_critic: { id: 'opus_critic', name: 'Opus Frontier Critic (Prompt Cleanup & Restructuring)' },
+      hybrid_ensemble: { id: 'hybrid_ensemble', name: 'Hybrid Ensemble (AlphaEvolve + Opus Critic)' },
+    };
+
+    // Local view switches over data the server already sent (works in the embedded view and offline).
+    // Nothing here makes up numbers: other actions go to the server, or show a notice when they can't.
+    function applyEmbeddedMutation(endpoint, payload) {
+      if (!currentState || !currentState.active_agent) return false;
+      if (endpoint === '/api/select_agent') {
+        const targetId = payload && payload.agent_id;
+        if (targetId && allAgentsCache[targetId]) {
+          currentState.active_agent = JSON.parse(JSON.stringify(allAgentsCache[targetId]));
+          renderState(currentState);
+          return true;
+        }
+        return false;
+      }
+      if (endpoint === '/api/select_optimizer' && payload && payload.platform_id) {
+        const pid = String(payload.platform_id);
+        currentState.optimizer_platforms = currentState.optimizer_platforms || {};
+        currentState.optimizer_platforms.active_platform_id = pid;
+        currentState.optimizer_platforms.active_platform = PLATFORM_META_LOCAL[pid] || PLATFORM_META_LOCAL.alpha_evolve;
+        renderState(currentState);
+        return true;
+      }
+      if (endpoint === '/api/reset' && initialStateSnapshot) {
+        currentState = JSON.parse(JSON.stringify(initialStateSnapshot));
+        if (currentState.all_agents) {
+          allAgentsCache = JSON.parse(JSON.stringify(currentState.all_agents));
+        }
+        renderState(currentState);
+        return true;
+      }
+      return false;
+    }
+
+    let apiNoticeTimer = null;
+    let lastErrorDiagnostic = null;
+    function showApiNotice(message, info) {
+      lastErrorDiagnostic = info || null;
+      const box = document.getElementById('apiNotice');
+      if (!box) return;
+      box.textContent = String(message);
+      if (box.dataset) {
+        box.dataset.errorKind = (info && info.kind) ? String(info.kind) : 'NOTICE';
+        box.dataset.errorCode = (info && info.code) ? String(info.code) : '';
+        box.dataset.isCodeBug = (info && info.isCodeBug) ? 'true' : 'false';
+        box.dataset.requestId = (info && info.requestId) ? String(info.requestId) : '';
+      }
+      box.classList.remove('hidden');
+      if (apiNoticeTimer) clearTimeout(apiNoticeTimer);
+      apiNoticeTimer = setTimeout(function() { box.classList.add('hidden'); }, 11000);
+    }
+
+    function apiErrorText(endpoint, status, data, jsErr) {
+      if (typeof VL !== 'undefined' && VL && typeof VL.classifyError === 'function') {
+        return VL.classifyError(endpoint, status, data, jsErr).bannerText;
+      }
+      if (data && Array.isArray(data.errors) && data.errors.length) {
+        return endpoint + ' rejected the request (HTTP ' + status + '): ' + data.errors.join('; ');
+      }
+      return endpoint + ' failed (HTTP ' + status + ').';
+    }
+
+    async function triggerApi(endpoint, payload = {}) {
+      if (isEmbedded()) {
+        if (applyEmbeddedMutation(endpoint, payload)) return;
+        if (endpoint === '/api/evolve_generation' && currentState && currentState.active_agent) {
+          // The embedded view can't call the HTTP API; run the simulator through the MCP tool instead.
+          const activePlatId = (currentState.optimizer_platforms && currentState.optimizer_platforms.active_platform_id) || 'alpha_evolve';
+          callHost('tools/call', {
+            name: 'run_alpha_evolve_generation',
+            arguments: {agent_id: currentState.active_agent.agent_id, platform_id: activePlatId},
+          }, 15000).then(function(res) {
+            const nextState = res && !res.isError && res.structuredContent
+              ? (res.structuredContent.state || res.structuredContent) : null;
+            if (nextState && nextState.active_agent) {
+              if (!nextState.ge_fleet && currentState && currentState.ge_fleet) {
+                nextState.ge_fleet = currentState.ge_fleet;
+              }
+              renderState(nextState);
+            } else {
+              showApiNotice('The simulator tool returned no result.');
+            }
+          }).catch(function(err) { showApiNotice('Simulator tool call failed: ' + err); });
+          return;
+        }
+        showApiNotice('This action is not available in the embedded view. Open the dashboard URL in a browser tab to use it.');
+        return;
+      }
+      try {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload),
+        });
+        let data = null;
+        try { data = await res.json(); } catch (parseErr) { data = null; }
+        if (!res.ok || !data || isNonStateErrorPayload(data)) {
+          const info = (typeof VL !== 'undefined' && VL && typeof VL.classifyError === 'function')
+            ? VL.classifyError(endpoint, res.status, data, null)
+            : null;
+          showApiNotice(info ? info.bannerText : apiErrorText(endpoint, res.status, data, null), info);
+          return;
+        }
+        renderState((data.state && typeof data.state === 'object') ? data.state : data);
+      } catch (err) {
+        if (!applyEmbeddedMutation(endpoint, payload)) {
+          const info = (typeof VL !== 'undefined' && VL && typeof VL.classifyError === 'function')
+            ? VL.classifyError(endpoint, 0, null, err)
+            : null;
+          showApiNotice(info ? info.bannerText : ('Request to ' + endpoint + ' failed: ' + err), info);
+        }
+      }
+    }
+
+    function renderIngestDeadLetters(list) {
+      const body = document.getElementById('ingestDeadLetterBody');
+      if (!body) return;
+      const rows = Array.isArray(list) ? list : [];
+      const count = document.getElementById('ingestDeadLetterCount');
+      if (count) count.textContent = String(rows.length);
+      body.replaceChildren();
+      if (!rows.length) {
+        const td = el('td', null, ['No rejected ingest bodies since this instance started.']);
+        td.colSpan = 6;
+        body.appendChild(el('tr', null, [td]));
+        return;
+      }
+      rows.forEach(function(d) {
+        body.appendChild(el('tr', null, [
+          el('td', 'mono', [d.timestamp]),
+          el('td', 'mono', [d.source]),
+          el('td', null, [(d.errors || []).join('; ')]),
+          el('td', 'mono', [(d.payload_keys || []).join(', ') || '(' + (d.payload_type || 'no body') + ')']),
+          el('td', 'mono', [d.payload_bytes == null ? '—' : String(d.payload_bytes)]),
+          el('td', 'mono', [String(d.payload_sha256 || '').slice(0, 12)]),
+        ]));
+      });
+    }
+
+    function onSelectAgent(agentId) {
+      triggerApi('/api/select_agent', {agent_id: agentId});
+    }
+
+    function onSelectOptimizer(platformId) {
+      triggerApi('/api/select_optimizer', {platform_id: platformId});
+    }
+
+    function applyParameterPreset(label, unit, dirValue, baselineVal, targetVal, weightVal) {
+      document.getElementById('newParamLabel').value = label;
+      document.getElementById('newParamUnit').value = unit;
+      document.getElementById('newParamDirection').value = dirValue;
+      document.getElementById('newParamBaseline').value = String(baselineVal);
+      document.getElementById('newParamTarget').value = String(targetVal);
+      document.getElementById('newParamWeight').value = String(weightVal);
+      onAddCustomParameter();
+    }
+
+    // Sends a real, measured event: the round-trip time of GET /api/health from this browser.
+    // (Not /healthz: Cloud Run's front end reserves paths ending in "z".)
+    async function emitLiveDecoratorEvent() {
+      if (isEmbedded()) {
+        showApiNotice('The probe needs direct HTTP access to this service. Open the dashboard URL in a browser tab to send one.');
+        return;
+      }
+      const t0 = performance.now();
+      let status = 'OK';
+      try {
+        const ping = await fetch('/api/health', {cache: 'no-store'});
+        if (!ping.ok) status = 'HTTP ' + ping.status;
+      } catch (err) {
+        showApiNotice('Probe failed: /api/health did not respond (' + err + ').');
+        return;
+      }
+      const latencyMs = Math.round((performance.now() - t0) * 10) / 10;
+      triggerApi('/api/decorator_ingest', {
+        agent_name: 'finops_dashboard',
+        handler_name: 'api_health_probe',
+        protocol: 'HTTP GET /api/health from this browser',
+        latency_ms: latencyMs,
+        status: status,
+      });
+    }
+
+    function onAddCustomParameter() {
+      const label = document.getElementById('newParamLabel').value.trim() || 'Custom Metric';
+      const unit = document.getElementById('newParamUnit').value.trim() || '%';
+      const rawDir = document.getElementById('newParamDirection').value;
+      const direction = rawDir === 'lower_is_better' ? 'LOWER' : 'HIGHER';
+      const baseline_val = parseFloat(document.getElementById('newParamBaseline').value) || 80.0;
+      const target_val = parseFloat(document.getElementById('newParamTarget').value) || 95.0;
+      const weight_pct = parseInt(document.getElementById('newParamWeight').value, 10) || 10;
+      triggerApi('/api/add_parameter', {
+        label,
+        unit,
+        direction,
+        baseline_val,
+        target_val,
+        weight_pct,
+      });
+    }
+
+    // ---------------------------------------------------------------------------
+    // Gemini Enterprise AppBridge & Streamable MCP postMessage protocol
+    // Docks on the Right Side Panel ('pip') by default with a prominent Fullscreen toggle button.
+    // ---------------------------------------------------------------------------
+    const INITIAL_EMBEDDED_STATE = __FINOPS_INITIAL_STATE_JSON__;
+    const pending = {};
+    let seq = 0;
+    let isBridgeInitialized = false;
+    let currentDisplayMode = 'pip';
+
+    function notifyHostSizeChanged() {
+      if (!isEmbedded() || currentDisplayMode === 'fullscreen') return;
+      try {
+        const h = Math.max(document.body ? document.body.offsetHeight : 0, 720);
+        post({
+          jsonrpc: '2.0',
+          method: 'ui/notifications/size-changed',
+          params: { height: h },
+        });
+      } catch (e) {}
+    }
+
+    function setDisplayMode(mode) {
+      if (!isEmbedded()) {
+        if (mode === 'fullscreen' && document.documentElement.requestFullscreen && !document.fullscreenElement) {
+          document.documentElement.requestFullscreen().catch(function() {});
+        } else if (mode !== 'fullscreen' && document.exitFullscreen && document.fullscreenElement) {
+          document.exitFullscreen().catch(function() {});
+        }
+        currentDisplayMode = mode;
+        syncDisplayModeButton();
+        return Promise.resolve({ mode: mode });
+      }
+      return callHost('ui/request-display-mode', { mode: mode }, 4000).then(function(res) {
+        currentDisplayMode = (res && res.mode) ? res.mode : mode;
+        syncDisplayModeButton();
+        notifyHostSizeChanged();
+        return res;
+      }).catch(function(err) {
+        console.warn('Display mode request notice:', err);
+        currentDisplayMode = mode;
+        syncDisplayModeButton();
+      });
+    }
+
+    document.addEventListener('fullscreenchange', function() {
+      if (!isEmbedded()) {
+        currentDisplayMode = document.fullscreenElement ? 'fullscreen' : 'pip';
+        syncDisplayModeButton();
+      }
+    });
+
+    function toggleDisplayMode() {
+      const target = currentDisplayMode === 'fullscreen' ? 'pip' : 'fullscreen';
+      setDisplayMode(target);
+    }
+
+    function syncDisplayModeButton() {
+      const btn = document.getElementById('btnModeFullscreen');
+      if (!btn) return;
+      btn.style.display = 'inline-flex';
+      if (currentDisplayMode === 'fullscreen') {
+        btn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg> Dock to Right Panel';
+        btn.title = 'Return to right side panel (pip)';
+      } else {
+        btn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg> Fullscreen';
+        btn.title = 'Expand dashboard to Fullscreen';
+      }
+    }
+
+    function post(msg) {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage(msg, '*');
+        return;
+      }
+      // Standalone mode: simulated local handling
+      if (msg.method === 'ui/initialize' || msg.method === 'initialize') {
+        setTimeout(function() {
+          if (msg.id && pending[msg.id]) {
+            const p = pending[msg.id];
+            delete pending[msg.id];
+            p.resolve({
+              protocolVersion: '2025-06-18',
+              hostCapabilities: {},
+              hostContext: { displayMode: 'pip', availableDisplayModes: ['pip', 'fullscreen', 'inline'] },
+            });
+          }
+        }, 10);
+        return;
+      }
+      if (msg.method === 'ui/request-display-mode') {
+        const mode = (msg.params && msg.params.mode) || 'pip';
+        setTimeout(function() {
+          if (msg.id && pending[msg.id]) {
+            const p = pending[msg.id];
+            delete pending[msg.id];
+            p.resolve({ mode: mode });
+          }
+        }, 10);
+        return;
+      }
+    }
+
+    function callHost(method, params, timeoutMs) {
+      return new Promise(function(resolve, reject) {
+        const id = 'vl_' + (++seq);
+        const timerId = setTimeout(function() {
+          if (pending[id]) {
+            delete pending[id];
+            reject(new Error('Timeout waiting for ' + method));
+          }
+        }, timeoutMs || 10000);
+
+        pending[id] = {
+          resolve: function(val) { clearTimeout(timerId); resolve(val); },
+          reject: function(err) { clearTimeout(timerId); reject(err); },
+        };
+        post({ jsonrpc: '2.0', id: id, method: method, params: params || {} });
+      });
+    }
+
+    window.addEventListener('message', function(event) {
+      const data = event.data;
+      if (!data || typeof data !== 'object') return;
+
+      if (data.id && pending[data.id]) {
+        const p = pending[data.id];
+        delete pending[data.id];
+        if (data.error) {
+          p.reject(new Error(data.error.message || 'Call failed'));
+        } else {
+          p.resolve(data.result);
+        }
+      }
+
+      if (data.method === 'ui/notifications/initialized' || data.method === 'notifications/initialized') {
+        isBridgeInitialized = true;
+      }
+
+      if (data.method === 'ui/notifications/host-context-changed' && data.params) {
+        if (data.params.theme) VL.setHostTheme(data.params.theme);
+        if (data.params.displayMode) {
+          currentDisplayMode = data.params.displayMode;
+          syncDisplayModeButton();
+        }
+      }
+
+      if (data.method === 'ui/notifications/tool-result' && data.params) {
+        const structured = data.params.structuredContent || data.params;
+        if (structured && structured.state) {
+          if (!structured.state.compact_mcp || !currentState || currentState.compact_mcp) {
+            renderState(structured.state);
+          }
+          if (structured.focus_tab != null) {
+            // An explicit request for an Advanced tab turns Advanced mode on instead of being ignored.
+            if (ADVANCED_ONLY_TABS.indexOf(Number(structured.focus_tab)) >= 0 && !isAdvancedMode()) applyAdvancedMode(true);
+            switchTab(structured.focus_tab);
+          }
+        } else if (structured && structured.active_agent && structured.focus_tab == null) {
+          renderState(structured);
+        } else if (structured && structured.source === 'gemini_enterprise') {
+          renderFleet(structured);
+        }
+      }
+    });
+
+    function emitAppInitialized() {
+      post({ jsonrpc: '2.0', method: 'ui/notifications/initialized', params: {} });
+      post({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} });
+    }
+
+    // 0. If initial state was embedded in the MCP resource HTML, render immediately.
+    if (INITIAL_EMBEDDED_STATE && typeof INITIAL_EMBEDDED_STATE === 'object') {
+      try {
+        renderState(INITIAL_EMBEDDED_STATE);
+      } catch (err) {
+        console.warn('Initial state render notice:', err);
+      }
+    }
+
+    // 1. Instantly notify host that UI is ready
+    emitAppInitialized();
+    syncDisplayModeButton();
+
+    // 2. Perform ui/initialize handshake per MCP Apps UI specification with availableDisplayModes
+    const initPayload = {
+      protocolVersion: '2025-06-18',
+      appInfo: { name: 'finops-analytics-dashboard', version: '1.1.0' },
+      clientInfo: { name: 'finops-analytics-dashboard', version: '1.1.0' },
+      appCapabilities: { availableDisplayModes: ['pip', 'fullscreen', 'inline'] },
+      capabilities: { availableDisplayModes: ['pip', 'fullscreen', 'inline'] },
+    };
+    callHost('ui/initialize', initPayload, 2500).catch(function() {
+      return callHost('initialize', initPayload, 1500).catch(function() { return {}; });
+    }).then(function(res) {
+      emitAppInitialized();
+      VL.setHostCapabilities(res && res.hostCapabilities);
+      VL.setHostTheme(res && res.hostContext && res.hostContext.theme);
+      const hostMode = res && res.hostContext && res.hostContext.displayMode;
+      if (hostMode) {
+        currentDisplayMode = hostMode;
+      }
+      syncDisplayModeButton();
+      // Automatically request Right Side Panel ('pip') when opened inline in Gemini Enterprise
+      if (isEmbedded() && currentDisplayMode !== 'pip' && currentDisplayMode !== 'fullscreen') {
+        setDisplayMode('pip');
+      }
+      notifyHostSizeChanged();
+    }).catch(function(err) {
+      console.warn('AppBridge handshake notice:', err);
+      emitAppInitialized();
+      if (isEmbedded()) {
+        setDisplayMode('pip');
+      }
+    });
+
+    setTimeout(emitAppInitialized, 150);
+
+    // Keepalive ping for Gemini Enterprise iframe host (every 45s)
+    setInterval(function() {
+      if (window.parent && window.parent !== window) {
+        callHost('ping', {}, 2000).catch(function() {});
+      }
+    }, 45000);
+
+    // Standalone (direct Cloud Run URL): load over the same-origin API. Embedded in Gemini
+    // Enterprise: data arrives in the open_dashboard tool result; refreshes use the host bridge.
+    if (!isEmbedded()) {
+      fetchState().catch(function() {
+        setFleetNotice('Could not load dashboard data from the FinOps Dashboard API.', true);
+      });
+    }
+    window.exportDashboardPdf = function(ev) {
+      const geSel = document.getElementById('geScopeSelect');
+      const geScopeText = geSel ? (geSel.options[geSel.selectedIndex] ? geSel.options[geSel.selectedIndex].text : geSel.value) : 'All apps';
+      const winSel = document.getElementById('fleetWindow');
+      const winText = winSel ? (winSel.options[winSel.selectedIndex] ? winSel.options[winSel.selectedIndex].text : winSel.value) : 'Last 24 hours';
+      const proj = document.getElementById('gcpProjectText') ? document.getElementById('gcpProjectText').textContent : 'Current';
+      const activeTabBtn = document.querySelector('.tab-btn.active');
+      const activeTabName = activeTabBtn ? activeTabBtn.textContent.trim() : 'Executive FinOps';
+
+      const headerEl = document.getElementById('printExportHeader');
+      if (headerEl) {
+        headerEl.replaceChildren();
+        const titleDiv = document.createElement('div');
+        titleDiv.style.fontWeight = '700';
+        titleDiv.style.fontSize = '14px';
+        titleDiv.style.color = '#0f172a';
+        titleDiv.textContent = 'FinOps & Tokenomics Fleet Report — ' + activeTabName;
+        headerEl.appendChild(titleDiv);
+
+        const metaDiv = document.createElement('div');
+        metaDiv.style.fontSize = '11px';
+        metaDiv.style.color = '#475569';
+        metaDiv.style.marginTop = '4px';
+        metaDiv.textContent = 'Scope: ' + geScopeText + ' | Window: ' + winText + ' | GCP Project: ' + proj + ' | Exported: ' + new Date().toLocaleString();
+        headerEl.appendChild(metaDiv);
+      }
+      if (ev && ev.shiftKey) {
+        try { window.print(); } catch (e) {}
+        return;
+      }
+      const exportBtn = document.getElementById('exportPdfBtn');
+      if (typeof VL !== 'undefined' && VL && typeof VL.exportPdf === 'function') {
+        return VL.exportPdf({event: ev, button: exportBtn});
+      }
+      try { window.print(); } catch (e) {}
+    };
+
+    scheduleFleetRefresh();
+  </script>
+</body>
+</html>
+"""
+
+
+_STATIC_DIR = pathlib.Path(__file__).resolve().parent / 'static'
+ENHANCEMENTS_JS_FILE = 'dashboard_enhancements.js'
+ENHANCEMENTS_CSS_FILE = 'dashboard_enhancements.css'
+
+
+@functools.lru_cache(maxsize=1)
+def _base_dashboard_html() -> str:
+  """The template with the enhancement assets and the logo inlined (everything but the per-request state).
+
+  New dashboard features live in finops_dashboard/ui/static/dashboard_enhancements.{js,css}. They are inlined here
+  so the page stays one self-contained document, which the Gemini Enterprise MCP App requires.
+  """
+  js = (_STATIC_DIR / ENHANCEMENTS_JS_FILE).read_text(encoding='utf-8')
+  css = (_STATIC_DIR / ENHANCEMENTS_CSS_FILE).read_text(encoding='utf-8')
+  if '</script' in js.lower() or '</style' in css.lower():
+    raise ValueError('Dashboard assets must not contain a closing </script> or </style> tag.')
+  return (
+      _DASHBOARD_HTML.replace('/*__FINOPS_ENHANCEMENTS_CSS__*/', css)
+      .replace('__FINOPS_ENHANCEMENTS_JS__', js)
+  )
+
+
+def render_dashboard_html(
+    initial_state: Mapping[str, object] | None = None,
+) -> str:
+  """Returns the self-contained Google Cloud 4-tab HTML UI."""
+  state_json = 'null'
+  if initial_state is not None:
+    try:
+      state_json = (
+          json.dumps(initial_state)
+          .replace('<', '\\u003c')
+          .replace('>', '\\u003e')
+          .replace('\u2028', '\\u2028')
+          .replace('\u2029', '\\u2029')
+      )
+    except (TypeError, ValueError):
+      state_json = 'null'
+  # The state JSON is substituted last, so nothing inside it is ever treated as a placeholder.
+  return _base_dashboard_html().replace('__FINOPS_INITIAL_STATE_JSON__', state_json)

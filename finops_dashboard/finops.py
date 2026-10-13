@@ -1,0 +1,576 @@
+"""Live token economics, spend-change breakdown and what-if projections.
+
+Every number here is computed from observed Cloud Monitoring telemetry (the ge_fleet payload) and the
+list-price rate cards used elsewhere in FinOps Dashboard. Nothing is assumed or seeded:
+
+* Token economics: per-model and per-agent token, call and cost figures, exactly as observed.
+* Spend change: this period vs the previous period of equal length, split into drivers with an
+  exact additive decomposition, so the drivers always sum to the observed change.
+* What-if: arithmetic projections on the observed baseline (switch a share of one model's tokens to
+  another model's list price, or change the cache-read share). Stated assumptions: token counts stay
+  the same; quality and latency are not modelled.
+"""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Mapping, Sequence
+from typing import Any
+
+_TOKEN_KEYS = ('input_tokens', 'output_tokens', 'reasoning_tokens', 'cache_read_tokens', 'cache_write_tokens')
+_PRICE_KEY = {
+    'input_tokens': 'input',
+    'output_tokens': 'output',
+    'reasoning_tokens': 'output',
+    'cache_read_tokens': 'cached_read',
+    'cache_write_tokens': 'cache_write',
+}
+DRIVERS = (
+    ('volume', 'Call volume', 'More or fewer model calls at the previous cost per call.'),
+    ('prompt_size', 'Prompt size', 'Change in uncached input tokens per call.'),
+    ('output_length', 'Output length', 'Change in output and reasoning tokens per call.'),
+    ('caching', 'Caching', 'Change in cache-read and cache-write tokens per call.'),
+    ('model_mix', 'Models started or stopped', 'Models used in only one of the two periods.'),
+)
+
+
+def _normalize_card(card: Any) -> dict[str, float] | None:
+  """Normalizes either a dict rate card or a telemetry.ModelRateCard into a standard float mapping."""
+  if card is None:
+    return None
+  if isinstance(card, Mapping):
+    return {
+        'input': float(card.get('input') or 0.0),
+        'output': float(card.get('output') or 0.0),
+        'cached_read': float(card.get('cached_read') or 0.0),
+        'cache_write': float(card.get('cache_write') or 0.0),
+    }
+  if hasattr(card, 'input_per_million_usd'):
+    return {
+        'input': float(getattr(card, 'input_per_million_usd', 0.0) or 0.0),
+        'output': float(getattr(card, 'output_per_million_usd', 0.0) or 0.0),
+        'cached_read': float(getattr(card, 'cached_read_per_million_usd', 0.0) or 0.0),
+        'cache_write': float(getattr(card, 'cache_write_per_million_usd', 0.0) or 0.0),
+    }
+  return None
+
+
+def _cost(row: Mapping[str, Any], card: Any) -> float:
+  nc = _normalize_card(card) or {}
+  return sum(float(row.get(k) or 0) / 1e6 * float(nc.get(_PRICE_KEY[k]) or 0) for k in _TOKEN_KEYS)
+
+
+def _div(a: float, b: float) -> float | None:
+  return a / b if b else None
+
+
+def _models_by_name(usage: Mapping[str, Any] | None) -> dict[str, Mapping[str, Any]]:
+  if not isinstance(usage, Mapping):
+    return {}
+  return {str(m.get('model')): m for m in usage.get('models') or [] if isinstance(m, Mapping)}
+
+
+def build_token_economics(fleet: Mapping[str, Any] | None) -> dict[str, Any]:
+  """Per-model and per-agent token economics from the live fleet payload."""
+  fleet = fleet if isinstance(fleet, Mapping) else {}
+  usage = fleet.get('model_usage') if isinstance(fleet.get('model_usage'), Mapping) else None
+  if usage is None:
+    return {'status': 'NO_DATA', 'reason': 'Vertex AI model usage metrics are not available.'}
+  totals = usage.get('totals') or {}
+  total_cost = totals.get('est_cost_usd') or 0.0
+  models = []
+  for m in usage.get('models') or []:
+    calls = int(m.get('invocations') or 0)
+    cost = m.get('est_cost_usd')
+    prompt = int(m.get('input_tokens') or 0) + int(m.get('cache_read_tokens') or 0) + int(m.get('cache_write_tokens') or 0)
+    models.append({
+        'model': m.get('model'),
+        'calls': calls,
+        'input_tokens': int(m.get('input_tokens') or 0),
+        'output_tokens': int(m.get('output_tokens') or 0),
+        'reasoning_tokens': int(m.get('reasoning_tokens') or 0),
+        'cache_read_tokens': int(m.get('cache_read_tokens') or 0),
+        'est_cost_usd': cost,
+        'cost_share_pct': round(cost / total_cost * 100, 1) if cost is not None and total_cost else None,
+        'avg_prompt_tokens_per_call': round(prompt / calls) if calls else None,
+        'avg_output_tokens_per_call': round(int(m.get('output_tokens') or 0) / calls) if calls else None,
+        'cache_read_share_pct': m.get('cache_read_share_pct'),
+        'cost_per_1k_calls_usd': round(cost / calls * 1000, 4) if cost is not None and calls else None,
+    })
+  # Per agent: each runtime once (shared runtimes are registered in several apps),
+  # plus active standalone/unregistered runtimes that emitted token telemetry.
+  from finops_dashboard.fleet import runtime_backend_key  # pylint: disable=g-import-not-at-top
+  seen: set[str] = set()
+  agents = []
+  all_agent_sources = [
+      (a, 'REGISTERED_IN_GE') for a in (fleet.get('agents') or [])
+  ] + [
+      (a, 'UNREGISTERED_STANDALONE') for a in (fleet.get('unregistered_runtimes') or [])
+  ]
+  for a, reg_status in all_agent_sources:
+    mt = a.get('metrics') or {}
+    if not mt.get('llm_calls') and not mt.get('input_tokens'):
+      continue
+    key = runtime_backend_key(dict(a))
+    if key in seen:
+      continue
+    seen.add(key)
+    req = int(mt.get('requests') or 0)
+    tok = int(mt.get('input_tokens') or 0) + int(mt.get('output_tokens') or 0)
+    agents.append({
+        'display_name': a.get('display_name'),
+        'engine_id': a.get('engine_id'),
+        'registration_status': reg_status,
+        'runtime_type': a.get('type'),
+        'requests': req,
+        'llm_calls': int(mt.get('llm_calls') or 0),
+        'input_tokens': int(mt.get('input_tokens') or 0),
+        'output_tokens': int(mt.get('output_tokens') or 0),
+        'cached_tokens': int(mt.get('cached_tokens') or 0),
+        'est_token_cost_usd': mt.get('est_token_cost_usd'),
+        'models': (a.get('backend') or {}).get('models') or [],
+        'token_source': mt.get('token_source') or ('Cloud Trace / Logging: gen_ai.*' if reg_status == 'UNREGISTERED_STANDALONE' else None),
+        'tokens_per_request': round(tok / req) if req else None,
+        'llm_calls_per_request': round(int(mt.get('llm_calls') or 0) / req, 2) if req else None,
+    })
+  agents.sort(key=lambda r: -(r['input_tokens'] + r['output_tokens']))
+  no_telemetry = []
+  seen_nt: set[str] = set()
+  for a, reg_status in all_agent_sources:
+    mt = a.get('metrics') or {}
+    key = runtime_backend_key(dict(a))
+    if mt.get('requests') and not mt.get('input_tokens') and key not in seen and key not in seen_nt:
+      seen_nt.add(key)
+      no_telemetry.append({
+          'display_name': a.get('display_name'),
+          'requests': int(mt.get('requests') or 0),
+          'runs_on': (a.get('backend') or {}).get('kind'),
+          'registration_status': reg_status,
+          'runtime_type': a.get('type'),
+      })
+  ge = fleet.get('ge_assistant_usage') if isinstance(fleet.get('ge_assistant_usage'), Mapping) else None
+  ge_rows = []
+  if ge:
+    names = {e.get('engine_key'): e.get('display_name') for e in fleet.get('engines') or [] if isinstance(e, Mapping)}
+    for key, st in (ge.get('by_engine') or {}).items():
+      ge_rows.append({'engine_key': key, 'app': names.get(key) or st.get('engine_id'),
+                      'llm_calls': st.get('llm_calls'), 'input_tokens': st.get('input_tokens'),
+                      'output_tokens': st.get('output_tokens'), 'conversations': st.get('conversations'),
+                      'models': st.get('models'), 'assistant_agents': st.get('assistant_agents')})
+    ge_rows.sort(key=lambda r: -(int(r['input_tokens'] or 0) + int(r['output_tokens'] or 0)))
+  return {
+      'status': 'LIVE',
+      'window_hours': fleet.get('window_hours'),
+      'interval': usage.get('interval'),
+      'totals': {
+          'calls': int(totals.get('invocations') or 0),
+          'input_tokens': int(totals.get('input_tokens') or 0),
+          'output_tokens': int(totals.get('output_tokens') or 0),
+          'reasoning_tokens': int(totals.get('reasoning_tokens') or 0),
+          'cache_read_tokens': int(totals.get('cache_read_tokens') or 0),
+          'est_cost_usd': totals.get('est_cost_usd'),
+          'models_without_rate_card': list(totals.get('models_without_rate_card') or []),
+      },
+      'models': models,
+      'agents': agents,
+      'agents_without_token_telemetry': sorted(no_telemetry, key=lambda r: -r['requests']),
+      'ge_assistant': ge_rows,
+      'ge_assistant_status': 'LIVE' if ge else 'UNAVAILABLE',
+      'unregistered_summary': fleet.get('unregistered_summary') or {},
+      'skills_and_mcp': fleet.get('skills_and_mcp') or [],
+      'gke_workloads': fleet.get('gke_workloads') or {'clusters': [], 'workloads': []},
+      'agents_note': ('Per-agent tokens come from OpenTelemetry gen_ai data the agent exports: Cloud Logging '
+                      'inference events, else Cloud Trace spans (including standalone Agent Engines not registered in GE). '
+                      'Model cost is project-wide.'),
+      'source': 'Cloud Monitoring: aiplatform publisher token_count + model_invocation_count; list prices',
+  }
+
+
+def build_spend_drift(
+    current: Mapping[str, Any] | None,
+    previous: Mapping[str, Any] | None,
+    rate_cards: Mapping[str, Mapping[str, float]] | None = None,
+) -> dict[str, Any]:
+  """Explains the change in estimated model spend between two equal-length periods.
+
+  Both periods are priced with the same (current) list prices, so price changes are excluded. For a
+  model used in both periods with calls N and per-call tokens a (input), b (output + reasoning),
+  c (cache read), w (cache write):
+    volume        = (N1 - N0) * u0            (u = cost per call)
+    prompt_size   = N1 * (a1 - a0) * p_in
+    output_length = N1 * (b1 - b0) * p_out
+    caching       = N1 * ((c1 - c0) * p_cr + (w1 - w0) * p_cw)
+  which sums exactly to N1*u1 - N0*u0. A model with no calls in one period goes to model_mix.
+  """
+  if not isinstance(current, Mapping) or not isinstance(previous, Mapping):
+    return {'status': 'NO_DATA', 'reason': 'Model usage for this or the previous period is not available.'}
+  cards = dict(previous.get('rate_cards') or {})
+  cards.update(current.get('rate_cards') or {})
+  cards.update(rate_cards or {})
+  cur, prev = _models_by_name(current), _models_by_name(previous)
+  drivers = {k: 0.0 for k, _, _ in DRIVERS}
+  rows, unpriced = [], []
+  cost_now = cost_before = 0.0
+  for name in sorted(set(cur) | set(prev)):
+    card = _normalize_card(cards.get(name))
+    if not card:
+      unpriced.append(name)
+      continue
+    r1, r0 = cur.get(name, {}), prev.get(name, {})
+    c1, c0 = _cost(r1, card), _cost(r0, card)
+    n1, n0 = int(r1.get('invocations') or 0), int(r0.get('invocations') or 0)
+    cost_now += c1
+    cost_before += c0
+    row = {'model': name, 'cost_before_usd': round(c0, 4), 'cost_now_usd': round(c1, 4),
+           'calls_before': n0, 'calls_now': n1, 'change_usd': round(c1 - c0, 4)}
+    parts = {k: 0.0 for k, _, _ in DRIVERS}
+    if n0 and n1:
+      def per(r, k, n):
+        return float(r.get(k) or 0) / n
+      parts['volume'] = (n1 - n0) * (c0 / n0)
+      parts['prompt_size'] = n1 * (per(r1, 'input_tokens', n1) - per(r0, 'input_tokens', n0)) * card['input'] / 1e6
+      parts['output_length'] = n1 * (
+          (per(r1, 'output_tokens', n1) - per(r0, 'output_tokens', n0))
+          + (per(r1, 'reasoning_tokens', n1) - per(r0, 'reasoning_tokens', n0))
+      ) * card['output'] / 1e6
+      parts['caching'] = n1 * (
+          (per(r1, 'cache_read_tokens', n1) - per(r0, 'cache_read_tokens', n0)) * card['cached_read']
+          + (per(r1, 'cache_write_tokens', n1) - per(r0, 'cache_write_tokens', n0)) * card['cache_write']) / 1e6
+    else:
+      parts['model_mix'] = c1 - c0  # Started (c0 = 0), stopped (c1 = 0) or tokens without call counts.
+    for k, v in parts.items():
+      drivers[k] += v
+    row['drivers_usd'] = {k: round(v, 4) for k, v in parts.items()}
+    rows.append(row)
+  change = cost_now - cost_before
+  explained = sum(drivers.values())
+  return {
+      'status': 'LIVE',
+      'current_interval': current.get('interval'),
+      'previous_interval': previous.get('interval'),
+      'cost_before_usd': round(cost_before, 4),
+      'cost_now_usd': round(cost_now, 4),
+      'change_usd': round(change, 4),
+      'change_pct': round(change / cost_before * 100, 1) if cost_before else None,
+      'drivers': [
+          {'driver_id': k, 'name': label, 'description': desc, 'change_usd': round(drivers[k], 4),
+           'share_of_change_pct': round(drivers[k] / change * 100, 1) if abs(change) > 1e-9 else None}
+          for k, label, desc in DRIVERS
+      ],
+      # Computed, not asserted: the decomposition is exact up to floating-point rounding.
+      'unexplained_usd': round(change - explained, 6),
+      'by_model': sorted(rows, key=lambda r: -abs(r['change_usd'])),
+      'models_without_rate_card': unpriced,
+      'method': 'Both periods priced at current list prices; price changes are excluded.',
+  }
+
+
+def project_model_switch(
+    usage: Mapping[str, Any] | None,
+    from_model: str,
+    to_model: str,
+    share_pct: float,
+    rate_cards: Mapping[str, Any],
+) -> dict[str, Any]:
+  """Projects spend if share_pct of from_model's observed tokens were billed at to_model's list price."""
+  models = _models_by_name(usage)
+  src = models.get(from_model)
+  if isinstance(share_pct, bool) or not math.isfinite(float(share_pct)):
+    raise ValueError('Invalid numeric input.')
+  if src is None:
+    return {'status': 'ERROR', 'error': f'{from_model} has no observed usage in this period.'}
+  if from_model not in rate_cards or to_model not in rate_cards:
+    return {'status': 'ERROR', 'error': 'No list price on file for one of the models.'}
+  share = max(0.0, min(100.0, float(share_pct))) / 100.0
+  moved = {k: float(src.get(k) or 0) * share for k in _TOKEN_KEYS}
+  before = _cost(moved, rate_cards[from_model])
+  after = _cost(moved, rate_cards[to_model])
+  base_total = float(((usage or {}).get('totals') or {}).get('est_cost_usd') or 0.0)
+  return {
+      'status': 'PROJECTION',
+      'scenario': f'Move {share * 100:.0f}% of {from_model} tokens to {to_model}',
+      'observed_baseline_usd': round(base_total, 4),
+      'moved_tokens': {k: int(v) for k, v in moved.items()},
+      'moved_cost_before_usd': round(before, 4),
+      'moved_cost_after_usd': round(after, 4),
+      'change_usd': round(after - before, 4),
+      'projected_total_usd': round(base_total - before + after, 4),
+      'assumptions': ['Same token counts on the new model.', 'Quality and latency are not modelled.',
+                      'List prices; discounts and committed use are not applied.'],
+      'interval': (usage or {}).get('interval'),
+  }
+
+
+def project_cache_share(
+    usage: Mapping[str, Any] | None,
+    model: str,
+    target_cache_share_pct: float,
+    rate_cards: Mapping[str, Any],
+) -> dict[str, Any]:
+  """Projects spend if model's cache-read share of prompt tokens were target_cache_share_pct."""
+  if isinstance(target_cache_share_pct, bool) or not math.isfinite(float(target_cache_share_pct)):
+    raise ValueError('Invalid numeric input.')
+  src = _models_by_name(usage).get(model)
+  card = _normalize_card(rate_cards.get(model))
+  if src is None or card is None:
+    return {'status': 'ERROR', 'error': f'{model} has no observed usage or no list price.'}
+  inp, cr = float(src.get('input_tokens') or 0), float(src.get('cache_read_tokens') or 0)
+  prompt = inp + cr
+  if not prompt:
+    return {'status': 'ERROR', 'error': f'{model} has no prompt tokens in this period.'}
+  t = max(0.0, min(100.0, float(target_cache_share_pct))) / 100.0
+  new_cr, new_in = prompt * t, prompt * (1 - t)
+  change = ((new_in - inp) * card['input'] + (new_cr - cr) * card['cached_read']) / 1e6
+  base_total = float(((usage or {}).get('totals') or {}).get('est_cost_usd') or 0.0)
+  return {
+      'status': 'PROJECTION',
+      'scenario': f'{model}: cache-read share {cr / prompt * 100:.1f}% -> {t * 100:.0f}% of prompt tokens',
+      'observed_baseline_usd': round(base_total, 4),
+      'observed_cache_share_pct': round(cr / prompt * 100, 1),
+      'change_usd': round(change, 4),
+      'projected_total_usd': round(base_total + change, 4),
+      'assumptions': ['Same total prompt tokens.', 'Cache storage (per hour) is not included.',
+                      'List prices; discounts are not applied.'],
+      'interval': (usage or {}).get('interval'),
+  }
+
+
+def build_live_finops(fleet: Mapping[str, Any] | None) -> dict[str, Any]:
+  """Bundle for /api/state in live mode."""
+  fleet = fleet if isinstance(fleet, Mapping) else {}
+  usage = fleet.get('model_usage')
+  return {
+      'token_economics': build_token_economics(fleet),
+      'spend_drift': build_spend_drift(usage, fleet.get('model_usage_previous')),
+      'what_if_models': [m.get('model') for m in (usage or {}).get('models') or [] if m.get('est_cost_usd') is not None],
+      'rate_card_models': sorted(((usage or {}).get('rate_cards') or {}).keys()),
+      'unregistered_summary': fleet.get('unregistered_summary') or {},
+      'unregistered_runtimes': fleet.get('unregistered_runtimes') or [],
+      'gke_workloads': fleet.get('gke_workloads') or {'clusters': [], 'workloads': []},
+      'skills_and_mcp': fleet.get('skills_and_mcp') or [],
+  }
+
+
+SESSION_TOKEN_KEYS = ('input_tokens', 'output_tokens', 'cached_input_tokens', 'reasoning_tokens', 'total_tokens')
+
+
+def _int_or_none(value: object) -> int | None:
+  if value is None or value == '' or isinstance(value, bool):
+    return None
+  try:
+    f = float(value)  # type: ignore[arg-type]
+    if not math.isfinite(f):
+      return None
+    return int(f)
+  except (TypeError, ValueError, OverflowError):
+    return None
+
+
+def _sum_known(values: list[Any]) -> int | None:
+  """Sum of the measured values; None when no value was measured (never treats unknown as 0)."""
+  known = [n for v in values if (n := _int_or_none(v)) is not None]
+  return sum(known) if known else None
+
+
+def build_session_token_drilldown(
+    sessions: list[Mapping[str, Any]] | None,
+    session_turns: Mapping[str, list[Mapping[str, Any]]] | None,
+    sessionless_turns: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+  """Per-user session token rollup plus a per-session turn-by-turn token dictionary.
+
+  `sessions` are fct_sessions rows (ge_mart.session_from_row), `session_turns` is
+  {session_key: [turn dicts]} (ge_mart.group_session_turns), and optional `sessionless_turns`
+  are token-bearing turns without a session_id (e.g. standalone Vertex Agent Engine traces) so
+  total tokens across all turns are conserved. Only token counts are returned; prompt and
+  response text are never read.
+  """
+  sessions = [s for s in (sessions or []) if isinstance(s, Mapping)]
+  session_turns = session_turns if isinstance(session_turns, Mapping) else {}
+  kept_sessionless = [dict(t) for t in (sessionless_turns or []) if isinstance(t, Mapping)]
+
+  by_session: dict[str, dict[str, Any]] = {}
+  users: dict[str, dict[str, Any]] = {}
+  kept: list[Mapping[str, Any]] = []
+  for s in sessions:
+    key = str(s.get('session_key') or f"{s.get('engine_key') or ''}|{s.get('session_id') or ''}")
+    if key in by_session:
+      # A session row seen twice would double count its tokens in the user rollup and totals.
+      continue
+    kept.append(s)
+    turns = [dict(t) for t in session_turns.get(key) or [] if isinstance(t, Mapping)]
+    turn_count = max(0, _int_or_none(s.get('turns')) or 0)
+    by_session[key] = {
+        'session_id': s.get('session_id'),
+        'engine_key': s.get('engine_key'),
+        'user_email': s.get('user_email'),
+        'agent_name': s.get('agent_name'),
+        'session_start': s.get('session_start'),
+        'session_end': s.get('session_end'),
+        'turns': turn_count,
+        **{k: s.get(k) for k in SESSION_TOKEN_KEYS},
+        'turn_detail': turns,
+        'turn_detail_count': len(turns),
+        # False when the per-session cap (100 most recent turns) or the row limit cut turns off.
+        'turn_detail_complete': len(turns) >= turn_count,
+    }
+    email = str(s.get('user_email') or 'unknown')
+    u = users.setdefault(email, {'user_email': email, 'session_keys': [], '_tok': {k: [] for k in SESSION_TOKEN_KEYS},
+                                 'turns': 0, 'last_activity': None})
+    u['session_keys'].append(key)
+    u['turns'] += turn_count
+    for k in SESSION_TOKEN_KEYS:
+      u['_tok'][k].append(s.get(k))
+    end = s.get('session_end') or s.get('session_start')
+    if end and (u['last_activity'] is None or str(end) > str(u['last_activity'])):
+      u['last_activity'] = end
+
+  seen_sessionless_ids: set[str] = set()
+  unique_sessionless: list[dict[str, Any]] = []
+  for t in kept_sessionless:
+    tid = str(t.get('turn_id') or '')
+    if tid and tid in seen_sessionless_ids:
+      continue
+    if tid:
+      seen_sessionless_ids.add(tid)
+    unique_sessionless.append(t)
+    email = str(t.get('user_email') or 'unknown')
+    u = users.setdefault(email, {'user_email': email, 'session_keys': [], '_tok': {k: [] for k in SESSION_TOKEN_KEYS},
+                                 'turns': 0, 'last_activity': None})
+    u['turns'] += 1
+    for k in SESSION_TOKEN_KEYS:
+      u['_tok'][k].append(t.get(k))
+    ts = t.get('ts')
+    if ts and (u['last_activity'] is None or str(ts) > str(u['last_activity'])):
+      u['last_activity'] = ts
+
+  user_rows: list[dict[str, Any]] = []
+  for u in users.values():
+    tok = u.pop('_tok')
+    row = {**u, 'sessions': len(u['session_keys'])}
+    row.update({k: _sum_known(tok[k]) for k in SESSION_TOKEN_KEYS})
+    row['avg_total_tokens_per_session'] = (
+        round(row['total_tokens'] / row['sessions']) if row['total_tokens'] is not None and row['sessions'] else None)
+    user_rows.append(row)
+  user_rows.sort(key=lambda r: (r['total_tokens'] is None, -(r['total_tokens'] or 0), r['user_email']))
+
+  all_token_sources = [*kept, *unique_sessionless]
+  return {
+      'source': 'finops_mart.fct_sessions + finops_mart.fct_turns (token counts only; no prompt text)',
+      'session_count': len(by_session),
+      'sessionless_turn_count': len(unique_sessionless),
+      'user_count': len(user_rows),
+      'totals': {k: _sum_known([s.get(k) for s in all_token_sources]) for k in SESSION_TOKEN_KEYS},
+      'users': user_rows,
+      'sessions': by_session,
+      'sessionless_turns': unique_sessionless,
+  }
+
+
+# ---------------------------------------------------------------------------------------------
+# Per-user estimated model cost (list price; never billed cost)
+# ---------------------------------------------------------------------------------------------
+
+USER_COST_METHOD = (
+    'Logged input, cached-input and output tokens (finops_mart.fct_turns) x Vertex AI list price; cached '
+    'input is priced at the cache-read rate. Thinking tokens count only when the logged output includes them.'
+)
+USER_COST_NOTE = (
+    'Estimate at list price, not your invoice. Billed cost (Cloud Billing export) is project-level and is '
+    'never split per user.'
+)
+NO_MODEL_LABEL = '(model not logged)'
+
+
+def rate_card_for(model: object, rate_cards: Mapping[str, Any]) -> tuple[str, dict[str, float] | None]:
+  """(card name, card) for a logged model; 'publishers/google/models/x' uses card 'x'. No fallback card."""
+  name = str(model or '').strip().rsplit('/', 1)[-1]
+  return name, (_normalize_card(rate_cards.get(name)) if name else None)
+
+
+def tokens_cost_usd(input_tokens: int | None, output_tokens: int | None, cached_input_tokens: int | None,
+                    card: Any) -> float:
+  """List-price cost of measured tokens, priced like fleet._estimate_token_cost_usd.
+
+  OTel input_tokens include cache reads, so cached tokens are priced once at the cache-read rate and
+  only the rest at the input rate. Reasoning is not added on top: ADK output_tokens include thoughts.
+  """
+  nc = _normalize_card(card) or {}
+  in_tok = max(0, _int_or_none(input_tokens) or 0)
+  cached = min(in_tok, max(0, _int_or_none(cached_input_tokens) or 0))
+  out_tok = max(0, _int_or_none(output_tokens) or 0)
+  uncached = max(in_tok - cached, 0)
+  return (uncached * float(nc.get('input') or 0)
+          + cached * float(nc.get('cached_read') or 0)
+          + out_tok * float(nc.get('output') or 0)) / 1e6
+
+
+def estimate_user_costs(
+    users: Sequence[Mapping[str, Any]] | None,
+    model_rows: Sequence[Mapping[str, Any]] | None,
+    rate_cards: Mapping[str, Mapping[str, float]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+  """Adds a list-price cost estimate to each user from per user x model x app token sums.
+
+  `users` are live power_users_ldap dicts; `model_rows` are ge_mart.user_model_tokens_from_row rows.
+  Returns (new user dicts, summary). The input dicts are shared with the cached BigQuery insights,
+  so they are copied, never mutated. Tokens whose model is not logged or has no rate card are not
+  priced (there is no fallback price); they are counted in est_cost_unpriced_tokens instead.
+  """
+  acc: dict[str, dict[str, Any]] = {}
+  for r in model_rows or []:
+    if not isinstance(r, Mapping) or not r.get('user_email'):
+      continue
+    in_tok, out_tok, cached = r.get('input_tokens'), r.get('output_tokens'), r.get('cached_input_tokens')
+    if in_tok is None and out_tok is None and cached is None:
+      continue
+    a = acc.setdefault(str(r['user_email']), {'usd': 0.0, 'priced': False, 'by_engine': {}, 'models': set(),
+                                               'unpriced_tokens': 0, 'unpriced_models': set()})
+    name, card = rate_card_for(r.get('model_name'), rate_cards)
+    if card is None:
+      a['unpriced_tokens'] += max(0, _int_or_none(in_tok) or 0) + max(0, _int_or_none(out_tok) or 0)
+      a['unpriced_models'].add(name or NO_MODEL_LABEL)
+      continue
+    usd = tokens_cost_usd(in_tok, out_tok, cached, card)
+    a['usd'] += usd
+    a['priced'] = True
+    a['models'].add(name)
+    engine = str(r.get('engine_key') or '')
+    if engine:
+      a['by_engine'][engine] = a['by_engine'].get(engine, 0.0) + usd
+
+  out: list[dict[str, Any]] = []
+  for u in users or []:
+    if not isinstance(u, Mapping):
+      continue
+    user_acc = acc.get(str(u.get('user_email') or ''))
+    row = dict(u)
+    row.update({
+        # None when no priced tokens were logged for the user (unknown, not $0).
+        'est_cost_usd': round(user_acc['usd'], 4) if user_acc and user_acc['priced'] else None,
+        # Per GE app ('location/engine_id'), so the dashboard's app filter can scope the estimate.
+        'est_cost_by_engine': {k: round(v, 4) for k, v in sorted(user_acc['by_engine'].items())} if user_acc else {},
+        'est_cost_models': sorted(user_acc['models']) if user_acc else [],
+        'est_cost_unpriced_tokens': user_acc['unpriced_tokens'] if user_acc else 0,
+    })
+    out.append(row)
+
+  models_priced: set[str] = set()
+  models_unpriced: set[str] = set()
+  for a in acc.values():
+    models_priced |= a['models']
+    models_unpriced |= a['unpriced_models']
+  priced = [a for a in acc.values() if a['priced']]
+  summary = {
+      'status': 'LIVE' if acc else 'NO_DATA',
+      'source': 'finops_mart.fct_turns',
+      'method': USER_COST_METHOD,
+      'note': USER_COST_NOTE,
+      'total_est_cost_usd': round(sum(a['usd'] for a in priced), 4) if priced else None,
+      'priced_users': len(priced),
+      'models_priced': sorted(models_priced),
+      'models_without_rate_card': sorted(models_unpriced),
+      'unpriced_tokens': sum(a['unpriced_tokens'] for a in acc.values()),
+  }
+  return out, summary
+

@@ -1,0 +1,27 @@
+metrics_to_run:
+  - finops_tool_trajectory
+  - finops_grounding_contract
+  - custom_response_quality
+  - agent_turn_count
+
+custom_metrics:
+  # 1. Deterministic tool-selection & argument trajectory check (0.0 - 1.0)
+  - name: finops_tool_trajectory
+    custom_function_file: finops_metrics.py
+
+  # 2. Deterministic FinOps Dashboard honesty & grounding contract check (0.0 - 1.0)
+  # Verifies zero invented numbers on unpriced models, exact cache math quotes,
+  # breakpoint line attribution, and mandatory simulator disclosure.
+  - name: finops_grounding_contract
+    custom_function_file: grounding_metric.py
+
+  # 3. Local LLM-as-judge (1 - 5 scale) via Vertex AI gemini-3.8-flash
+  - name: custom_response_quality
+    custom_function_file: response_quality.py
+
+  # 4. Turn count diagnostic metric
+  - name: agent_turn_count
+    custom_function: |
+      def evaluate(instance):
+          turns = (instance.get("agent_data") or {}).get("turns", [])
+          return {"score": len(turns)}

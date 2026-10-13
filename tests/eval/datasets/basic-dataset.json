@@ -1,0 +1,268 @@
+{
+  "eval_cases": [
+    {
+      "eval_case_id": "open_finops_dashboard",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Open the FinOps dashboard focused on the Cost tab (tab 3) for the it_service_desk agent."
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "The FinOps & FinOps Analytics Dashboard is now open on Tab 3 (Cost) for agent 'it_service_desk'."
+            }
+          ]
+        }
+      },
+      "expected_tools": [
+        "open_dashboard"
+      ]
+    },
+    {
+      "eval_case_id": "cache_economics_priced",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Calculate cache economics for 100,000 prompt tokens with 80,000 cached tokens on gemini-2.5-flash."
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "For 100,000 prompt tokens with 80,000 cached tokens on gemini-2.5-flash, the cache hit ratio is 80.0%, the cost without caching is $0.03, the cost with caching is $0.0084, and the savings are $0.0216."
+            }
+          ]
+        }
+      },
+      "expected_tools": [
+        "calculate_cache_economics"
+      ]
+    },
+    {
+      "eval_case_id": "cache_economics_unpriced_model",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Calculate cache economics for 50,000 prompt tokens and 25,000 cached tokens on model gemini-99-experimental."
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "For 50,000 prompt tokens and 25,000 cached tokens on gemini-99-experimental, the cache hit ratio is 50.0%, but gemini-99-experimental has no rate card (priced is false), so no dollar costs or savings are priced."
+            }
+          ]
+        }
+      },
+      "expected_tools": [
+        "calculate_cache_economics"
+      ]
+    },
+    {
+      "eval_case_id": "prompt_cache_xray_breakpoint",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Run a Prompt Cache X-Ray comparing these two prompts on gemini-2.5-flash at 10,000 monthly requests:\nPrevious prompt:\nYou are an enterprise IT support agent.\nCurrent time: 2026-04-19T10:00:00Z\nAlways follow corporate security policy section 4.2 and verify ticket numbers before escalating.\n\nCurrent prompt:\nYou are an enterprise IT support agent.\nCurrent time: 2026-04-19T10:05:00Z\nAlways follow corporate security policy section 4.2 and verify ticket numbers before escalating."
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Prompt Cache X-Ray detected a cache breakpoint at line 2 caused by the dynamic timestamp ('Current time: ...') preceding the static security policy block. Moving the volatile timestamp to the end of the prompt restores prefix caching."
+            }
+          ]
+        }
+      },
+      "expected_tools": [
+        "xray_prompt_cache"
+      ]
+    },
+    {
+      "eval_case_id": "detect_breakpoint_line",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Use detect_prompt_breakpoint to find the exact line and reason where caching broke between these two prompts:\nPrevious prompt:\nSystem role: FinOps analyst\nPolicy v1\nRequest ID: req-101\n\nCurrent prompt:\nSystem role: FinOps analyst\nPolicy v1\nRequest ID: req-202"
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "The prompt prefix cache broke at line 3 where 'Request ID: req-101' changed to 'Request ID: req-202'."
+            }
+          ]
+        }
+      },
+      "expected_tools": [
+        "detect_prompt_breakpoint"
+      ]
+    },
+    {
+      "eval_case_id": "optimizer_simulator_honesty",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Run one AlphaEvolve cycle for the it_service_desk agent and tell me what happened."
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Ran one generation of the built-in optimizer simulator on the it_service_desk demo profile. Note that this is a simulator: the numbers are synthetic and nothing was deployed or modified in production."
+            }
+          ]
+        }
+      },
+      "expected_tools": [
+        "trigger_alpha_evolve_cycle"
+      ]
+    },
+    {
+      "eval_case_id": "telemetry_grounding_audit",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Run the deterministic telemetry grounding audit without the LLM judge and summarize the verification status."
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Executed validate_telemetry_grounding(run_llm_judge=False) and reported the deterministic telemetry grounding checks and verification status."
+            }
+          ]
+        }
+      },
+      "expected_tools": [
+        "validate_telemetry_grounding"
+      ]
+    },
+    {
+      "eval_case_id": "fleet_inventory_24h",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Call query_ge_agent_fleet for a 24-hour window and report the total registered Gemini Enterprise agents and unregistered runtimes found."
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Queried the Gemini Enterprise agent fleet over the 24-hour window and reported the registered GE agents, unregistered runtimes, and observed telemetry totals from the tool output."
+            }
+          ]
+        }
+      },
+      "expected_tools": [
+        "query_ge_agent_fleet"
+      ]
+    },
+    {
+      "eval_case_id": "live_finops_mart_reconciliation",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Call query_live_finops_and_mart for the last 7 days and summarize the BigQuery mart insights and billing reconciliation status."
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Queried the BigQuery Gemini Enterprise reporting mart (finops_mart) and Cloud Billing export reconciliation for the 7-day window and summarized the observed sessions, token usage, and billing status."
+            }
+          ]
+        }
+      },
+      "expected_tools": [
+        "query_live_finops_and_mart"
+      ]
+    },
+    {
+      "eval_case_id": "discover_cloud_run_services",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Call list_cloud_run_agents and list the deployed Cloud Run agent services in this project."
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Listed the deployed Cloud Run services in the hosting Google Cloud project along with their regions and URLs."
+            }
+          ]
+        }
+      },
+      "expected_tools": [
+        "list_cloud_run_agents"
+      ]
+    },
+    {
+      "eval_case_id": "gcp_telemetry_summary_24h",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Call query_gcp_telemetry with hours_ago=24 and report the project ID and telemetry summary."
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Queried the last 24 hours of GCP telemetry and reported the project ID, active services, and ingested turn statistics from the tool output."
+            }
+          ]
+        }
+      },
+      "expected_tools": [
+        "query_gcp_telemetry"
+      ]
+    }
+  ]
+}

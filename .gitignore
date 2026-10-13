@@ -1,0 +1,34 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Local ADK sessions and artifacts
+.adk/
+.google-agents-cli/
+artifacts/
+
+# IDE & OS
+.DS_Store
+.idea/
+.vscode/
+
+# Legacy internal build configs
+Build
+*.borg
+
+# Release archives
+*.zip
+*.tar.gz
+
+# Coverage
+.coverage
+.coverage.*
+

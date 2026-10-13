@@ -1,0 +1,27 @@
+__pycache__
+*.py[cod]
+*$py.class
+.git
+.gitignore
+.gcloudignore
+.env
+.env.*
+.venv
+env/
+venv/
+.DS_Store
+.idea/
+.vscode/
+.pytest_cache/
+.adk
+**/.adk
+
+# Tests, CI, deployment tooling and docs are not needed at runtime (Cloud Build runs the tests from the
+# uploaded source, not from the image).
+tests/
+deploy/
+docs/
+.github/
+
+# ADK recipe extracted for google/adk-recipes; has its own pyproject, not part of this image.
+recipes/
