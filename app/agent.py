@@ -296,7 +296,7 @@ def open_dashboard(focus_tab: int = 6, initial_agent: str = "it_service_desk") -
   """Opens the FinOps & FinOps Analytics MCP Dashboard with interactive UI widget.
 
   CRITICAL: Always call this tool FIRST whenever the user asks to see, open, launch, or
-  inspect the FinOps dashboard, FinOps Zscaler MCP dashboard, Zscaler FinOps dashboard,
+  inspect the FinOps dashboard, FinOps and Tokenomics dashboard,
   FinOps MCP dashboard, or FinOps Dashboard dashboard, or asks for agent telemetry, prompt cache
   economics, or the optimizer simulator in the UI.
 
