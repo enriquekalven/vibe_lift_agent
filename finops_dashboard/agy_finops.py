@@ -1,9 +1,9 @@
 """Google Antigravity FinOps collector, WTU allowance meter, and PAYG chargeback engine.
 
 Integrates the `cloud-gtm/agy-finops` telemetry and metering model into FinOps Dashboard:
-- Reads Antigravity model calls from Cloud Logging (`businessaicode.googleapis.com/inference_response`)
-  or from BigQuery (`ds_antigravity_raw` / `agy_finops.calls`) using a strict metadata allowlist so
-  prompt and response text never leaves Cloud Logging.
+- Reads Antigravity model calls from Cloud Logging (`businessaicode.googleapis.com/inference_response`,
+  with long-term BigQuery archival in `ds_antigravity_raw` / `agy_finops.calls`) using a strict metadata
+  allowlist so prompt and response text never leaves Cloud Logging.
 - Reads Gemini Enterprise weekly seat allowance meters from Cloud Monitoring
   (`discoveryengine.googleapis.com/quota/ratev2/agentic_wtu_tier_*_pp_weekly_regional`) and seat
   configurations/assignments from the Discovery Engine License API (`licenseConfigs`, `userLicenses`).

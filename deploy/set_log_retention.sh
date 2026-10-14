@@ -43,8 +43,9 @@ for ds in "${RAW_DATASETS[@]}"; do
   else
     echo "  ${ds}: skipped dataset default (requires bigquery.datasets.update / dataset OWNER); updating existing tables..."
   fi
+  # An empty dataset (its sink has not written yet) makes `bq ls` print nothing rather than `[]`.
   tables=$(bq ls --format=json --max_results=1000 "${PROJECT_ID}:${ds}" \
-      | python3 -c 'import json,sys; print("\n".join(t["tableReference"]["tableId"] for t in json.load(sys.stdin) if t.get("type") == "TABLE" and t.get("timePartitioning")))')
+      | python3 -c 'import json,sys; raw = sys.stdin.read().strip(); print("\n".join(t["tableReference"]["tableId"] for t in (json.loads(raw) if raw else []) if t.get("type") == "TABLE" and t.get("timePartitioning")))')
   for t in ${tables}; do
     bq update --set_label datacloud:antigravity --time_partitioning_expiration="${SECONDS_TTL}" "${PROJECT_ID}:${ds}.${t}" >/dev/null
     echo "    ${t}: partition expiration = ${RETENTION_DAYS}d"
