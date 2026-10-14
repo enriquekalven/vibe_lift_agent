@@ -117,10 +117,11 @@ fi
 # does not include. This custom role adds just that permission to the read path, plus
 # discoveryengine.agents.update, which the dashboard's trace logging buttons use to set an agent's
 # observabilityConfig. The runtime SA does not need roles/discoveryengine.agentAdmin
-# (no create/delete/setIamPolicy).
+# (no create/delete/setIamPolicy). The Antigravity seat panel also reads license configs and user
+# assignments (licenseConfigs.list, userStores.listUserLicenses), which the viewer role lacks.
 FLEET_ROLE_ID="finopsGeFleetReader"
-FLEET_ROLE_PERMISSIONS="discoveryengine.engines.get,discoveryengine.assistants.list,discoveryengine.agents.list,discoveryengine.agents.get,discoveryengine.agents.manage,discoveryengine.agents.update"
-FLEET_ROLE_DESCRIPTION="GE agent inventory for the FinOps Dashboard runtime SA. agents.manage lets agents.list return agents created by other users; agents.update is used only to toggle trace logging. No create, delete or setIamPolicy."
+FLEET_ROLE_PERMISSIONS="discoveryengine.engines.get,discoveryengine.assistants.list,discoveryengine.agents.list,discoveryengine.agents.get,discoveryengine.agents.manage,discoveryengine.agents.update,discoveryengine.licenseConfigs.list,discoveryengine.userStores.listUserLicenses"
+FLEET_ROLE_DESCRIPTION="GE agent inventory and seat licenses (read) for the FinOps Dashboard runtime SA. agents.manage lets agents.list return agents created by other users; agents.update is used only to toggle trace logging. No create, delete or setIamPolicy."
 FLEET_ROLE_STATE="$(gcloud iam roles describe "${FLEET_ROLE_ID}" --project="${PROJECT_ID}" --format='value(deleted)' 2>/dev/null || echo missing)"
 if [[ "${FLEET_ROLE_STATE}" == "missing" ]]; then
   echo "Creating custom role ${FLEET_ROLE_ID}..."
@@ -161,14 +162,30 @@ ROLES=(
     "roles/bigquery.jobUser"
 )
 
+# A service account created seconds ago can take up to a minute to become visible to IAM policy updates
+# ("Service account ... does not exist"). Retry only that error, with backoff; other errors fail at once.
+grant_sa_project_role() {
+  local role="$1" out="" attempt
+  for attempt in 1 2 3 4 5 6; do
+    if out="$(gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+        --member="serviceAccount:${SA_EMAIL}" \
+        --role="${role}" \
+        --condition=None \
+        --quiet 2>&1 >/dev/null)"; then
+      return 0
+    fi
+    [[ "${out}" == *"does not exist"* ]] || break
+    echo "  service account not visible to IAM yet; retrying in $((attempt * 5))s..."
+    sleep $((attempt * 5))
+  done
+  echo "${out}" >&2
+  return 1
+}
+
 IAM_FAILURES=0
 for ROLE in "${ROLES[@]}"; do
   echo "Assigning ${ROLE}..."
-  if ! gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
-      --member="serviceAccount:${SA_EMAIL}" \
-      --role="${ROLE}" \
-      --condition=None \
-      --quiet > /dev/null; then
+  if ! grant_sa_project_role "${ROLE}"; then
     warn "could not grant ${ROLE} to ${SA_EMAIL}. Dashboard sources that need it will report errors."
     IAM_FAILURES=$((IAM_FAILURES + 1))
   fi

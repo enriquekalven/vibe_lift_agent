@@ -1,6 +1,6 @@
 # Testing
 
-412 tests across 21 files. They run offline: `GOOGLE_APPLICATION_CREDENTIALS` points at a file that does not
+421 tests across 22 files. They run offline: `GOOGLE_APPLICATION_CREDENTIALS` points at a file that does not
 exist, and every Google Cloud API is replaced by an in-process fake (`FakeGoogleApi` in
 [`tests/test_fleet.py`](../tests/test_fleet.py)), so no live project is touched.
 
@@ -66,6 +66,7 @@ is shown as unknown, never as an invented value. These tests enforce it.
 | **Every mutating route has an explicit live-mode policy.** Simulator mutations (`/api/reset`, `/api/add_parameter`, anomaly/step/evolve, what-if, FinOps recompute) fail closed on live telemetry; a live-mode reset cannot discard SME ratings or SDK events; a new POST route fails the test until classified | `test_live_mode_policy.py` |
 | **SME ratings are never defaulted.** A rating payload must state `persona_id`, a whole-number 1-5 `overall_rating` and a known `verdict`; anything else is rejected and not recorded | `test_full_coverage.TestFullCoverage.test_sme_eval_explicit_args_and_filter`; chaos loop bucket 3 |
 | **ADK & `agents-cli eval` trajectory and grounding suite.** All 10 ADK tools on `root_agent` have evaluation cases in [`tests/eval/datasets/basic-dataset.json`](../tests/eval/datasets/basic-dataset.json), graded by deterministic tool-trajectory (`finops_tool_trajectory`), honesty/grounding (`finops_grounding_contract`) and LLM-as-judge (`custom_response_quality`) metrics | `test_sme_eval.SmeEvalTest.test_agents_cli_eval_dataset_and_metrics_contracts` |
+| **Google Antigravity FinOps (`businessaicode.googleapis.com/inference_response`).** Strict allowlist stripping (prompt/response text never reaches memory), exact WTU & PAYG metering (50-WTU minimum pre-check, 0.5 list share, long-context `>200k` shares, `NOOP_QUOTA` zero-charge, Anthropic Claude 1.25x cache write & 100% PAYG), floating 7-day Gemini Enterprise seat pool replay, Fair Share vs When-Used chargeback reconciliation | `test_agy_finops.py` |
 
 
 ## Adding a test
@@ -73,7 +74,7 @@ is shown as unknown, never as an invented value. These tests enforce it.
 Put it in the file for the module it covers: `test_fleet.py` (collection and inventory),
 `test_live_data_sources.py` (tokens, registrations, live FinOps, validator live checks),
 `test_honest_metrics.py` (billing, judge, live analytics, partition pruning & FinOps safeguards), `test_ge_mart.py` (GE mart provisioner, SQL
-templates, mart readers, daily cost join), `test_prompt_xray.py` (Prompt Cache X-Ray), `test_session_drilldown.py` (session turn drilldowns), `test_sme_eval.py` (30-check SME rubric & rating ledger), `test_trace_logging.py` (trace logging switch), `test_ingest_validation.py` (ingest validation and dead letters), `test_simulator_labels.py` (simulator labels), `test_cost_visibility.py` (billing errors and per-user estimates), `test_nl2sql_and_pricing.py` (plain-English search, pricing, dashboard headers), `test_no_invented_values.py` (no guessed prices, calculator inputs or UI fallbacks), `test_docs_integrity.py` (docs match the code), `test_dashboard_enhancements.py` (dashboard health, smart tables, spend overview, adoption, asset inlining), `test_preview_fixture.py` (`make preview` fixture), `test_chaos_1000_loop.py` (1,050-iteration hermetic chaos & error-contract loop), `test_ui_render_state_dom.py` (real renderer in a ghost DOM), `test_live_mode_policy.py` (live-mode policy table), `test_full_coverage.py` (unit coverage), `test_finops_dashboard.py` (HTTP, MCP, UI, deploy config).
+templates, mart readers, daily cost join), `test_prompt_xray.py` (Prompt Cache X-Ray), `test_session_drilldown.py` (session turn drilldowns), `test_sme_eval.py` (30-check SME rubric & rating ledger), `test_trace_logging.py` (trace logging switch), `test_ingest_validation.py` (ingest validation and dead letters), `test_simulator_labels.py` (simulator labels), `test_cost_visibility.py` (billing errors and per-user estimates), `test_nl2sql_and_pricing.py` (plain-English search, pricing, dashboard headers), `test_no_invented_values.py` (no guessed prices, calculator inputs or UI fallbacks), `test_docs_integrity.py` (docs match the code), `test_dashboard_enhancements.py` (dashboard health, smart tables, spend overview, adoption, asset inlining), `test_preview_fixture.py` (`make preview` fixture), `test_chaos_1000_loop.py` (1,050-iteration hermetic chaos & error-contract loop), `test_ui_render_state_dom.py` (real renderer in a ghost DOM), `test_live_mode_policy.py` (live-mode policy table), `test_agy_finops.py` (Google Antigravity WTU & PAYG FinOps), `test_full_coverage.py` (unit coverage), `test_finops_dashboard.py` (HTTP, MCP, UI, deploy config).
 When you add or remove a test, update the count on the first line; `test_docs_integrity.py` checks it.
 Any new dashboard number should come with a test showing it is `None` (not `0`) when its source is missing.
 

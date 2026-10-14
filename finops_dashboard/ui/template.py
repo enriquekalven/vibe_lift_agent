@@ -1806,6 +1806,83 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
 
+      <div class="panel" id="antigravityFinopsPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Google Antigravity IDE FinOps: Weekly Seat Allowance Pool, WTU Meter &amp; PAYG Chargeback</span>
+            <span id="agyStatusBadge" class="badge badge-blue">Checking&hellip;</span>
+            <span id="agyPoolBadge" class="badge badge-green">&mdash;</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Tracks <span class="mono">businessaicode.googleapis.com/inference_response</span> metadata logs (prompt &amp; response text stripped at ingest), Gemini Enterprise seat subscriptions (<span class="mono">licenseConfigs</span> / <span class="mono">userLicenses</span>), weekly WTU pool quotas (<span class="mono">1 WTU = $0.000002</span>; weekly allowance per seat by tier, default Plus $3.75 / Standard $2.50, set with <span class="mono">FINOPS_AGY_TIER_ALLOWANCES</span>), and PAYG overage chargeback (Fair Share vs When-Used; Anthropic Claude 100% PAYG).
+          </div>
+        </div>
+        <div class="kpi-grid" id="agyFinopsKpis" style="margin-bottom:12px;"></div>
+
+        <div class="live-sub" style="margin-top:8px;">Weekly Seat Allowance Pool Status (Floating 7-Day Window by Tier)</div>
+        <div class="table-scroll" style="margin-bottom:12px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Gemini Enterprise Tier</th>
+                <th>Seats (Assigned / Purchased)</th>
+                <th>Weekly Allowance / Seat</th>
+                <th>Pool Limit (WTU / $)</th>
+                <th>Pool Used (WTU / $)</th>
+                <th>Pool Utilization</th>
+                <th>PAYG Overage ($)</th>
+                <th>Window Reset &amp; Meter Source</th>
+              </tr>
+            </thead>
+            <tbody id="agyPoolBody"></tbody>
+          </table>
+        </div>
+
+        <div class="live-sub" style="margin-top:8px;">Antigravity Model &amp; Effort Breakdown (WTU Meter vs PAYG Overage)</div>
+        <div class="table-scroll" style="margin-bottom:12px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>Effort</th>
+                <th>Provider</th>
+                <th>Calls</th>
+                <th>Prompt Tok</th>
+                <th>Cached Tok</th>
+                <th>Output Tok</th>
+                <th>Thinking Tok</th>
+                <th>WTU</th>
+                <th>Pool Included ($)</th>
+                <th>PAYG Overage ($)</th>
+              </tr>
+            </thead>
+            <tbody id="agyModelsBody"></tbody>
+          </table>
+        </div>
+
+        <div class="live-sub" style="margin-top:8px;">Per-Developer Antigravity Usage &amp; PAYG Chargeback (Fair Share vs When-Used)</div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Developer Principal</th>
+                <th>Tier</th>
+                <th>Trajectories</th>
+                <th>Calls</th>
+                <th>Total Tokens</th>
+                <th>WTU</th>
+                <th>Pool Included ($)</th>
+                <th>PAYG Fair Share ($)</th>
+                <th>PAYG When-Used ($)</th>
+                <th>Total Cost ($)</th>
+              </tr>
+            </thead>
+            <tbody id="agyUsersBody"></tbody>
+          </table>
+        </div>
+        <div class="live-note" id="agyFinopsNote" style="margin-top:8px;"></div>
+      </div>
+
       <div class="panel live-only adv-only" id="liveWhatIfPanel">
         <div class="panel-header">
           <div class="panel-title"><span>What-if: projection from observed usage</span><span class="badge badge-yellow">Projection</span></div>
@@ -2769,6 +2846,7 @@ __FINOPS_ENHANCEMENTS_JS__
         renderBillingStatus(state.billing_reconciliation);
         if (state.live_finops && !liveFinopsFromFleet) renderLiveFinops(state.live_finops);
       }
+      if (state.antigravity_finops) renderAntigravityFinops(state.antigravity_finops);
       if (state.ge_daily_usage) renderGeMartDaily(state.ge_daily_usage);
       if (state.all_agents && typeof state.all_agents === 'object') {
         Object.keys(state.all_agents).forEach(function(k) {
@@ -6491,10 +6569,199 @@ __FINOPS_ENHANCEMENTS_JS__
     }
 
     let liveFinopsFromFleet = false;
+    function renderAntigravityFinops(agy) {
+      if (!agy || typeof agy !== 'object') return;
+      const tot = agy.kpis || {};
+      // Unknown figures (null) render as a dash; fmtUsd's 'no rate card' label is reserved for unpriced models.
+      const usd = function(v) { return v == null ? '—' : fmtUsd(v); };
+      const pct = function(v) { return v == null ? '—' : Number(v).toFixed(1) + '%'; };
+      const errors = (agy.errors && typeof agy.errors === 'object') ? agy.errors : {};
+      const errKeys = Object.keys(errors);
+      const errText = errKeys.map(function(k) { return k + ': ' + errors[k]; }).join(' · ');
+      const statusBadge = document.getElementById('agyStatusBadge');
+      if (statusBadge) {
+        let text = 'LIVE · businessaicode.googleapis.com/inference_response';
+        let cls = 'badge badge-green';
+        if (agy.status === 'SIMULATED_DEMO') {
+          text = 'DEMO · Antigravity WTU & PAYG Simulator';
+          cls = 'badge badge-yellow';
+        } else if (agy.status === 'PENDING') {
+          text = 'LIVE · not collected yet';
+          cls = 'badge badge-blue';
+        } else if (agy.status === 'ERROR') {
+          text = 'LIVE · Antigravity sources unavailable';
+          cls = 'badge badge-red';
+        } else if (agy.status === 'NO_DATA') {
+          text = 'LIVE · 0 inference_response logs in window';
+          cls = 'badge badge-blue';
+        } else if (errKeys.length) {
+          text += ' · partial (' + errKeys.join(', ') + ' unavailable)';
+          cls = 'badge badge-yellow';
+        }
+        statusBadge.textContent = text;
+        statusBadge.className = cls;
+      }
+      const poolBadge = document.getElementById('agyPoolBadge');
+      if (poolBadge) {
+        poolBadge.textContent = usd(tot.included_usd) + ' pool used · ' + usd(tot.payg_usd) + ' PAYG overage';
+        poolBadge.className = 'badge ' + (tot.payg_usd == null ? 'badge-blue' : (tot.payg_usd > 0 ? 'badge-yellow' : 'badge-green'));
+      }
+
+      const kpiBox = document.getElementById('agyFinopsKpis');
+      if (kpiBox) {
+        const purchased = tot.purchased_seats;
+        const assigned = tot.assigned_seats;
+        const unassigned = (purchased != null && assigned != null) ? Math.max(0, purchased - assigned) : null;
+        kpiBox.replaceChildren(
+          kpiCard(
+            'Antigravity Calls & Trajectories',
+            fmtInt(tot.total_calls) + ' calls · ' + fmtInt(tot.total_trajectories) + ' trajectories',
+            fmtInt(tot.active_users) + ' active developer(s) in window'
+          ),
+          kpiCard(
+            'Weekly Pool Used (WTU / $)',
+            usd(tot.included_usd),
+            fmtTokens(tot.pool_used_wtu) + ' / ' + fmtTokens(tot.pool_limit_wtu) + ' WTU (' + pct(tot.pool_utilization_pct) + ')'
+          ),
+          kpiCard(
+            'PAYG Overage Spend',
+            usd(tot.payg_usd),
+            'Pool overage + 100% PAYG models (Anthropic Claude)'
+          ),
+          kpiCard(
+            'Total Antigravity Cost',
+            usd(tot.total_cost_usd),
+            'Pool + PAYG (vs ' + usd(tot.list_value_usd) + ' list value)' +
+              (tot.unpriced_calls ? ' · ' + fmtInt(tot.unpriced_calls) + ' call(s) with no rate card not included' : '')
+          ),
+          kpiCard(
+            'Gemini Enterprise Seats',
+            fmtInt(assigned) + ' / ' + fmtInt(purchased) + ' seats',
+            fmtInt(unassigned) + ' unassigned · ' + fmtInt(tot.idle_seats) + ' assigned w/ 0 calls'
+          ),
+          kpiCard(
+            'Prompt Cache Read Share',
+            pct(tot.cache_hit_pct),
+            fmtTokens(tot.cached_tokens) + ' cached / ' + fmtTokens(tot.prompt_tokens) + ' prompt tok'
+          )
+        );
+      }
+
+      let emptyMsg = agy.compliance_note || 'No Antigravity usage logged in this window.';
+      if (agy.status === 'PENDING') emptyMsg = agy.note || 'Not collected yet.';
+      if (agy.status === 'ERROR') emptyMsg = 'Antigravity sources unavailable: ' + errText;
+
+      const poolBody = document.getElementById('agyPoolBody');
+      if (poolBody) {
+        poolBody.replaceChildren();
+        (agy.pools || []).forEach(function(p) {
+          const util = p.utilization_pct;
+          const pctBadge = util == null
+            ? badge('—', 'badge-blue')
+            : badge(Number(util).toFixed(1) + '%', util >= 100 ? 'badge-red' : (util >= 80 ? 'badge-yellow' : 'badge-green'));
+          const allowance = p.seat_allowance_usd == null
+            ? 'No allowance configured'
+            : fmtUsd(p.seat_allowance_usd) + '/wk (' + fmtTokens(p.seat_allowance_wtu) + ' WTU)';
+          poolBody.appendChild(el('tr', null, [
+            el('td', null, [el('strong', null, ['Gemini Enterprise ' + (p.tier || '—')])]),
+            tdText(fmtInt(p.assigned_seats) + ' / ' + fmtInt(p.purchased_seats) +
+              (p.idle_seats ? ' (' + fmtInt(p.idle_seats) + ' idle)' : ''), 'mono'),
+            tdText(allowance, 'mono'),
+            tdText(fmtTokens(p.limit_wtu) + ' WTU (' + usd(p.limit_usd) + ')', 'mono'),
+            tdText(fmtTokens(p.effective_used_wtu) + ' WTU (' + usd(p.used_usd) + ')', 'mono'),
+            el('td', 'mono', [pctBadge]),
+            tdText(usd(p.payg_overage_usd), 'mono'),
+            tdText((p.window_end ? 'Resets ' + p.window_end + ' · ' : '') + (p.meter_source || '—'), 'mono'),
+          ]));
+        });
+        if (!poolBody.children.length) {
+          const td = el('td', 'fleet-empty', [
+            (agy.status === 'LIVE' || agy.status === 'NO_DATA')
+              ? 'No Gemini Enterprise seat pool (licenseConfigs) or WTU meter found in this project.'
+              : emptyMsg,
+          ]);
+          td.colSpan = 8;
+          poolBody.appendChild(el('tr', null, [td]));
+        }
+      }
+
+      const modelsBody = document.getElementById('agyModelsBody');
+      if (modelsBody) {
+        modelsBody.replaceChildren();
+        (agy.by_model_effort || []).forEach(function(m) {
+          const prov = String(m.provider || '—');
+          const provBadge = badge(prov, prov.toLowerCase() === 'anthropic' ? 'badge-yellow' : 'badge-blue');
+          const unpriced = Number(m.unpriced_calls) > 0;
+          modelsBody.appendChild(el('tr', null, [
+            tdText(m.model || '—', 'mono'),
+            tdText(m.effort || '—', 'mono'),
+            el('td', null, [provBadge]),
+            tdText(fmtInt(m.calls), 'mono'),
+            tdText(fmtTokens(m.prompt_tokens), 'mono'),
+            tdText(fmtTokens(m.cached_tokens), 'mono'),
+            tdText(fmtTokens(m.output_tokens), 'mono'),
+            tdText(fmtTokens(m.thoughts_tokens), 'mono'),
+            tdText(unpriced ? 'no rate card' : fmtTokens(m.wtu), 'mono'),
+            tdText(unpriced ? 'no rate card' : usd(m.included_usd), 'mono'),
+            tdText(unpriced ? 'no rate card' : usd(m.payg_usd), 'mono'),
+          ]));
+        });
+        if (!modelsBody.children.length) {
+          const td = el('td', 'fleet-empty', [emptyMsg]);
+          td.colSpan = 11;
+          modelsBody.appendChild(el('tr', null, [td]));
+        }
+      }
+
+      const usersBody = document.getElementById('agyUsersBody');
+      if (usersBody) {
+        usersBody.replaceChildren();
+        (agy.by_user || []).forEach(function(u) {
+          const tierStr = String(u.tier || '—');
+          const tierBadge = badge(tierStr, tierStr === 'Plus' ? 'badge-green' : (tierStr === 'Standard' ? 'badge-blue' : 'badge-yellow'));
+          usersBody.appendChild(el('tr', null, [
+            tdText(u.user_email || '—', 'mono'),
+            el('td', null, [tierBadge]),
+            tdText(fmtInt(u.trajectories), 'mono'),
+            tdText(fmtInt(u.calls), 'mono'),
+            tdText(fmtTokens(u.total_tokens), 'mono'),
+            tdText(fmtTokens(u.wtu), 'mono'),
+            tdText(usd(u.included_usd), 'mono'),
+            tdText(usd(u.payg_fair_share_usd), 'mono'),
+            tdText(usd(u.payg_when_used_usd), 'mono'),
+            tdText(usd(u.total_cost_usd), 'mono'),
+          ]));
+        });
+        if (!usersBody.children.length) {
+          const td = el('td', 'fleet-empty', [emptyMsg]);
+          td.colSpan = 10;
+          usersBody.appendChild(el('tr', null, [td]));
+        }
+      }
+
+      const noteEl = document.getElementById('agyFinopsNote');
+      if (noteEl) {
+        const parts = [];
+        if (agy.source) parts.push('Source: ' + agy.source);
+        if (agy.note) parts.push(agy.note);
+        if (errKeys.length) parts.push('Unavailable: ' + errText);
+        if (agy.truncated) parts.push('Log scan stopped at ' + fmtInt(agy.entries_scanned) + ' calls (totals are a lower bound)');
+        const unpricedModels = tot.unpriced_models || [];
+        if (unpricedModels.length) parts.push('No rate card, not in $ totals: ' + unpricedModels.join(', '));
+        const unknownTiers = agy.unknown_tiers || [];
+        if (unknownTiers.length) parts.push('No allowance configured for ' + unknownTiers.join(', ') + ' (set FINOPS_AGY_TIER_ALLOWANCES)');
+        if (agy.compliance_note) parts.push(agy.compliance_note);
+        noteEl.textContent = parts.join(' · ');
+      }
+    }
+
     function renderLiveFinops(lf) {
       if (!lf || typeof lf !== 'object') return;
       if (lf.unregistered_runtimes || lf.skills_and_mcp) {
         renderUnregisteredAndSkills(lf);
+      }
+      if (lf.antigravity_usage) {
+        renderAntigravityFinops(lf.antigravity_usage);
       }
       const te = lf.token_economics || {};
       const win = windowLabel(te.window_hours);

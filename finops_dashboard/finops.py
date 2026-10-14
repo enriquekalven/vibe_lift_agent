@@ -348,6 +348,7 @@ def build_live_finops(fleet: Mapping[str, Any] | None) -> dict[str, Any]:
       'unregistered_runtimes': fleet.get('unregistered_runtimes') or [],
       'gke_workloads': fleet.get('gke_workloads') or {'clusters': [], 'workloads': []},
       'skills_and_mcp': fleet.get('skills_and_mcp') or [],
+      'antigravity_usage': fleet.get('antigravity_usage'),
   }
 
 

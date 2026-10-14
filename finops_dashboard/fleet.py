@@ -40,8 +40,8 @@ except ImportError:  # pragma: no cover - google-auth ships with the Cloud clien
   google_auth = None  # type: ignore[assignment]
   GoogleAuthRequest = None  # type: ignore[assignment,misc]
 
+from finops_dashboard import agy_finops, gcp_telemetry, telemetry
 from finops_dashboard import finops as live_finops
-from finops_dashboard import gcp_telemetry, telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -1113,6 +1113,11 @@ class GeminiEnterpriseFleetService:
     self.default_window_hours = _clamp_window(os.environ.get('FINOPS_FLEET_WINDOW_HOURS', '24'), 24)
     self.max_log_entries = int(os.environ.get('FINOPS_TOKEN_LOG_MAX_ENTRIES', '3000'))
     self._api = api or _GoogleApi(quota_project=self.project_id)
+    self.antigravity_collector = agy_finops.AntigravityFinOpsCollector(
+        project_id=self.project_id,
+        api=self._api,
+        locations=self.discovery_locations,
+    )
     self._cache: dict[int, tuple[float, dict[str, Any]]] = {}
     self._project_aliases: set[str] = {self.project_id}
     self._trace_cache: dict[tuple[str, str, int], tuple[float, list[dict[str, Any]], bool]] = {}
@@ -1138,6 +1143,15 @@ class GeminiEnterpriseFleetService:
     return project
 
   # ------------------------------------------------------------------ public API
+
+  def collect_antigravity_finops(
+      self,
+      window_hours: int | None = None,
+      force_refresh: bool = False,
+  ) -> dict[str, Any]:
+    """Collects Google Antigravity IDE FinOps telemetry (inference_response, licenses, WTU pool)."""
+    hours = _clamp_window(window_hours, 168)
+    return self.antigravity_collector.collect(window_hours=hours, force_refresh=force_refresh)
 
   def collect(
       self,
@@ -2272,6 +2286,7 @@ class GeminiEnterpriseFleetService:
         unreg_jobs[('discover_re', self.project_id)] = pool.submit(self._discover_reasoning_engines, self.project_id)
         unreg_jobs[('run_catalog', self.project_id)] = pool.submit(self._cloud_run_services_catalog, self.project_id)
         unreg_jobs[('discover_gke', self.project_id)] = pool.submit(self._discover_gke_workloads, self.project_id, window_s)
+        unreg_jobs[('antigravity_finops', self.project_id)] = pool.submit(self.antigravity_collector.collect, hours, False)
 
       for project, ids in engines_by_project.items():
         id_list = sorted(ids)
@@ -2473,6 +2488,7 @@ class GeminiEnterpriseFleetService:
         'model_usage_previous': results.get(('model_usage_prev',)),
         'ge_traffic': results.get(('ge_traffic',)),
         'ge_assistant_usage': results.get(('ge_assistant_tokens',)),
+        'antigravity_usage': unreg_results.get(('antigravity_finops', self.project_id)),
         'trend': build_request_trend(agents, results, window_s, bucket_s, self.project_id),
         'token_log_scan': {
             'entries_scanned': sum(r['entries_scanned'] for r in token_results),

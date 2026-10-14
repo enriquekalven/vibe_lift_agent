@@ -28,6 +28,7 @@ except ImportError:
   fastapi = None  # type: ignore[assignment]
 
 from finops_dashboard import (
+  agy_finops,
   billing_export,
   gcp_telemetry,
   long_running_agent,
@@ -480,6 +481,10 @@ class FinOpsRuntimeController:
       ]
 
     turn_summary_dict = dict(telemetry.summarize_log_stream(turns))
+    antigravity_finops_payload = self.get_antigravity_finops_payload(
+        window_hours=window_hours,
+        fleet_payload=fleet_payload or self._last_fleet_payload,
+    )
     payload: dict[str, Any] = {
         'agent_name': self.agent.agent_name,
         'model': self.agent.model,
@@ -499,6 +504,7 @@ class FinOpsRuntimeController:
         'persona_playbooks': persona_playbooks,
         'what_if_default': what_if_default,
         'live_finops': live_finops_payload,
+        'antigravity_finops': antigravity_finops_payload,
         'ge_daily_usage': ge_daily_usage,
         'live_data': live_gcp,
         'aive_logs': telemetry.get_recent_aive_logs(live_only=live_gcp),
@@ -602,6 +608,37 @@ class FinOpsRuntimeController:
         'by_app_agent_model': list(bq_insights.get('ge_daily_by_app') or []),
         'sessions': list(bq_insights.get('ge_sessions') or []),
     }
+
+  def get_antigravity_finops_payload(
+      self,
+      window_hours: int | None = None,
+      force_refresh: bool = False,
+      fleet_payload: Mapping[str, Any] | None = None,
+      allow_live_fetch: bool = False,
+  ) -> dict[str, Any]:
+    """Returns Google Antigravity IDE FinOps telemetry (live collector on GCP, deterministic demo in DEMO mode)."""
+    if self._is_live_gcp():
+      effective = fleet_payload or self._last_fleet_payload or self.optimizer._live_fleet_payload
+      if not force_refresh and isinstance(effective, Mapping):
+        cached = effective.get('antigravity_usage')
+        if isinstance(cached, Mapping):
+          return dict(cached)
+      if allow_live_fetch or force_refresh:
+        collector = getattr(self.ge_fleet, 'collect_antigravity_finops', None)
+        if callable(collector):
+          return collector(window_hours=window_hours, force_refresh=force_refresh)
+      return agy_finops.build_pending_antigravity_payload(
+          project_id=self.gcp_telemetry.project_id,
+          window_hours=window_hours or 168,
+          note=(
+              'Not collected yet: Antigravity usage is read with the fleet refresh (when unregistered-runtime '
+              'discovery is on) or on demand from GET /api/antigravity.'
+          ),
+      )
+    return agy_finops.build_demo_antigravity_payload(
+        project_id=self.gcp_telemetry.project_id,
+        window_hours=window_hours or 168,
+    )
 
   def get_user_centric_finops_payload(self, window_hours: int | None = None) -> dict[str, Any]:
     """User-centric FinOps plus per-user session token rollup and per-session turn token drilldown."""
@@ -1368,6 +1405,13 @@ class FinOpsRequestHandler(http.server.BaseHTTPRequestHandler):
     if path == '/api/gcp_telemetry':
       self._send_json(srv.controller.gcp_telemetry.get_telemetry_summary_payload())
       return
+    if path in ('/api/antigravity', '/api/antigravity_finops'):
+      self._send_json(srv.controller.get_antigravity_finops_payload(
+          window_hours=ge_fleet.parse_window_hours(_first_query_value(query, 'window_hours')),
+          force_refresh=ge_fleet.parse_bool((query.get('force_refresh') or [''])[0]),
+          allow_live_fetch=True,
+      ))
+      return
     if path == '/api/user_centric_finops':
       self._send_json(srv.controller.get_user_centric_finops_payload(
           window_hours=ge_fleet.parse_window_hours(_first_query_value(query, 'window_hours')),
@@ -1738,6 +1782,15 @@ def register_api_routes(app: Any, controller: FinOpsRuntimeController) -> None:
   @app.get('/api/gcp_telemetry')
   def get_gcp_telemetry_endpoint():
     return controller.gcp_telemetry.get_telemetry_summary_payload()
+
+  @app.get('/api/antigravity')
+  @app.get('/api/antigravity_finops')
+  def get_antigravity_finops_endpoint(window_hours: str | None = None, force_refresh: str | None = None):
+    return controller.get_antigravity_finops_payload(
+        window_hours=ge_fleet.parse_window_hours(window_hours),
+        force_refresh=ge_fleet.parse_bool(force_refresh),
+        allow_live_fetch=True,
+    )
 
   @app.get('/api/user_centric_finops')
   def get_user_centric_finops(window_hours: str | None = None):

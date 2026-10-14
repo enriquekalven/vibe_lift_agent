@@ -20,7 +20,7 @@ PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-$(gcloud config get-value project 2>/dev/nul
 RETENTION_DAYS="${FINOPS_RETENTION_DAYS:-90}"
 # Raw Cloud Logging sink datasets. finops_analytics is excluded on purpose: it also holds
 # FinOps Dashboard's own tables (agent_turns, ...), which must not lose history to a log retention policy.
-RAW_DATASETS=(ds_ge_assistant_raw ds_ge_search_raw ds_vertex_agents_raw ds_ge_audit_raw ds_security_guardrails_raw)
+RAW_DATASETS=(ds_ge_assistant_raw ds_ge_search_raw ds_vertex_agents_raw ds_ge_audit_raw ds_security_guardrails_raw ds_antigravity_raw)
 
 if [[ -z "${PROJECT_ID}" ]]; then
   echo "ERROR: Set GOOGLE_CLOUD_PROJECT or run 'gcloud config set project <PROJECT_ID>'." >&2

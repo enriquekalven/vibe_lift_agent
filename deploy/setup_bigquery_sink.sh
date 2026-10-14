@@ -82,6 +82,7 @@ create_dataset_if_missing "ds_ge_search_raw" "Gemini Enterprise Search raw user 
 create_dataset_if_missing "ds_vertex_agents_raw" "Vertex AI Reasoning Engine and Model inference log sink"
 create_dataset_if_missing "ds_ge_audit_raw" "Gemini Enterprise and Cloud Audit data access & activity log sink"
 create_dataset_if_missing "ds_security_guardrails_raw" "Model Armor and Sensitive Data Protection guardrail log sink"
+create_dataset_if_missing "ds_antigravity_raw" "Google Antigravity IDE inference_response metadata log sink"
 create_dataset_if_missing "${DATASET_ID}" "FinOps Dashboard agent runtime turns, evaluations, and optimizer snapshots"
 create_dataset_if_missing "${CURATED_DATASET}" "Curated typed views over raw Gemini Enterprise log sinks"
 create_dataset_if_missing "${MART_DATASET}" "FinOps Dashboard turn, session, and daily usage reporting mart"
@@ -174,6 +175,10 @@ MONITORED_SERVICES="finops-dashboard-mcp-app${FINOPS_MONITORED_SERVICES:+,${FINO
 SERVICE_CLAUSE=$(echo "${MONITORED_SERVICES}" | tr ',' '\n' | sed '/^ *$/d; s/^ *//; s/ *$//; s/.*/"&"/' | paste -sd ' ' - | sed 's/ / OR /g')
 SINK_FINOPS_FILTER="resource.type=\"cloud_run_revision\" AND resource.labels.service_name=(${SERVICE_CLAUSE})"
 configure_sink "finops-telemetry-sink" "${DATASET_ID}" "${SINK_FINOPS_FILTER}"
+
+# Sink 7: Google Antigravity IDE Inference Metadata (businessaicode.googleapis.com/inference_response)
+SINK_AGY_FILTER="logName=\"projects/${PROJECT_ID}/logs/businessaicode.googleapis.com%2Finference_response\""
+configure_sink "sink-antigravity-inference" "ds_antigravity_raw" "${SINK_AGY_FILTER}"
 
 echo ""
 echo "--- Step 2b: Raw log retention (${RETENTION_DAYS} days) ---"
