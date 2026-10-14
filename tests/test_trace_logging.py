@@ -5,6 +5,7 @@ results, the fleet cache (only API-confirmed changes), the set_agent_trace_loggi
 dashboard's confirm-then-apply flow, run in Node against the real template JavaScript.
 """
 
+import io
 import json
 import os
 import re
@@ -13,6 +14,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+import urllib.error
 from unittest import mock
 
 from finops_dashboard import fleet as ge_fleet
@@ -137,6 +139,57 @@ class TraceLoggingServiceTest(unittest.TestCase):
       with self.assertRaises(ge_fleet.FleetSourceError):
         api.call('PATCH', 'https://attacker.example/v1alpha/x', {})
     token.assert_not_called()
+
+  @staticmethod
+  def _http_error(code, body):
+    reasons = {404: 'Not Found', 502: 'Bad Gateway', 503: 'Service Unavailable', 504: 'Gateway Timeout'}
+    return urllib.error.HTTPError('https://logging.googleapis.com/v2/entries:list', code, reasons.get(code, 'Error'),
+                                  {}, io.BytesIO(body.encode('utf-8')))
+
+  @staticmethod
+  def _ok(payload):
+    resp = mock.MagicMock()
+    resp.read.return_value = json.dumps(payload).encode('utf-8')
+    resp.__enter__.return_value = resp
+    return resp
+
+  def _send_with(self, outcomes, method, url, body=None):
+    api = ge_fleet._GoogleApi('p1')
+    with mock.patch.object(api, '_token', return_value='tok'), \
+         mock.patch.object(ge_fleet.time, 'sleep') as sleep, \
+         mock.patch.object(ge_fleet.urllib.request, 'urlopen', side_effect=outcomes) as opener:
+      try:
+        return api.call(method, url, body), None, opener.call_count, [c.args[0] for c in sleep.call_args_list]
+      except ge_fleet.FleetSourceError as exc:
+        return None, exc, opener.call_count, [c.args[0] for c in sleep.call_args_list]
+
+  def test_read_only_requests_retry_transient_front_end_errors(self):
+    html = '<!DOCTYPE html>\n<html lang=en><title>Error 502 (Server Error)!!1</title></html>'
+    # A Cloud Logging query (POST entries:list) is read-only: 502 and 503 bursts are retried.
+    out, err, calls, sleeps = self._send_with(
+        [self._http_error(502, html), self._http_error(503, '{"error": {"message": "unavailable"}}'),
+         self._ok({'entries': []})],
+        'POST', 'https://logging.googleapis.com/v2/entries:list?fields=entries(timestamp)', {'filter': 'x'})
+    self.assertEqual((out, err, calls, sleeps), ({'entries': []}, None, 3, [0.5, 1.5]))
+    out, err, calls, _ = self._send_with([self._http_error(504, 'timeout'), self._ok({'ok': 1})],
+                                         'GET', 'https://monitoring.googleapis.com/v3/projects/p1/timeSeries')
+    self.assertEqual((out, err, calls), ({'ok': 1}, None, 2))
+
+  def test_writes_and_permanent_errors_are_never_retried(self):
+    # A PATCH (trace logging switch) could apply twice, so a 502 is surfaced immediately.
+    _, err, calls, sleeps = self._send_with([self._http_error(502, 'bad gateway')], 'PATCH',
+                                            f'https://discoveryengine.googleapis.com/v1alpha/{_LC}', {})
+    self.assertEqual((err.status, calls, sleeps), (502, 1, []))
+    _, err, calls, sleeps = self._send_with([self._http_error(404, '{"error": {"message": "missing"}}')],
+                                            'GET', 'https://run.googleapis.com/v2/projects/p1/locations/-/services')
+    self.assertEqual((err.status, str(err), calls, sleeps), (404, 'HTTP 404: missing', 1, []))
+
+  def test_exhausted_retries_report_a_clean_error(self):
+    html = '<!DOCTYPE html>\n<html lang=en><title>Error 502 (Server Error)!!1</title></html>'
+    _, err, calls, sleeps = self._send_with([self._http_error(502, html) for _ in range(3)],
+                                            'POST', 'https://logging.googleapis.com/v2/entries:list', {})
+    self.assertEqual((err.status, calls, sleeps), (502, 3, [0.5, 1.5]))
+    self.assertEqual(str(err), 'HTTP 502: Bad Gateway (HTML error page from the Google front end)')
 
   def test_single_agent_enable_patches_and_updates_the_cache(self):
     res = self.svc.enable_agent_observability(resource_name=_LC, enabled=True)

@@ -21,6 +21,7 @@ from __future__ import annotations
 import collections
 import concurrent.futures
 import datetime
+import hashlib
 import json
 import logging
 import os
@@ -30,7 +31,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 try:
@@ -124,7 +125,7 @@ _CACHE_READ_KEYS = (
 )
 
 
-def _cache_read_tokens(labels: dict[str, Any]) -> int:
+def _cache_read_tokens(labels: Mapping[str, Any]) -> int:
   """Returns cache-read input tokens from one span/log label set (0 when absent)."""
   for key in _CACHE_READ_KEYS:
     if labels.get(key) not in (None, ''):
@@ -274,7 +275,7 @@ def runtime_backend_key(agent: Mapping[str, Any]) -> str:
 _TRACE_ENGINE_RE = re.compile(r'reasoningEngines/(\d+)')
 
 
-def _span_engine_id(labels: dict[str, Any]) -> str | None:
+def _span_engine_id(labels: Mapping[str, Any]) -> str | None:
   for key in ('cloud.resource_id', 'cloud.resource.id', 'g.co/r/aiplatform.googleapis.com/ReasoningEngine/reasoning_engine_id'):
     match = _TRACE_ENGINE_RE.search(str(labels.get(key) or ''))
     if match:
@@ -591,6 +592,482 @@ def aggregate_ge_assistant_usage(traces: list[dict[str, Any]]) -> dict[str, Any]
     for k in totals:
       totals[k] += st[k]
   return {'by_engine': by_engine, 'totals': totals}
+
+
+# ---------------------------------------------------------------------------------------------
+# Cloud Run / GKE workload token attribution
+# ---------------------------------------------------------------------------------------------
+
+_TOKEN_SOURCE_LOGS = 'Cloud Logging: OpenTelemetry gen_ai inference events'
+_TOKEN_SOURCE_TRACES = 'Cloud Trace: OpenTelemetry gen_ai spans'
+# Cloud Trace v1 filter terms separated by a space AND together: each query returns traces holding a
+# span with gen_ai usage AND a span from that platform (not necessarily the same span).
+_WORKLOAD_TRACE_FILTERS = (
+    'label:gen_ai.usage.input_tokens +cloud.platform:gcp_cloud_run',
+    'label:gen_ai.usage.input_tokens +cloud.platform:gcp_kubernetes_engine',
+)
+# OpenTelemetry Cloud Logging exporters write Cloud Run as generic_task (job = service.name) and GKE as
+# k8s_container; apps that log structured JSON to stdout land as cloud_run_revision.
+_WORKLOAD_LOG_RESOURCE_TYPES = ('cloud_run_revision', 'k8s_container', 'generic_task')
+# Partial response: entries:list returns only these fields, so jsonPayload / textPayload (prompt and
+# response text) is never downloaded.
+_WORKLOAD_LOG_FIELDS = 'entries(timestamp,labels,resource),nextPageToken'
+_GENAI_USAGE_KEYS = ('gen_ai.usage.input_tokens', 'gen_ai.usage.output_tokens')
+# Spans of these platforms are attributed elsewhere (GE assistant / Agent Engine), never to a workload.
+_NON_WORKLOAD_PLATFORMS = frozenset({'gcp.gemini_enterprise', 'gcp.agent_engine'})
+# Agent Engine runtimes can surface as Cloud Run: faas.name / service.name / generic_task job.
+_REASONING_ENGINE_WORKLOAD_RE = re.compile(r'^reasoning-engine-(\d+)$')
+# Generated Cloud Run revision names are <service>-<5 digits>-<3 chars>.
+_RUN_REVISION_SUFFIX_RE = re.compile(r'-\d{5}-[a-z0-9]{3}$')
+_RUN_RESOURCE_SERVICE_RE = re.compile(r'/services/([^/]+)')
+_RUN_RESOURCE_REVISION_RE = re.compile(r'/revisions/([^/]+)')
+_WORKLOAD_NAME_MAX = 120
+_RUN_INSTRUMENT_NOTE = (
+    'Served requests but no OpenTelemetry gen_ai token telemetry was attributed to this Cloud Run service '
+    '(Cloud Logging and Cloud Trace checked). To measure its tokens, export OpenTelemetry GenAI spans or '
+    'log events with Google Cloud resource detection enabled (spans are only attributed when they carry '
+    'cloud.platform=gcp_cloud_run) and set OTEL_SERVICE_NAME to the Cloud Run service name (log events '
+    'exported as generic_task are matched by that name).'
+)
+
+
+def _bounded(value: Any) -> str | None:
+  """An identity label value as a bounded string; None when empty."""
+  if value is None or value == '':
+    return None
+  return str(value)[:_WORKLOAD_NAME_MAX]
+
+
+def _as_mapping(value: Any) -> Mapping[str, Any]:
+  return value if isinstance(value, Mapping) else {}
+
+
+def _first_label(labels: Mapping[str, Any], *keys: str) -> str | None:
+  """First non-empty value among allowlisted identity keys."""
+  for key in keys:
+    value = _bounded(labels.get(key))
+    if value:
+      return value
+  return None
+
+
+def _usage_record(kind: str, labels: Mapping[str, Any], timestamp: Any, **identity: str | None) -> dict[str, Any]:
+  """One LLM call: allowlisted identity hints, token counts, model, conversation digest and time."""
+  conversation = labels.get('gen_ai.conversation.id') or labels.get('gcp.vertex.agent.session_id')
+  record: dict[str, Any] = {key: value for key, value in identity.items() if value}
+  record.update({
+      'kind': kind,
+      'input_tokens': max(0, _to_int(labels.get('gen_ai.usage.input_tokens'))),
+      'output_tokens': max(0, _to_int(labels.get('gen_ai.usage.output_tokens'))),
+      'cached_tokens': max(0, _cache_read_tokens(labels)),
+      'model': _first_label(labels, 'gen_ai.response.model', 'gen_ai.request.model'),
+      # Only distinct conversations are counted, so a digest is kept instead of the id.
+      'conversation': hashlib.sha256(str(conversation).encode('utf-8')).hexdigest()[:16] if conversation else None,
+      'timestamp': _bounded(timestamp),
+  })
+  return record
+
+
+def _trace_span_record(labels: Mapping[str, Any], end_time: Any) -> dict[str, Any]:
+  """Classifies one usage span by its OWN labels, never by another span in the same trace."""
+  platform = _bounded(labels.get('cloud.platform'))
+  engine = _span_engine_id(labels)
+  if engine or platform in _NON_WORKLOAD_PLATFORMS:
+    if engine:
+      name = f'agent_engine:{engine}'
+    else:
+      name = 'gemini_enterprise' if platform == 'gcp.gemini_enterprise' else 'agent_engine'
+    return _usage_record('agent_engine_or_ge', labels, end_time, name=name)
+  service_name = _first_label(labels, 'service.name')
+  legacy_service = _first_label(labels, 'g.co/r/cloud_run_revision/service_name')
+  legacy_revision = _first_label(labels, 'g.co/r/cloud_run_revision/revision_name')
+  cluster = _first_label(labels, 'k8s.cluster.name', 'g.co/r/k8s_container/cluster_name')
+  if platform == 'gcp_cloud_run' or (platform is None and (legacy_service or legacy_revision)):
+    resource_id = str(labels.get('cloud.resource_id') or labels.get('cloud.resource.id') or '')
+    svc = _RUN_RESOURCE_SERVICE_RE.search(resource_id)
+    rev = _RUN_RESOURCE_REVISION_RE.search(resource_id)
+    return _usage_record(
+        'cloud_run', labels, end_time,
+        service=_first_label(labels, 'faas.name'),
+        resource_service=_bounded(svc.group(1)) if svc else None,
+        revision=(_bounded(rev.group(1)) if rev else None) or _first_label(labels, 'faas.version') or legacy_revision,
+        legacy_service=legacy_service,
+        service_name=service_name,
+        job=_first_label(labels, 'g.co/r/generic_task/job'),
+    )
+  if platform == 'gcp_kubernetes_engine' or (platform is None and cluster):
+    return _usage_record(
+        'gke', labels, end_time,
+        cluster=cluster,
+        namespace=_first_label(labels, 'k8s.namespace.name', 'g.co/r/k8s_container/namespace_name'),
+        container=_first_label(labels, 'k8s.container.name', 'g.co/r/k8s_container/container_name'),
+        service_name=service_name,
+    )
+  return _usage_record('other', labels, end_time, platform=platform, service_name=service_name)
+
+
+def extract_workload_trace_records(traces: list[dict[str, Any]]) -> list[dict[str, Any]]:
+  """Minimal usage records (one per LLM call) from the spans of Cloud Run / GKE traces.
+
+  Gemini Enterprise and Agent Engine spans share traces with the Cloud Run services they call, so each
+  span is classified by its own labels. ADK's call_llm span and the GenAI SDK's generate_content child
+  report the same call: only the innermost usage span is counted (a parent is a wrapper only when its
+  child runs on the same platform). Only allowlisted label keys are read.
+  """
+  records: list[dict[str, Any]] = []
+  for trace in traces or []:
+    if not isinstance(trace, Mapping):
+      continue
+    usage = [
+        sp for sp in (trace.get('spans') or [])
+        if isinstance(sp, Mapping) and isinstance(sp.get('labels'), Mapping)
+        and any(k in sp['labels'] for k in _GENAI_USAGE_KEYS)
+    ]
+    platform_by_span = {sp['spanId']: sp['labels'].get('cloud.platform') for sp in usage if sp.get('spanId')}
+    wrappers = {
+        sp.get('parentSpanId') for sp in usage
+        if sp.get('parentSpanId') in platform_by_span
+        and platform_by_span[sp.get('parentSpanId')] == sp['labels'].get('cloud.platform')
+    }
+    for sp in usage:
+      if sp.get('spanId') and sp['spanId'] in wrappers:
+        continue  # A child span reports the same call.
+      records.append(_trace_span_record(sp['labels'], sp.get('endTime')))
+  return records
+
+
+def extract_workload_log_records(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+  """Minimal usage records from Cloud Run / GKE gen_ai log entries; other resource types are ignored.
+
+  cloud_run_revision names the service; generic_task (OpenTelemetry exporters on Cloud Run) names a job
+  that must match a Cloud Run service exactly; k8s_container names cluster / namespace / container.
+  Only allowlisted keys are read, never the log payload.
+  """
+  records: list[dict[str, Any]] = []
+  for entry in entries or []:
+    if not isinstance(entry, Mapping):
+      continue
+    resource = _as_mapping(entry.get('resource'))
+    rlabels = _as_mapping(resource.get('labels'))
+    labels = _as_mapping(entry.get('labels'))
+    if not any(k in labels for k in _GENAI_USAGE_KEYS):
+      continue
+    rtype = resource.get('type')
+    stamp = entry.get('timestamp')
+    if rtype == 'cloud_run_revision':
+      records.append(_usage_record('cloud_run', labels, stamp, service=_first_label(rlabels, 'service_name'),
+                                   revision=_first_label(rlabels, 'revision_name')))
+    elif rtype == 'generic_task':
+      records.append(_usage_record('cloud_run', labels, stamp, job=_first_label(rlabels, 'job')))
+    elif rtype == 'k8s_container':
+      records.append(_usage_record(
+          'gke', labels, stamp,
+          cluster=_first_label(rlabels, 'cluster_name'),
+          namespace=_first_label(rlabels, 'namespace_name'),
+          container=_first_label(rlabels, 'container_name'),
+      ))
+  return records
+
+
+def _reasoning_engine_identity(record: Mapping[str, Any]) -> str | None:
+  """Agent Engine id when a record's workload identity is an Agent Engine runtime (reasoning-engine-<id>)."""
+  for key in ('service', 'resource_service', 'legacy_service', 'service_name', 'job', 'revision'):
+    value = str(record.get(key) or '')
+    if key == 'revision':
+      value = _RUN_REVISION_SUFFIX_RE.sub('', value)
+    match = _REASONING_ENGINE_WORKLOAD_RE.match(value)
+    if match:
+      return match.group(1)
+  return None
+
+
+def _service_for_revision(revision: str, services: set[str]) -> str | None:
+  """Cloud Run service of a revision: the generated suffix stripped, else the longest name prefix."""
+  stripped = _RUN_REVISION_SUFFIX_RE.sub('', revision)
+  if stripped != revision and stripped in services:
+    return stripped
+  best: str | None = None
+  for svc in services:
+    if (revision == svc or revision.startswith(svc + '-')) and (best is None or len(svc) > len(best)):
+      best = svc
+  return best
+
+
+def _resolve_run_service(record: Mapping[str, Any], services: set[str], revision_cache: dict[str, str | None]) -> str | None:
+  """Cloud Run service of a record: faas.name / service label, resource service, revision, then exact names."""
+  for candidate in (record.get('service'), record.get('resource_service')):
+    if candidate and candidate in services:
+      return candidate
+  revision = record.get('revision')
+  if revision:
+    if revision not in revision_cache:
+      revision_cache[revision] = _service_for_revision(revision, services)
+    if revision_cache[revision]:
+      return revision_cache[revision]
+  for candidate in (record.get('legacy_service'), record.get('service_name'), record.get('job')):
+    if (candidate and candidate in services and not candidate.isdigit()
+        and not candidate.startswith('unknown_service')):
+      return candidate
+  return None
+
+
+def _new_usage_stats() -> dict[str, Any]:
+  return {'llm_calls': 0, 'input_tokens': 0, 'output_tokens': 0, 'cached_tokens': 0, 'last_activity': None,
+          '_conversations': set(), '_models': collections.Counter(), 'by_model': {}}
+
+
+def _add_usage(acc: dict[str, dict[str, Any]], key: str, record: Mapping[str, Any]) -> None:
+  st = acc.setdefault(key, _new_usage_stats())
+  model = record.get('model')
+  bucket = st['by_model'].setdefault(
+      model or live_finops.NO_MODEL_LABEL, {'llm_calls': 0, 'input_tokens': 0, 'output_tokens': 0, 'cached_tokens': 0})
+  for target in (st, bucket):
+    target['llm_calls'] += 1
+    for tok in ('input_tokens', 'output_tokens', 'cached_tokens'):
+      target[tok] += int(record.get(tok) or 0)
+  if record.get('conversation'):
+    st['_conversations'].add(record['conversation'])
+  if model:
+    st['_models'][model] += 1
+  stamp = record.get('timestamp')
+  if stamp and (st['last_activity'] is None or stamp > st['last_activity']):
+    st['last_activity'] = stamp
+
+
+def _finish_usage(st: dict[str, Any]) -> dict[str, Any]:
+  out = dict(st)
+  out['conversations'] = len(out.pop('_conversations'))
+  out['models'] = [m for m, _ in out.pop('_models').most_common(3)]
+  return out
+
+
+def _unattributed_name(record: Mapping[str, Any]) -> str:
+  """Identity name (never content) of a record that matched no inventoried workload."""
+  kind = record.get('kind')
+  if kind == 'cloud_run':
+    for key in ('service', 'resource_service', 'revision', 'legacy_service', 'service_name'):
+      if record.get(key):
+        return f'cloud_run:{record[key]}'
+    return f"generic_task:{record['job']}" if record.get('job') else 'cloud_run:unknown'
+  if kind == 'gke':
+    container = record.get('container') or record.get('service_name') or '?'
+    return f"gke:{record.get('cluster') or '?'}/{record.get('namespace') or '?'}/{container}"
+  return f"{record.get('platform') or 'unknown_platform'}:{record.get('service_name') or 'unknown'}"
+
+
+def _top_names(counts: Mapping[str, int], limit: int = 5) -> list[str]:
+  return [name for name, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]]
+
+
+def resolve_workload_usage(
+    records: list[dict[str, Any]],
+    run_services: Iterable[str],
+    gke_keys: Iterable[tuple[str, str, str]],
+) -> dict[str, Any]:
+  """Attributes usage records to inventoried Cloud Run services and GKE workloads.
+
+  Returns {'cloud_run': {service: stats}, 'gke': {'cluster/namespace/container': stats}} plus per-name
+  counts of LLM calls that matched no inventoried workload ('unattributed') and of Agent Engine /
+  Gemini Enterprise calls left to their own collectors ('skipped'). stats hold llm_calls, input /
+  output / cached tokens, distinct conversations, the top 3 models, per-model token buckets (by_model,
+  for pricing) and last_activity.
+  """
+  services = {str(s) for s in run_services or () if s}
+  workloads = {(str(k[0]), str(k[1]), str(k[2])) for k in gke_keys or () if len(k) == 3 and all(k)}
+  run_acc: dict[str, dict[str, Any]] = {}
+  gke_acc: dict[str, dict[str, Any]] = {}
+  unattributed: collections.Counter[str] = collections.Counter()
+  skipped: collections.Counter[str] = collections.Counter()
+  system_calls = 0
+  revision_cache: dict[str, str | None] = {}
+  for rec in records or []:
+    kind = rec.get('kind')
+    if kind == 'agent_engine_or_ge':
+      skipped[str(rec.get('name') or 'agent_engine')] += 1
+      continue
+    engine = _reasoning_engine_identity(rec)
+    if engine:
+      skipped[f'agent_engine:{engine}'] += 1
+      continue
+    if kind == 'cloud_run':
+      service = _resolve_run_service(rec, services, revision_cache)
+      if service:
+        _add_usage(run_acc, service, rec)
+        continue
+    elif kind == 'gke':
+      cluster, namespace, container = rec.get('cluster'), rec.get('namespace'), rec.get('container')
+      if namespace in SYSTEM_K8S_NAMESPACES:
+        system_calls += 1
+        continue
+      # All three are required; without a container name, service.name may name the container.
+      key = None
+      if cluster and namespace:
+        if container:
+          key = (cluster, namespace, container) if (cluster, namespace, container) in workloads else None
+        elif rec.get('service_name') and (cluster, namespace, rec['service_name']) in workloads:
+          key = (cluster, namespace, rec['service_name'])
+      if key:
+        _add_usage(gke_acc, '/'.join(key), rec)
+        continue
+    unattributed[_unattributed_name(rec)] += 1
+  return {
+      'cloud_run': {k: _finish_usage(v) for k, v in run_acc.items()},
+      'gke': {k: _finish_usage(v) for k, v in gke_acc.items()},
+      'unattributed': dict(unattributed),
+      'skipped': dict(skipped),
+      'unattributed_llm_calls': sum(unattributed.values()),
+      'skipped_agent_engine_or_ge_calls': sum(skipped.values()),
+      'skipped_system_namespace_calls': system_calls,
+      'top_unattributed': _top_names(unattributed),
+  }
+
+
+def _gke_workload_key(workload: Mapping[str, Any]) -> str | None:
+  """'cluster/namespace/container' of a discovered GKE workload; None when any part is missing."""
+  parts = [str(workload.get(k) or '') for k in ('cluster_name', 'namespace', 'container_name')]
+  return '/'.join(parts) if all(parts) else None
+
+
+def gke_workload_keys(gke_raw: Any) -> set[tuple[str, str, str]]:
+  """(cluster, namespace, container) keys of discovered non-system GKE workloads."""
+  workloads = gke_raw if isinstance(gke_raw, list) else ((gke_raw or {}).get('workloads') or [])
+  keys: set[tuple[str, str, str]] = set()
+  for workload in workloads:
+    if isinstance(workload, Mapping) and _gke_workload_key(workload):
+      key = (str(workload['cluster_name']), str(workload['namespace']), str(workload['container_name']))
+      if key[1] not in SYSTEM_K8S_NAMESPACES:
+        keys.add(key)
+  return keys
+
+
+def build_workload_token_usage(
+    log_result: Mapping[str, Any] | None,
+    trace_result: Mapping[str, Any] | None,
+    run_services: Iterable[str],
+    gke_keys: Iterable[tuple[str, str, str]],
+    log_source: str = 'ok',
+    trace_source: str = 'ok',
+) -> dict[str, Any]:
+  """Resolves both workload token sources against the inventory; a failed or skipped source is None."""
+  services = set(run_services or ())
+  workloads = set(gke_keys or ())
+  logs = resolve_workload_usage(log_result.get('records') or [], services, workloads) if log_result is not None else None
+  traces = (resolve_workload_usage(trace_result.get('records') or [], services, workloads)
+            if trace_result is not None else None)
+  return {
+      'logs': logs,
+      'traces': traces,
+      'log_source': log_source,
+      'trace_source': trace_source,
+      'log_entries_scanned': int((log_result or {}).get('entries_scanned') or 0),
+      'traces_scanned': int((trace_result or {}).get('traces_scanned') or 0),
+      'truncated': bool((log_result or {}).get('truncated') or (trace_result or {}).get('truncated')),
+  }
+
+
+def _logs_first_counts(log_counts: Mapping[str, int] | None, trace_counts: Mapping[str, int] | None) -> dict[str, int]:
+  """Per name, the Cloud Logging count when it has one, else the Cloud Trace count (never summed)."""
+  logs, traces = log_counts or {}, trace_counts or {}
+  return {name: int(logs.get(name) or traces.get(name) or 0) for name in {*logs, *traces}}
+
+
+def summarize_workload_token_attribution(bundle: Mapping[str, Any] | None) -> dict[str, Any]:
+  """unregistered_summary['workload_token_attribution']: sources, scan sizes and attribution gaps.
+
+  Workload counts include registered and unregistered runtimes. Gap counts follow the per-runtime rule:
+  per name, Cloud Logging wins over Cloud Trace and the two are never summed.
+  """
+  bundle = bundle or {}
+  logs = bundle.get('logs') or {}
+  traces = bundle.get('traces') or {}
+  unattributed = _logs_first_counts(logs.get('unattributed'), traces.get('unattributed'))
+  skipped = _logs_first_counts(logs.get('skipped'), traces.get('skipped'))
+  run_with = {k for src in (logs, traces) for k, st in (src.get('cloud_run') or {}).items() if st.get('llm_calls')}
+  gke_with = {k for src in (logs, traces) for k, st in (src.get('gke') or {}).items() if st.get('llm_calls')}
+  return {
+      'log_source': bundle.get('log_source') or 'not_run',
+      'trace_source': bundle.get('trace_source') or 'not_run',
+      'log_entries_scanned': int(bundle.get('log_entries_scanned') or 0),
+      'traces_scanned': int(bundle.get('traces_scanned') or 0),
+      'truncated': bool(bundle.get('truncated')),
+      'cloud_run_services_with_tokens': len(run_with),
+      'gke_workloads_with_tokens': len(gke_with),
+      'unattributed_llm_calls': sum(unattributed.values()),
+      'skipped_agent_engine_or_ge_calls': sum(skipped.values()),
+      'skipped_system_namespace_calls': int(
+          logs.get('skipped_system_namespace_calls') or traces.get('skipped_system_namespace_calls') or 0),
+      'top_unattributed': _top_names(unattributed),
+  }
+
+
+def _select_workload_usage(
+    bundle: Mapping[str, Any] | None, kind: str, key: str | None
+) -> tuple[dict[str, Any] | None, str | None]:
+  """(stats, token_source) of one workload: Cloud Logging when it saw LLM calls, else Cloud Trace.
+
+  The sources are never summed (they can describe the same calls); (None, None) means unknown.
+  """
+  if not bundle or not key:
+    return None, None
+  for source_key, label in (('logs', _TOKEN_SOURCE_LOGS), ('traces', _TOKEN_SOURCE_TRACES)):
+    stats = ((bundle.get(source_key) or {}).get(kind) or {}).get(key)
+    if stats and stats.get('llm_calls'):
+      return stats, label
+  return None, None
+
+
+def _estimate_usage_cost_usd(
+    by_model: Mapping[str, Mapping[str, Any]], rate_cards: Mapping[str, Any]
+) -> tuple[float | None, list[str]]:
+  """List-price cost pricing each model's tokens with its own rate card, summed.
+
+  Returns (None, unpriced model names) when any model that reported tokens has no card: there is no
+  fallback price, so a partial sum is never shown as the runtime's cost.
+  """
+  total = 0.0
+  unpriced: list[str] = []
+  for model, bucket in sorted(by_model.items()):
+    in_tok, out_tok, cached = (int(bucket.get(k) or 0) for k in ('input_tokens', 'output_tokens', 'cached_tokens'))
+    if not (in_tok or out_tok or cached):
+      continue
+    name, card = live_finops.rate_card_for(model, rate_cards)
+    if card is None:
+      unpriced.append(name or live_finops.NO_MODEL_LABEL)
+      continue
+    total += live_finops.tokens_cost_usd(in_tok, out_tok, cached, card)
+  if unpriced:
+    return None, unpriced
+  return round(total, 4), []
+
+
+def _apply_workload_usage(
+    target: dict[str, Any],
+    bundle: Mapping[str, Any] | None,
+    usage: Mapping[str, Any] | None,
+    token_source: str | None,
+    rate_cards: Mapping[str, Any],
+    instrument_note: str | None = None,
+) -> None:
+  """Fills a runtime's token metrics from its resolved workload usage; unknown stays None."""
+  metrics = target['metrics']
+  if usage is None or token_source is None:
+    both_ok = bundle is not None and bundle.get('log_source') == 'ok' and bundle.get('trace_source') == 'ok'
+    if instrument_note and both_ok and int(metrics.get('requests') or 0) > 0:
+      target['notes'].append(instrument_note)
+    return
+  for key in ('llm_calls', 'input_tokens', 'output_tokens', 'cached_tokens', 'conversations'):
+    metrics[key] = int(usage.get(key) or 0)
+  if usage.get('last_activity'):
+    metrics['last_activity'] = usage['last_activity']
+  if usage.get('models'):
+    target['backend']['models'] = list(usage['models'])
+  metrics['token_source'] = token_source
+  target['data_sources'].append(token_source)
+  cost, unpriced = _estimate_usage_cost_usd(usage.get('by_model') or {}, rate_cards)
+  metrics['est_token_cost_usd'] = cost
+  if unpriced:
+    target['notes'].append(
+        f"No rate card for {', '.join(unpriced)}: this runtime's token cost is left unpriced (no fallback price).")
 
 
 _RESOURCE_LOCATION_RE = re.compile(r'locations/([^/]+)/')
@@ -1008,6 +1485,17 @@ echo "✅ All agents in ${{ENGINE_ID}} updated successfully (observabilityEnable
   return {'script': script, 'curl_command': curl_cmd, 'script_name': script_name}
 
 
+# Google front ends intermittently answer 502/503/504 in short bursts (seen from Cloud Logging). Read-only
+# requests are retried briefly; writes (PATCH, or any POST other than a log query) are never retried.
+_TRANSIENT_HTTP_STATUS = frozenset({502, 503, 504})
+_TRANSIENT_RETRY_DELAYS_S = (0.5, 1.5)
+
+
+def _is_read_only_request(method: str, url: str) -> bool:
+  """GET, or Cloud Logging entries:list (a query sent as POST)."""
+  return method.upper() == 'GET' or urllib.parse.urlsplit(url).path.endswith('/entries:list')
+
+
 class _GoogleApi:
   """Minimal authenticated JSON client for Google REST APIs using ADC or gcloud CLI fallback."""
 
@@ -1060,6 +1548,18 @@ class _GoogleApi:
     if not _is_google_api_url(url):
       # Never attach the runtime service account's bearer token to a non-Google host.
       raise FleetSourceError(0, 'Refusing to send credentials to a non-Google API URL')
+    delays = _TRANSIENT_RETRY_DELAYS_S if _is_read_only_request(method, url) else ()
+    attempt = 0
+    while True:
+      try:
+        return self._send(method, url, body)
+      except FleetSourceError as exc:
+        if exc.status not in _TRANSIENT_HTTP_STATUS or attempt >= len(delays):
+          raise
+        time.sleep(delays[attempt])
+        attempt += 1
+
+  def _send(self, method: str, url: str, body: dict[str, Any] | None) -> dict[str, Any]:
     headers = {'Authorization': f'Bearer {self._token()}', 'Content-Type': 'application/json'}
     if self._is_user_credentials and self._quota_project:
       # End-user ADC (local development) needs an explicit quota project.
@@ -1076,6 +1576,10 @@ class _GoogleApi:
         detail = json.loads(detail).get('error', {}).get('message', detail)
       except ValueError:
         pass
+      head = str(detail)[:200].lower()
+      if '<html' in head or '<!doctype html' in head:
+        # Google front-end error pages are HTML: keep the status reason, not the markup.
+        detail = f'{exc.reason or "Server error"} (HTML error page from the Google front end)'
       raise FleetSourceError(exc.code, str(detail)[:300]) from exc
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
       raise FleetSourceError(0, f'{type(exc).__name__}: {exc}') from exc
@@ -1513,6 +2017,7 @@ class GeminiEnterpriseFleetService:
             'gke_cpu_core_hours': 0.0,
             'gke_memory_gib': 0.0,
             'discovery_status': 'warming',
+            'workload_token_attribution': summarize_workload_token_attribution(None),
         },
         'model_usage': None,
         'ge_traffic': None,
@@ -1868,6 +2373,84 @@ class GeminiEnterpriseFleetService:
         'scope': f'Gemini Enterprise assistant model calls exported to Cloud Trace in {self.project_id}',
     })
     return out
+
+  def _workload_log_usage(self, project: str, window_s: int) -> dict[str, Any]:
+    """Usage records from Cloud Run / GKE gen_ai log entries; the log payload is never downloaded."""
+    log_window_s = min(window_s, 30 * 24 * 3600)  # Cloud Logging _Default retains 30 days max
+    cache_key = (project, _WORKLOAD_LOG_RESOURCE_TYPES, log_window_s)
+    log_cache = getattr(self, '_log_cache', None)
+    if log_cache is not None and self.ttl_seconds > 0:
+      with self._cache_lock:
+        cached = log_cache.get(cache_key)
+      if cached is not None and (time.monotonic() - cached[0]) < self.ttl_seconds:
+        return json.loads(json.dumps(cached[1]))
+    start = _iso(_utcnow() - datetime.timedelta(seconds=log_window_s))
+    types = ' OR '.join(json.dumps(t) for t in _WORKLOAD_LOG_RESOURCE_TYPES)
+    body: dict[str, Any] = {
+        'resourceNames': [f'projects/{project}'],
+        'filter': (
+            f'resource.type=({types}) '
+            'AND labels."gen_ai.usage.input_tokens":* '
+            f'AND timestamp>="{start}"'
+        ),
+        'orderBy': 'timestamp desc',
+        'pageSize': min(1000, self.max_log_entries),
+    }
+    url = f'{_LOGGING}/entries:list?fields={_WORKLOAD_LOG_FIELDS}'
+    records: list[dict[str, Any]] = []
+    scanned, truncated = 0, False
+    for _ in range(_MAX_PAGES):
+      page = self._api.call('POST', url, body)
+      entries = page.get('entries') or []
+      scanned += len(entries)
+      records.extend(extract_workload_log_records(entries))
+      token = page.get('nextPageToken')
+      if not token:
+        break
+      if scanned >= self.max_log_entries:
+        truncated = True
+        break
+      body['pageToken'] = token
+    else:
+      truncated = True  # Page limit reached with entries left.
+    out = {'records': records, 'entries_scanned': scanned, 'truncated': truncated}
+    if log_cache is not None and self.ttl_seconds > 0:
+      with self._cache_lock:
+        log_cache[cache_key] = (time.monotonic(), json.loads(json.dumps(out)))
+    return out
+
+  def _workload_trace_usage(self, project: str, window_s: int) -> dict[str, Any]:
+    """Usage records from Cloud Trace spans of Cloud Run / GKE workloads (two queries, deduped by trace)."""
+    by_id: dict[str, dict[str, Any]] = {}
+    unnamed: list[dict[str, Any]] = []
+    truncated = False
+    for trace_filter in _WORKLOAD_TRACE_FILTERS:
+      traces, trace_truncated = self._list_traces(project, trace_filter, window_s)
+      truncated = truncated or trace_truncated
+      for trace in traces:
+        trace_id = str(trace.get('traceId') or '')
+        if not trace_id:
+          unnamed.append(trace)
+        elif trace_id not in by_id or len(trace.get('spans') or []) > len(by_id[trace_id].get('spans') or []):
+          by_id[trace_id] = trace  # A trace matching both queries is read once (the most complete copy).
+    unique = [*by_id.values(), *unnamed]
+    return {'records': extract_workload_trace_records(unique), 'traces_scanned': len(unique), 'truncated': truncated}
+
+  def _workload_run_services(
+      self,
+      agents: list[dict[str, Any]],
+      results: dict[tuple[str, ...], Any],
+      unreg_results: dict[tuple[str, ...], Any],
+  ) -> set[str]:
+    """Cloud Run service names in self.project_id that workload token usage can be attributed to."""
+    names = set((unreg_results.get(('run_catalog', self.project_id)) or {}).keys())
+    names |= set(results.get(('run_inventory', self.project_id)) or ())
+    for agent in agents:
+      backend = agent.get('backend') or {}
+      if (backend.get('kind') == 'cloud_run' and backend.get('service')
+          and self._canonical_project(backend.get('project')) == self.project_id):
+        names.add(str(backend['service']))
+    return names
 
   @staticmethod
   def _filter_traces_by_start(traces: list[dict[str, Any]], start_iso: str) -> list[dict[str, Any]]:
@@ -2317,6 +2900,12 @@ class GeminiEnterpriseFleetService:
       jobs[('model_usage_prev',)] = pool.submit(self._model_usage, window_s, window_s)
       jobs[('ge_traffic',)] = pool.submit(self._ge_traffic, window_s)
       jobs[('ge_assistant_tokens',)] = pool.submit(self._ge_assistant_usage, window_s)
+      # Per-workload token attribution for Cloud Run services and GKE workloads in this project: feeds
+      # unregistered rows and registered Cloud Run agents (both resolved from the same records).
+      if self.discover_unregistered or self.project_id in run_projects:
+        jobs[('workload_token_logs', self.project_id)] = pool.submit(self._workload_log_usage, self.project_id, window_s)
+        jobs[('workload_token_traces', self.project_id)] = pool.submit(
+            self._workload_trace_usage, self.project_id, window_s)
 
       if self.discover_unregistered:
         if ('re_trace_tokens', self.project_id) not in jobs:
@@ -2375,6 +2964,8 @@ class GeminiEnterpriseFleetService:
           'ge_assistant_tokens': 'Gemini Enterprise assistant trace spans',
           're_series': 'Agent Engine request history', 'run_series': 'Cloud Run request history',
           'run_inventory': 'Cloud Run service list', 'model_usage_prev': 'Vertex AI model token metrics (previous period)',
+          'workload_token_logs': 'Cloud Run / GKE GenAI token logs',
+          'workload_token_traces': 'Cloud Run / GKE GenAI trace spans',
       }
       for key, future in jobs.items():
         try:
@@ -2400,11 +2991,24 @@ class GeminiEnterpriseFleetService:
     for name, prefix in (('agent_engine_metrics', 're_requests'), ('agent_token_logs', 're_tokens'),
                          ('agent_token_traces', 're_trace_tokens'),
                          ('cloud_run_metrics', 'run_requests'), ('model_usage', 'model_usage'),
-                         ('ge_traffic', 'ge_traffic'), ('ge_assistant_tokens', 'ge_assistant_tokens')):
+                         ('ge_traffic', 'ge_traffic'), ('ge_assistant_tokens', 'ge_assistant_tokens'),
+                         ('workload_token_logs', 'workload_token_logs'),
+                         ('workload_token_traces', 'workload_token_traces')):
       status[name] = source_state(prefix)
 
     token_results = [results[k] for k in results if k[0] == 're_tokens' and results[k]]
     trace_results = [results[k] for k in results if k[0] == 're_trace_tokens' and results[k]]
+
+    # Cloud Run / GKE token usage, resolved once against the inventory: _apply_telemetry (registered
+    # Cloud Run agents) and _build_unregistered_inventory read the same bundle.
+    log_key, trace_key = ('workload_token_logs', self.project_id), ('workload_token_traces', self.project_id)
+    if log_key in jobs or trace_key in jobs:
+      results[('workload_tokens', self.project_id)] = build_workload_token_usage(
+          results.get(log_key), results.get(trace_key),
+          run_services=self._workload_run_services(agents, results, unreg_results),
+          gke_keys=gke_workload_keys(unreg_results.get(('discover_gke', self.project_id))),
+          log_source=status['workload_token_logs'], trace_source=status['workload_token_traces'],
+      )
 
     # Mirror canonical project results to any discovered project number/ID aliases so
     # assess_registration, _apply_telemetry, and build_request_trend resolve both forms.
@@ -2464,6 +3068,17 @@ class GeminiEnterpriseFleetService:
         'Google-managed and no-code agents expose no per-project runtime telemetry.',
         'Standalone Agent Engine, Cloud Run, GKE, and MCP runtimes not registered in GE are tracked in unregistered_runtimes.',
     ]
+    workload_bundle = results.get(('workload_tokens', self.project_id))
+    if workload_bundle is not None:
+      notes.append(
+          'Cloud Run and GKE token usage is attributed per span or log entry to the workload named by its own '
+          'OpenTelemetry resource attributes (Cloud Run service, or GKE cluster/namespace/container); Gemini '
+          'Enterprise and Agent Engine calls in the same traces are not counted. Cloud Logging gen_ai events '
+          'are used first, else Cloud Trace spans, never summed. Traces are sampled by each workload and capped '
+          'by FINOPS_TRACE_MAX_PAGES, logs by FINOPS_TOKEN_LOG_MAX_ENTRIES, and both cover at most 30 days; a '
+          'workload that exports no gen_ai telemetry shows unknown tokens, not zero.'
+          + (' This window reached a scan cap, so workload token counts are a lower bound.'
+             if workload_bundle.get('truncated') else ''))
     if hours > 720:
       notes.append(
           'Per-agent token logs (Cloud Logging _Default) and traces (Cloud Trace) retain 30 days; '
@@ -2511,6 +3126,7 @@ class GeminiEnterpriseFleetService:
     """Builds the FinOps inventory of standalone Agent Engines, Cloud Run services, GKE workloads, and Skills/MCP."""
     project = self.project_id
     rate_cards = self._rate_cards()
+    workload_tokens = results.get(('workload_tokens', project))
     reg_re_ids: set[str] = set()
     reg_run_svcs: set[str] = set()
     engine_name_by_id: dict[str, str] = {}
@@ -2716,6 +3332,8 @@ class GeminiEnterpriseFleetService:
       req_cnt = int(s_req.get('requests') or 0)
       err_4xx = int(s_req.get('errors_4xx') or 0)
       err_5xx = int(s_req.get('errors_5xx') or 0)
+      run_usage, run_token_source = _select_workload_usage(workload_tokens, 'cloud_run', svc_name)
+      run_llm_calls = int((run_usage or {}).get('llm_calls') or 0)
 
       if min_inst >= 1:
         finops_status = 'ALWAYS_ON_UNREGISTERED'
@@ -2725,21 +3343,26 @@ class GeminiEnterpriseFleetService:
             f'({bill_h:,.1f} billable instance-hrs). Scale to min-instances=0 if cold-start budget permits.'
         )
         finops_cmd = f'gcloud run services update {svc_name} --project={project} --region={region} --min-instances=0'
-      elif req_cnt == 0:
+      elif req_cnt == 0 and not run_llm_calls:
         finops_status = 'ZOMBIE_IDLE_SERVICE'
         state_str = 'ZOMBIE_IDLE'
-        finops_rec = f'Idle Cloud Run service ({region}) with 0 requests in window. Review for decommission.'
+        finops_rec = (f'Idle Cloud Run service ({region}) with 0 requests and no attributed LLM calls in window. '
+                      'Review for decommission.')
         finops_cmd = f'gcloud run services delete {svc_name} --project={project} --region={region} --quiet'
       else:
         finops_status = 'ACTIVE_UNREGISTERED'
         state_str = 'ACTIVE_UNREGISTERED'
+        usage_txt = ''
+        if run_usage:
+          run_tokens = int(run_usage.get('input_tokens') or 0) + int(run_usage.get('output_tokens') or 0)
+          usage_txt = f', {run_llm_calls:,} LLM calls, {_fmt_tokens(run_tokens)} tokens'
         finops_rec = (
-            f'Active {sinfo.get("category_label")} ({req_cnt:,} requests, {bill_h:,.1f} billable instance-hrs) '
-            'not registered in Gemini Enterprise.'
+            f'Active {sinfo.get("category_label")} ({req_cnt:,} requests{usage_txt}, {bill_h:,.1f} billable '
+            'instance-hrs) not registered in Gemini Enterprise.'
         )
         finops_cmd = f'gcloud run services describe {svc_name} --project={project} --region={region}'
 
-      unregistered_runtimes.append({
+      run_row = {
           'agent_id': f'run-{svc_name}',
           'resource_name': sinfo.get('resource_name') or f'projects/{project}/locations/{region}/services/{svc_name}',
           'display_name': svc_name,
@@ -2799,7 +3422,9 @@ class GeminiEnterpriseFleetService:
           'finops_action_command': finops_cmd,
           'data_sources': ['Cloud Run Admin API v2', 'Cloud Monitoring: run.googleapis.com/*'],
           'notes': [finops_rec],
-      })
+      }
+      _apply_workload_usage(run_row, workload_tokens, run_usage, run_token_source, rate_cards, _RUN_INSTRUMENT_NOTE)
+      unregistered_runtimes.append(run_row)
 
       # Also surface MCP Server and Skill Backend Cloud Run services in the Skills & MCP inventory
       if cat in ('MCP_SERVER', 'SKILL_BACKEND'):
@@ -2817,9 +3442,9 @@ class GeminiEnterpriseFleetService:
             'uri': sinfo.get('uri'),
             'engines': [f'cloud_run:{region}/{svc_name}'],
             'engine_names': [f'Cloud Run ({region})'],
-            'models': [],
+            'models': list((run_usage or {}).get('models') or []),
             'registration_scope': 'UNREGISTERED_STANDALONE',
-            'last_activity': sinfo.get('updated'),
+            'last_activity': (run_usage or {}).get('last_activity') or sinfo.get('updated'),
         })
 
     # Also surface registered BYO_MCP DataConnectors in the Skills & MCP inventory as GE_REGISTERED
@@ -2874,15 +3499,17 @@ class GeminiEnterpriseFleetService:
       mode = gw.get('cluster_mode') or 'Standard'
       core_h = float(gw.get('cpu_core_hours') or 0.0)
       mem_g = float(gw.get('memory_gib') or 0.0)
+      gke_usage, gke_token_source = _select_workload_usage(workload_tokens, 'gke', _gke_workload_key(gw))
+      gke_llm_txt = f', {int(gke_usage.get("llm_calls") or 0):,} LLM calls' if gke_usage else ''
       finops_rec = (
           f'GKE {mode} container workload {ns}/{cont} on cluster {cname} ({loc}): '
-          f'{core_h:,.2f} CPU core-hrs, {mem_g:,.2f} GiB avg memory. Not registered in GE App.'
+          f'{core_h:,.2f} CPU core-hrs, {mem_g:,.2f} GiB avg memory{gke_llm_txt}. Not registered in GE App.'
       )
       finops_cmd = (
           f'gcloud container clusters get-credentials {cname} --project={project} --location={loc} '
           f'&& kubectl top pods -n {ns}'
       )
-      unregistered_runtimes.append({
+      gke_row = {
           'agent_id': f'gke-{cname}-{ns}-{cont}',
           'resource_name': f'projects/{project}/locations/{loc}/clusters/{cname}/namespaces/{ns}/containers/{cont}',
           'display_name': f'{cname}/{cont}',
@@ -2941,7 +3568,9 @@ class GeminiEnterpriseFleetService:
           'finops_action_command': finops_cmd,
           'data_sources': ['GKE Clusters API', 'Cloud Monitoring: kubernetes.io/container/*'],
           'notes': [finops_rec],
-      })
+      }
+      _apply_workload_usage(gke_row, workload_tokens, gke_usage, gke_token_source, rate_cards)
+      unregistered_runtimes.append(gke_row)
 
     # Enrich trace_skills_mcp with human-readable engine_names
     for item in trace_skills_mcp:
@@ -3018,6 +3647,7 @@ class GeminiEnterpriseFleetService:
         'gke_cpu_core_hours': round(total_gke_cpu, 2),
         'gke_memory_gib': round(total_gke_mem, 2),
         'discovery_status': 'ok' if self.discover_unregistered else 'trace_only',
+        'workload_token_attribution': summarize_workload_token_attribution(workload_tokens),
     }
     return {
         'unregistered_runtimes': unregistered_runtimes,
@@ -3056,9 +3686,9 @@ class GeminiEnterpriseFleetService:
       trace_usage = (traced or {}).get('by_engine', {}).get(rid) if traced is not None else None
       usage, source = None, None
       if log_usage and log_usage['llm_calls']:
-        usage, source = log_usage, 'Cloud Logging: OpenTelemetry gen_ai inference events'
+        usage, source = log_usage, _TOKEN_SOURCE_LOGS
       elif trace_usage and trace_usage['llm_calls']:
-        usage, source = trace_usage, 'Cloud Trace: OpenTelemetry gen_ai spans'
+        usage, source = trace_usage, _TOKEN_SOURCE_TRACES
       elif tokens is not None and traced is not None and not metrics.get('requests'):
         usage = log_usage  # Both sources checked and the agent had no traffic: a true zero.
       if usage is not None:
@@ -3091,6 +3721,13 @@ class GeminiEnterpriseFleetService:
       if billable is not None and service in billable:
         metrics['billable_instance_hours'] = round(billable[service] / 3600.0, 4)
       agent['notes'].append('Service-level metrics: include every request to this Cloud Run service.')
+      if project == self.project_id:
+        # Same attribution as unregistered Cloud Run rows, so registering a service in Gemini Enterprise
+        # does not hide its tokens. Totals count a shared runtime once (runtime_backend_key).
+        bundle = pick('workload_tokens')
+        usage, token_source = _select_workload_usage(bundle, 'cloud_run', service)
+        _apply_workload_usage(agent, bundle, usage, token_source, self._rate_cards() if usage else {},
+                              _RUN_INSTRUMENT_NOTE)
     elif agent['type'] in ('MANAGED', 'LOW_CODE'):
       agent['notes'].append('Runs inside Gemini Enterprise; no per-project runtime telemetry is exposed.')
     elif backend.get('kind') == 'external_endpoint':

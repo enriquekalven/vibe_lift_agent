@@ -11,6 +11,7 @@ import threading
 import unittest
 import urllib.parse
 
+from finops_dashboard import finops as live_finops
 from finops_dashboard import fleet as ge_fleet
 from finops_dashboard import telemetry
 
@@ -284,6 +285,9 @@ class GeFleetCollectionTest(unittest.TestCase):
     agents = _by_name(payload)
     self.assertEqual(payload['source_status']['cloud_run_metrics'], 'error')
     self.assertEqual(payload['source_status']['agent_token_logs'], 'error')
+    # The Cloud Run / GKE workload token logs also use entries:list, so they degrade too; traces do not.
+    self.assertEqual(payload['source_status']['workload_token_logs'], 'error')
+    self.assertEqual(payload['source_status']['workload_token_traces'], 'ok')
     self.assertEqual(payload['source_status']['agent_engine_metrics'], 'ok')
     self.assertEqual(payload['source_status']['inventory'], 'ok')
     self.assertIsNone(agents['FinOps & Tokenomics Analytics']['metrics']['requests'])
@@ -293,7 +297,8 @@ class GeFleetCollectionTest(unittest.TestCase):
     self.assertEqual(payload['totals']['requests'], 45)
     sources = {e['source'] for e in payload['errors']}
     # The request-history query uses the same Cloud Run metric, so it degrades with it.
-    self.assertEqual(sources, {'Cloud Run request metrics', 'Cloud Run request history', 'Agent GenAI token logs'})
+    self.assertEqual(sources, {'Cloud Run request metrics', 'Cloud Run request history', 'Agent GenAI token logs',
+                               'Cloud Run / GKE GenAI token logs'})
     self.assertNotIn('cloud_run:finops-dashboard-mcp-app', payload['trend']['by_runtime'])
 
   def test_inventory_failure_is_reported_not_raised(self):
@@ -732,6 +737,347 @@ class GeFleetHelpersTest(unittest.TestCase):
     mcp_items = [s for s in payload['skills_and_mcp'] if s.get('name') == 'it-support-dashboard-mcp']
     self.assertEqual(len(mcp_items), 1)
     self.assertEqual(mcp_items[0]['registration_scope'], 'GE_REGISTERED')
+
+
+# --- Cloud Run / GKE workload token attribution -------------------------------------------------
+
+WL_CONTENT = {  # content-bearing span labels: they must never reach the payload
+    'gcp.vertex.agent.llm_request': SECRET, 'gcp.vertex.agent.llm_response': SECRET,
+    'gcp.vertex.agent.tool_call_args': SECRET, 'gcp.vertex.agent.tool_response': SECRET,
+    'gen_ai.input.messages': SECRET,
+}
+RUN_REVISION_ID = f'//run.googleapis.com/projects/{PROJECT}/locations/us-central1/revisions/'
+GE_RESOURCE_ID = ('//discoveryengine.googleapis.com/projects/123456789012/locations/global/collections/'
+                  'default_collection/engines/ge-app/assistants/default_assistant/agents/core_assistant')
+A2A_SERVICE = 'finops-dashboard-mcp-app'
+TRACE_SOURCE = 'Cloud Trace: OpenTelemetry gen_ai spans'
+LOG_SOURCE = 'Cloud Logging: OpenTelemetry gen_ai inference events'
+GKE_WORKLOAD = {'cluster_name': 'agents-cluster', 'location': 'us-central1', 'cluster_mode': 'Autopilot', 'node_count': 3,
+                'namespace': 'support', 'container_name': 'support-worker', 'cpu_core_hours': 4.0, 'memory_gib': 2.0}
+
+
+def _wl_span(span_id, parent, identity, inp=1000, out=100, model='gemini-2.5-flash', conv='conv-1'):
+  labels = {'gen_ai.usage.input_tokens': str(inp), 'gen_ai.usage.output_tokens': str(out),
+            'gen_ai.request.model': model, 'gen_ai.conversation.id': conv, **WL_CONTENT, **identity}
+  return {'spanId': span_id, 'parentSpanId': parent, 'name': 'generate_content', 'labels': labels,
+          'startTime': '2026-10-01T10:00:00Z', 'endTime': '2026-10-01T10:00:02Z'}
+
+
+def _run_identity(**labels):
+  return {'cloud.platform': 'gcp_cloud_run', **labels}
+
+
+def _wl_records(spans):
+  return ge_fleet.extract_workload_trace_records([{'traceId': 'trace-1', 'spans': spans}])
+
+
+def _wl_log(rtype, rlabels, inp, out, stamp='2026-10-01T11:00:00Z', **extra):
+  labels = {'gen_ai.usage.input_tokens': str(inp), 'gen_ai.usage.output_tokens': str(out),
+            'gen_ai.response.model': 'gemini-2.5-flash', 'gen_ai.input.messages': SECRET, **extra}
+  return {'timestamp': stamp, 'resource': {'type': rtype, 'labels': rlabels}, 'labels': labels}
+
+
+def _run_catalog(*names):
+  return {n: {'service_name': n, 'resource_name': f'projects/{PROJECT}/locations/us-central1/services/{n}',
+              'region': 'us-central1', 'category': 'CLOUD_RUN_AGENT', 'category_label': 'Cloud Run Agent',
+              'min_instances': 0, 'max_instances': 10, 'uri': f'https://{n}-abcde12345-uc.a.run.app'} for n in names}
+
+
+class WorkloadTokenInventoryTest(unittest.TestCase):
+  """Unregistered Cloud Run / GKE rows join the resolved workload token bundle."""
+
+  def _inventory(self, log_records=None, trace_records=None, requests=None, gke=(), log_source='ok', trace_source='ok'):
+    service, _ = make_fake_service()
+    catalog = _run_catalog('support-agent', 'docs-mcp')
+    logs = {'records': log_records or [], 'entries_scanned': len(log_records or []), 'truncated': False}
+    traces = {'records': trace_records or [], 'traces_scanned': 1, 'truncated': False}
+    bundle = ge_fleet.build_workload_token_usage(
+        logs if log_source == 'ok' else None, traces if trace_source == 'ok' else None,
+        catalog, ge_fleet.gke_workload_keys(list(gke)), log_source=log_source, trace_source=trace_source)
+    unreg_results = {
+        ('run_catalog', PROJECT): catalog,
+        ('unreg_run_requests', PROJECT): {
+            name: {'requests': count, 'errors_4xx': 0, 'errors_5xx': 0} for name, count in (requests or {}).items()},
+        ('discover_gke', PROJECT): {'clusters': [], 'workloads': list(gke)},
+    }
+    inv = service._build_unregistered_inventory(
+        [], {('workload_tokens', PROJECT): bundle}, unreg_results, '2026-10-01T12:00:00Z')
+    rows = {r['display_name']: r for r in inv['unregistered_runtimes']}
+    return rows, inv['unregistered_summary'], service
+
+  def test_cloud_run_row_gets_tokens_per_model_cost_and_stays_active_without_requests(self):
+    records = _wl_records([
+        _wl_span('1', None, _run_identity(**{'faas.name': 'support-agent'}), conv='c1'),
+        _wl_span('2', None, _run_identity(**{'cloud.resource_id': RUN_REVISION_ID + 'support-agent-00003-k2p'}),
+                 inp=2000, out=200, model='gemini-2.5-pro', conv='c2'),
+    ])
+    rows, summary, service = self._inventory(trace_records=records, requests={'support-agent': 0, 'docs-mcp': 12})
+    row = rows['support-agent']
+    m = row['metrics']
+    self.assertEqual((m['llm_calls'], m['input_tokens'], m['output_tokens'], m['cached_tokens'], m['conversations']),
+                     (2, 3000, 300, 0, 2))
+    self.assertEqual(m['token_source'], TRACE_SOURCE)
+    self.assertIn(TRACE_SOURCE, row['data_sources'])
+    self.assertEqual(sorted(row['backend']['models']), ['gemini-2.5-flash', 'gemini-2.5-pro'])
+    self.assertEqual(m['last_activity'], '2026-10-01T10:00:02Z')
+    cards = service.rate_cards()
+    expected = round(live_finops.tokens_cost_usd(1000, 100, 0, cards['gemini-2.5-flash'])
+                     + live_finops.tokens_cost_usd(2000, 200, 0, cards['gemini-2.5-pro']), 4)
+    self.assertEqual(m['est_token_cost_usd'], expected)
+    # LLM calls with no HTTP requests are activity, never a delete recommendation.
+    self.assertEqual(row['finops_status'], 'ACTIVE_UNREGISTERED')
+    self.assertIn('2 LLM calls', row['finops_recommendation'])
+    self.assertNotIn('delete', row['finops_action_command'])
+    self.assertEqual((summary['unregistered_llm_calls'], summary['unregistered_input_tokens']), (2, 3000))
+    self.assertEqual(summary['unregistered_est_token_cost_usd'], expected)
+    wta = summary['workload_token_attribution']
+    self.assertEqual((wta['log_source'], wta['trace_source'], wta['cloud_run_services_with_tokens']), ('ok', 'ok', 1))
+
+  def test_service_without_token_telemetry_stays_unknown(self):
+    rows, summary, _ = self._inventory(requests={'support-agent': 0, 'docs-mcp': 12})
+    docs, idle = rows['docs-mcp']['metrics'], rows['support-agent']
+    self.assertEqual((docs['llm_calls'], docs['input_tokens'], docs['est_token_cost_usd']), (None, None, None))
+    self.assertNotIn('token_source', docs)
+    # Requests but no gen_ai telemetry while both sources ran: tell the operator how to instrument.
+    self.assertTrue(any('OTEL_SERVICE_NAME' in n for n in rows['docs-mcp']['notes']))
+    self.assertEqual(idle['finops_status'], 'ZOMBIE_IDLE_SERVICE')
+    self.assertFalse(any('OTEL_SERVICE_NAME' in n for n in idle['notes']))
+    self.assertEqual(summary['unregistered_llm_calls'], 0)
+    # A failed source means unknown, so no instrumentation advice.
+    rows, _, _ = self._inventory(requests={'docs-mcp': 12}, trace_source='error')
+    self.assertFalse(any('OTEL_SERVICE_NAME' in n for n in rows['docs-mcp']['notes']))
+
+  def test_logs_preferred_over_traces_and_never_summed(self):
+    logs = ge_fleet.extract_workload_log_records([_wl_log('cloud_run_revision', {'service_name': 'support-agent'}, 500, 50)])
+    traces = _wl_records([_wl_span('1', None, _run_identity(**{'faas.name': 'support-agent'}), inp=500, out=50)])
+    rows, summary, _ = self._inventory(log_records=logs, trace_records=traces, requests={'support-agent': 3})
+    m = rows['support-agent']['metrics']
+    self.assertEqual((m['llm_calls'], m['input_tokens'], m['output_tokens']), (1, 500, 50))
+    self.assertEqual(m['token_source'], LOG_SOURCE)
+    self.assertNotIn(TRACE_SOURCE, rows['support-agent']['data_sources'])
+    self.assertEqual(summary['unregistered_input_tokens'], 500)
+
+  def test_unpriced_model_leaves_cost_unknown_and_counts_the_runtime(self):
+    records = _wl_records([
+        _wl_span('1', None, _run_identity(**{'faas.name': 'support-agent'}), model='gemini-2.5-flash'),
+        _wl_span('2', None, _run_identity(**{'faas.name': 'support-agent'}), model='claude-opus-5'),
+    ])
+    rows, summary, _ = self._inventory(trace_records=records, requests={'support-agent': 4})
+    row = rows['support-agent']
+    self.assertIsNone(row['metrics']['est_token_cost_usd'])
+    self.assertTrue(any('No rate card for claude-opus-5' in n for n in row['notes']))
+    self.assertEqual(summary['unregistered_unpriced_runtimes'], 1)
+    self.assertEqual(summary['unregistered_est_token_cost_usd'], 0.0)
+
+  def test_gke_row_gets_tokens_from_k8s_container_logs(self):
+    logs = ge_fleet.extract_workload_log_records([_wl_log(
+        'k8s_container', {'cluster_name': 'agents-cluster', 'namespace_name': 'support', 'container_name': 'support-worker'},
+        700, 70, stamp='2026-10-01T11:30:00Z', **{'gen_ai.usage.cache_read.input_tokens': '200',
+                                                   'gcp.vertex.agent.session_id': 'session-9'})])
+    rows, summary, _ = self._inventory(log_records=logs, gke=[GKE_WORKLOAD])
+    row = rows['agents-cluster/support-worker']
+    m = row['metrics']
+    self.assertEqual((m['llm_calls'], m['input_tokens'], m['output_tokens'], m['cached_tokens'], m['conversations']),
+                     (1, 700, 70, 200, 1))
+    self.assertEqual((m['token_source'], m['last_activity']), (LOG_SOURCE, '2026-10-01T11:30:00Z'))
+    self.assertIsNotNone(m['est_token_cost_usd'])
+    self.assertIn('LLM calls', row['finops_recommendation'])
+    self.assertEqual(summary['workload_token_attribution']['gke_workloads_with_tokens'], 1)
+    self.assertEqual(summary['unregistered_cached_tokens'], 200)
+
+  def test_inventory_without_a_bundle_reports_not_run(self):
+    service, _ = make_fake_service()
+    inv = service._build_unregistered_inventory(
+        [], {}, {('run_catalog', PROJECT): _run_catalog('docs-mcp'),
+                 ('unreg_run_requests', PROJECT): {'docs-mcp': {'requests': 5, 'errors_4xx': 0, 'errors_5xx': 0}}},
+        '2026-10-01T12:00:00Z')
+    row = inv['unregistered_runtimes'][0]
+    self.assertIsNone(row['metrics']['llm_calls'])
+    self.assertFalse(any('OTEL_SERVICE_NAME' in n for n in row['notes']))
+    wta = inv['unregistered_summary']['workload_token_attribution']
+    self.assertEqual((wta['log_source'], wta['trace_source']), ('not_run', 'not_run'))
+
+
+class WorkloadTokenCollectionTest(unittest.TestCase):
+  """Collector wiring: queries, source status, registered Cloud Run agents and an end-to-end run."""
+
+  def test_workload_log_query_downloads_no_payload_and_ignores_other_resources(self):
+    service, api = make_fake_service()  # the A2A agent's Cloud Run backend schedules the workload jobs
+    payload = service.collect(window_hours=24)
+    calls = [(url, body) for _, url, body in api.calls if 'fields=entries(timestamp,labels,resource),nextPageToken' in url]
+    self.assertEqual(len(calls), 2)  # the fake has two log pages (pageToken logs-2)
+    url, body = calls[0]
+    self.assertTrue(url.startswith('https://logging.googleapis.com/v2/entries:list?'))
+    self.assertIn('resource.type=("cloud_run_revision" OR "k8s_container" OR "generic_task")', body['filter'])
+    self.assertIn('labels."gen_ai.usage.input_tokens":*', body['filter'])
+    self.assertEqual(body['resourceNames'], [f'projects/{PROJECT}'])
+    self.assertEqual(api.count('label:gen_ai.usage.input_tokens +cloud.platform:gcp_cloud_run'), 1)
+    self.assertEqual(api.count('label:gen_ai.usage.input_tokens +cloud.platform:gcp_kubernetes_engine'), 1)
+    wta = payload['unregistered_summary']['workload_token_attribution']
+    self.assertEqual((wta['log_source'], wta['trace_source'], wta['log_entries_scanned']), ('ok', 'ok', 4))
+    self.assertEqual(payload['source_status']['workload_token_logs'], 'ok')
+    # The fake serves Agent Engine entries to every logging query; they are never attributed to Cloud Run.
+    a2a = _by_name(payload)['FinOps & Tokenomics Analytics']
+    self.assertIsNone(a2a['metrics']['llm_calls'])
+    self.assertTrue(any('OTEL_SERVICE_NAME' in n for n in a2a['notes']))
+    self.assertEqual(wta['unattributed_llm_calls'], 0)
+
+  def test_workload_jobs_not_scheduled_without_cloud_run_or_discovery(self):
+    service, api = make_fake_service(fail_on=['discoveryengine.googleapis.com'])  # no agents at all
+    payload = service.collect(window_hours=24)
+    self.assertEqual(api.count('fields=entries(timestamp,labels,resource)'), 0)
+    self.assertEqual(payload['source_status']['workload_token_logs'], 'not_applicable')
+    self.assertEqual(payload['unregistered_summary']['workload_token_attribution']['log_source'], 'not_run')
+
+  def test_failed_trace_source_is_reported_and_tokens_stay_unknown(self):
+    service, _ = make_fake_service(fail_on=['gcp_kubernetes_engine'])
+    payload = service.collect(window_hours=24)
+    self.assertEqual(payload['source_status']['workload_token_traces'], 'error')
+    self.assertIn('Cloud Run / GKE GenAI trace spans', {e['source'] for e in payload['errors']})
+    self.assertEqual(payload['unregistered_summary']['workload_token_attribution']['trace_source'], 'error')
+    a2a = _by_name(payload)['FinOps & Tokenomics Analytics']
+    self.assertIsNone(a2a['metrics']['input_tokens'])
+    self.assertFalse(any('OTEL_SERVICE_NAME' in n for n in a2a['notes']))
+
+  def test_workload_log_scan_caps_and_flags_truncation(self):
+    entry = _wl_log('cloud_run_revision', {'service_name': 'support-agent'}, 10, 1)
+
+    class PagedLogs:
+      def __init__(self):
+        self.calls = 0
+
+      def call(self, method, url, body=None):
+        self.calls += 1
+        return {'entries': [entry, entry], 'nextPageToken': f'page-{self.calls}'}
+
+    api = PagedLogs()
+    service = ge_fleet.GeminiEnterpriseFleetService(project_id=PROJECT, engine_ids=[ENGINE], api=api)
+    service.max_log_entries = 3
+    out = service._workload_log_usage(PROJECT, 3600)
+    self.assertEqual((out['entries_scanned'], out['truncated'], len(out['records']), api.calls), (4, True, 4, 2))
+    self.assertEqual(service._workload_log_usage(PROJECT, 3600)['entries_scanned'], 4)  # TTL cache
+    self.assertEqual(api.calls, 2)
+    service._log_cache.clear()
+    service.max_log_entries = 10 ** 6
+    out = service._workload_log_usage(PROJECT, 3600)  # page limit reached with entries left
+    self.assertTrue(out['truncated'])
+    self.assertEqual(api.calls, 2 + ge_fleet._MAX_PAGES)
+
+  def test_registered_cloud_run_agent_gets_tokens_via_apply_telemetry(self):
+    service, _ = make_fake_service()
+    agent = ge_fleet.classify_agent(ENGINE, 'default_assistant', A2A_AGENT)
+    records = _wl_records([_wl_span('1', None, _run_identity(**{
+        'cloud.resource_id': RUN_REVISION_ID + A2A_SERVICE + '-00042-abc'}))])
+    bundle = ge_fleet.build_workload_token_usage(None, {'records': records}, {A2A_SERVICE}, set(), log_source='error')
+    results = {('run_requests', PROJECT): {A2A_SERVICE: {'requests': 15, 'errors_4xx': 5, 'errors_5xx': 0}},
+               ('workload_tokens', PROJECT): bundle}
+    service._apply_telemetry(agent, results)
+    m = agent['metrics']
+    self.assertEqual((m['requests'], m['llm_calls'], m['input_tokens'], m['output_tokens']), (15, 1, 1000, 100))
+    self.assertEqual(m['token_source'], TRACE_SOURCE)
+    self.assertEqual(agent['backend']['models'], ['gemini-2.5-flash'])
+    card = service.rate_cards()['gemini-2.5-flash']
+    self.assertEqual(m['est_token_cost_usd'], round(live_finops.tokens_cost_usd(1000, 100, 0, card), 4))
+    # A Cloud Run backend in another project is never attributed from this project's telemetry.
+    other_card = json.dumps({'url': f'https://{A2A_SERVICE}-987654321098.us-central1.run.app/a2a/app'})
+    other = ge_fleet.classify_agent(ENGINE, 'default_assistant',
+                                    dict(A2A_AGENT, a2aAgentDefinition={'jsonAgentCard': other_card}))
+    results[('workload_tokens', '987654321098')] = bundle
+    service._apply_telemetry(other, results)
+    self.assertIsNone(other['metrics']['llm_calls'])
+    self.assertNotIn('token_source', other['metrics'])
+
+  def test_collect_attributes_workload_tokens_end_to_end(self):
+    run_identity = _run_identity(**{'cloud.resource_id': RUN_REVISION_ID + A2A_SERVICE + '-00042-abc'})
+    ge_identity = {'cloud.platform': 'gcp.gemini_enterprise', 'cloud.resource.id': GE_RESOURCE_ID}
+    run_trace = {'traceId': 'trace-run-1', 'spans': [
+        {'spanId': '1', 'name': 'AssistantService/StreamAssist', 'labels': {'cloud.platform': 'gcp.gemini_enterprise'}},
+        _wl_span('2', '1', ge_identity, inp=9000, out=900),  # Gemini Enterprise assistant calls in the same trace
+        _wl_span('3', '1', ge_identity, inp=8000, out=800),
+        _wl_span('4', '1', run_identity),  # registered A2A service: ADK call_llm ...
+        _wl_span('5', '4', run_identity),  # ... and the GenAI SDK span for the same call
+        _wl_span('6', '1', _run_identity(**{'faas.name': 'support-agent'}), inp=2000, out=200, model='gemini-2.5-pro'),
+        _wl_span('7', '1', _run_identity(**{'faas.name': 'reasoning-engine-1234567890'})),  # Agent Engine runtime
+    ]}
+    gke_trace = {'traceId': 'trace-gke-1', 'spans': [_wl_span('1', None, {
+        'cloud.platform': 'gcp_kubernetes_engine', 'k8s.cluster.name': 'agents-cluster',
+        'k8s.namespace.name': 'support', 'k8s.container.name': 'support-worker'}, inp=500, out=50)]}
+    shared = dict(A2A_AGENT, name=A2A_AGENT['name'] + '7', displayName='FinOps Analytics (second registration)')
+
+    class WorkloadFakeApi(FakeGoogleApi):
+      """Adds Cloud Run / GKE inventory, workload traces routed by filter, and a second registration."""
+
+      def call(self, method, url, body=None):
+        parts = urllib.parse.urlsplit(url)
+        if parts.netloc == 'cloudtrace.googleapis.com':
+          super().call(method, url, body)  # records the call and honours fail_on
+          trace_filter = urllib.parse.parse_qs(parts.query).get('filter', [''])[0]
+          if 'cloud.platform:gcp_cloud_run' in trace_filter:
+            return {'traces': [run_trace]}
+          if 'cloud.platform:gcp_kubernetes_engine' in trace_filter:
+            return {'traces': [gke_trace, run_trace]}  # run_trace matches both queries
+          return {'traces': []}
+        if parts.netloc == 'run.googleapis.com':
+          return {'services': [{'name': f'projects/{PROJECT}/locations/us-central1/services/{name}'}
+                               for name in (A2A_SERVICE, 'support-agent', 'docs-mcp')]}
+        if parts.netloc == 'container.googleapis.com':
+          return {'clusters': [{'name': 'agents-cluster', 'location': 'us-central1', 'currentNodeCount': 3,
+                                'autopilot': {'enabled': True}}]}
+        return super().call(method, url, body)
+
+      def _monitoring(self, path, query):
+        if 'kubernetes.io/container/cpu/core_usage_time' in query['filter'][0]:
+          return {'timeSeries': [
+              _series({'cluster_name': 'agents-cluster', 'namespace_name': ns, 'container_name': name}, {}, {'doubleValue': 7200.0})
+              for ns, name in (('support', 'support-worker'), ('kube-system', 'kube-dns'))]}
+        return super()._monitoring(path, query)
+
+      def _discovery(self, path, query):
+        out = super()._discovery(path, query)
+        if path.endswith('/assistants/default_assistant/agents') and query.get('pageToken') != ['page-2']:
+          out = dict(out, agents=[*out['agents'], shared])
+        return out
+
+    api = WorkloadFakeApi()
+    service = ge_fleet.GeminiEnterpriseFleetService(
+        project_id=PROJECT, engine_ids=[ENGINE], location='global', collection='default_collection', api=api,
+        discover_unregistered=True)
+    payload = service.collect(window_hours=24)
+
+    agents = _by_name(payload)
+    a2a = agents['FinOps & Tokenomics Analytics']['metrics']
+    self.assertEqual((a2a['requests'], a2a['llm_calls'], a2a['input_tokens'], a2a['output_tokens']), (15, 1, 1000, 100))
+    self.assertEqual(a2a['token_source'], TRACE_SOURCE)
+    self.assertEqual(agents['FinOps Analytics (second registration)']['metrics']['llm_calls'], 1)
+    # The shared runtime counts once: the ADK agent (3 calls, 600 input from logs) + the Cloud Run service.
+    self.assertEqual((payload['totals']['llm_calls'], payload['totals']['input_tokens']), (4, 1600))
+
+    rows = {r['display_name']: r for r in payload['unregistered_runtimes']}
+    self.assertNotIn(A2A_SERVICE, rows)
+    support = rows['support-agent']
+    self.assertEqual((support['metrics']['requests'], support['metrics']['llm_calls'], support['metrics']['input_tokens']),
+                     (0, 1, 2000))
+    self.assertEqual(support['finops_status'], 'ACTIVE_UNREGISTERED')
+    self.assertEqual(support['backend']['models'], ['gemini-2.5-pro'])
+    self.assertEqual(rows['docs-mcp']['finops_status'], 'ZOMBIE_IDLE_SERVICE')
+    self.assertIsNone(rows['docs-mcp']['metrics']['input_tokens'])
+    gke_row = rows['agents-cluster/support-worker']
+    self.assertEqual((gke_row['metrics']['llm_calls'], gke_row['metrics']['input_tokens']), (1, 500))
+    self.assertEqual(gke_row['metrics']['token_source'], TRACE_SOURCE)
+    self.assertNotIn('agents-cluster/kube-dns', rows)
+
+    summary = payload['unregistered_summary']
+    self.assertEqual((summary['unregistered_llm_calls'], summary['unregistered_input_tokens']), (2, 2500))
+    wta = summary['workload_token_attribution']
+    self.assertEqual((wta['log_source'], wta['trace_source'], wta['truncated']), ('ok', 'ok', False))
+    self.assertEqual(wta['traces_scanned'], 2)  # trace-run-1 matched both queries and is read once
+    self.assertEqual(wta['log_entries_scanned'], 4)  # the fake's Agent Engine log entries: scanned, not attributed
+    self.assertEqual((wta['cloud_run_services_with_tokens'], wta['gke_workloads_with_tokens']), (2, 1))
+    self.assertEqual(wta['skipped_agent_engine_or_ge_calls'], 3)  # two GE assistant calls + one Agent Engine runtime
+    self.assertEqual((wta['unattributed_llm_calls'], wta['top_unattributed']), (0, []))
+    self.assertEqual(payload['source_status']['workload_token_traces'], 'ok')
+    self.assertTrue(any('Cloud Run and GKE token usage' in n for n in payload['notes']))
+    self.assertNotIn(SECRET, json.dumps(payload))
 
 
 if __name__ == '__main__':

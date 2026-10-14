@@ -1,5 +1,6 @@
 """Tests: per-agent token sources (logs vs traces), dead-registration evidence, live FinOps math."""
 
+import json
 import unittest
 
 from finops_dashboard import finops as live_finops
@@ -279,6 +280,235 @@ class LiveValidatorChecksTest(unittest.TestCase):
     got = self._run({'what_if_default': {'x': 1}, 'tokenomics_cockpit': None}, fleet)
     self.assertFalse(got['LIVE-NO-SIMULATOR-PAYLOADS']['passed'])
     self.assertFalse(got['TAB1-DEAD-REGISTRATION-EVIDENCE']['passed'])
+
+  def test_standalone_runtime_tokens_do_not_break_the_registered_reconciliation(self):
+    # Token economics lists standalone runtimes too; fleet.totals covers registered agents only.
+    fleet = self._fleet()
+    fleet['unregistered_runtimes'] = [{
+        'display_name': 'support-agent', 'type': 'CLOUD_RUN_AGENT',
+        'backend': {'kind': 'cloud_run', 'service': 'support-agent'},
+        'metrics': {'requests': 0, 'llm_calls': 2, 'input_tokens': 3000, 'output_tokens': 300,
+                    'token_source': 'Cloud Trace: OpenTelemetry gen_ai spans'},
+        'registration': {'status': 'UNREGISTERED_STANDALONE'}}]
+    fleet['live_finops'] = live_finops.build_live_finops(fleet)
+    got = self._run({'what_if_default': None, 'tokenomics_cockpit': None}, fleet)
+    check = got['TAB4-TOKEN-ECONOMICS-RECONCILES']
+    self.assertTrue(check['passed'], check['evidence'])
+
+
+# --- Cloud Run / GKE workload token attribution -------------------------------------------------
+
+_W_SECRET = 'WORKLOAD SECRET PROMPT TEXT'
+# Content-bearing labels that real spans carry; they must never reach records, results or summaries.
+_W_CONTENT = {
+    'gcp.vertex.agent.llm_request': _W_SECRET, 'gcp.vertex.agent.llm_response': _W_SECRET,
+    'gcp.vertex.agent.tool_call_args': _W_SECRET, 'gcp.vertex.agent.tool_response': _W_SECRET,
+    'gen_ai.input.messages': _W_SECRET, 'gen_ai.output.messages': _W_SECRET,
+}
+_RUN_REV = '//run.googleapis.com/projects/example-project/locations/us-central1/revisions/'
+_W_SERVICES = {'support-agent', 'docs-mcp', 'docs-mcp-eu'}
+_W_GKE = {('agents-cluster', 'support', 'support-worker')}
+_RECORD_KEYS = {'kind', 'service', 'resource_service', 'revision', 'legacy_service', 'service_name', 'job', 'cluster',
+                'namespace', 'container', 'name', 'platform', 'input_tokens', 'output_tokens', 'cached_tokens', 'model',
+                'conversation', 'timestamp'}
+
+
+def _wl_labels(extra, inp=1000, out=100, model='gemini-2.5-flash', conv='conv-1'):
+  labels = {'gen_ai.usage.input_tokens': str(inp), 'gen_ai.usage.output_tokens': str(out),
+            'gen_ai.request.model': model, 'gen_ai.conversation.id': conv, **_W_CONTENT}
+  labels.update(extra)
+  return labels
+
+
+def _run_span(span_id, extra, parent=None, **usage):
+  return _span(span_id, parent, 'generate_content', _wl_labels({'cloud.platform': 'gcp_cloud_run', **extra}, **usage))
+
+
+def _resolve_traces(traces, services=_W_SERVICES, gke=_W_GKE):
+  return ge_fleet.resolve_workload_usage(ge_fleet.extract_workload_trace_records(traces), services, gke)
+
+
+def _calls(resolved, kind):
+  return {key: st['llm_calls'] for key, st in resolved[kind].items()}
+
+
+class WorkloadTraceAttributionTest(unittest.TestCase):
+  """Cloud Run / GKE spans are attributed by their own labels (fixtures shaped like live Cloud Trace data)."""
+
+  def test_cloud_run_span_attributed_by_faas_name(self):
+    out = _resolve_traces([{'spans': [
+        _run_span('1', {'faas.name': 'support-agent', 'cloud.resource_id': _RUN_REV + 'support-agent-00007-abc'})]}])
+    st = out['cloud_run']['support-agent']
+    self.assertEqual((st['llm_calls'], st['input_tokens'], st['output_tokens'], st['cached_tokens']), (1, 1000, 100, 0))
+    self.assertEqual((st['models'], st['conversations'], st['last_activity']),
+                     (['gemini-2.5-flash'], 1, '2026-09-29T22:00:00Z'))
+    self.assertEqual((out['unattributed_llm_calls'], out['skipped_agent_engine_or_ge_calls']), (0, 0))
+
+  def test_revision_resolution_with_prefix_sharing_service_names(self):
+    # cloud.resource_id names the REVISION: generated suffixes are stripped, custom ones use the longest prefix.
+    revisions = ('docs-mcp-eu-00012-x7k', 'docs-mcp-eu-blue', 'docs-mcp-00003-q2w', 'docs-mcp-canary')
+    out = _resolve_traces([{'spans': [_run_span(str(i), {'cloud.resource_id': _RUN_REV + rev})
+                                      for i, rev in enumerate(revisions)]}])
+    self.assertEqual(_calls(out, 'cloud_run'), {'docs-mcp-eu': 2, 'docs-mcp': 2})
+
+  def test_service_name_and_legacy_label_fallbacks(self):
+    out = _resolve_traces([{'spans': [
+        _run_span('1', {'service.name': 'support-agent'}),
+        _span('2', None, 'generate_content', _wl_labels({'g.co/r/cloud_run_revision/service_name': 'docs-mcp'})),
+        _run_span('3', {'service.name': 'unknown_service:python'}),  # OTel default name: never matched
+    ]}])
+    self.assertEqual(_calls(out, 'cloud_run'), {'support-agent': 1, 'docs-mcp': 1})
+    self.assertEqual(out['unattributed'], {'cloud_run:unknown_service:python': 1})
+
+  def test_gemini_enterprise_spans_in_the_same_trace_are_not_attributed(self):
+    ge = {'cloud.platform': 'gcp.gemini_enterprise', 'cloud.resource.id': GE_RES}
+    out = _resolve_traces([{'spans': [
+        _span('1', None, 'AssistantService/StreamAssist', {'cloud.platform': 'gcp.gemini_enterprise'}),
+        _span('2', '1', 'generate_content', _wl_labels(dict(ge), inp=9000, out=900)),
+        _span('3', '2', 'generate_content', _wl_labels(dict(ge), inp=8000, out=800)),  # GE wrapper + child: one call
+        # The Cloud Run MCP server that GE called; its parent is a GE usage span, its call is its own.
+        _run_span('4', {'faas.name': 'docs-mcp'}, parent='2', inp=300, out=30),
+        # A usage child on another platform does not make span 4 a wrapper.
+        _span('5', '4', 'generate_content', _wl_labels(dict(ge), inp=7000, out=700)),
+    ]}])
+    self.assertEqual(list(out['cloud_run']), ['docs-mcp'])
+    st = out['cloud_run']['docs-mcp']
+    self.assertEqual((st['llm_calls'], st['input_tokens'], st['output_tokens']), (1, 300, 30))
+    self.assertEqual(out['skipped'], {'gemini_enterprise': 2})
+
+  def test_agent_engine_spans_are_skipped(self):
+    out = _resolve_traces([{'spans': [
+        _span('1', None, 'call_llm', _wl_labels({'cloud.platform': 'gcp.agent_engine'})),
+        _run_span('2', {'service.name': '7777777777777777777'}),  # numeric service.name is an Agent Engine id
+        _run_span('3', {'cloud.resource_id': f'//aiplatform.googleapis.com/{RESOURCE}'}),
+        # Agent Engine runtimes that export as Cloud Run, even when a catalog service has that name.
+        _run_span('4', {'faas.name': 'reasoning-engine-1234567890',
+                        'cloud.resource_id': _RUN_REV + 'reasoning-engine-1234567890-00001-abc'}),
+        _run_span('5', {'cloud.resource_id': _RUN_REV + 'reasoning-engine-1234567890-00002-def'}),
+    ]}], services=_W_SERVICES | {'reasoning-engine-1234567890'})
+    self.assertEqual((out['cloud_run'], out['unattributed']), ({}, {}))
+    self.assertEqual(out['skipped'], {'agent_engine': 1, 'agent_engine:7777777777777777777': 1,
+                                      f'agent_engine:{RE}': 1, 'agent_engine:1234567890': 2})
+
+  def test_nested_call_llm_and_generate_content_counted_once(self):
+    ident = {'faas.name': 'support-agent'}
+    out = _resolve_traces([{'spans': [
+        _span('1', None, 'invoke_agent support_agent', {'cloud.platform': 'gcp_cloud_run', 'faas.name': 'support-agent'}),
+        _run_span('2', ident, parent='1'),  # ADK call_llm
+        _run_span('3', ident, parent='2'),  # GenAI SDK generate_content: the same call
+    ]}])
+    st = out['cloud_run']['support-agent']
+    self.assertEqual((st['llm_calls'], st['input_tokens'], st['output_tokens']), (1, 1000, 100))
+
+  def test_gke_spans_by_k8s_and_legacy_labels(self):
+    k8s = {'cloud.platform': 'gcp_kubernetes_engine', 'k8s.cluster.name': 'agents-cluster', 'k8s.namespace.name': 'support'}
+    legacy = {'g.co/r/k8s_container/cluster_name': 'agents-cluster', 'g.co/r/k8s_container/namespace_name': 'support',
+              'g.co/r/k8s_container/container_name': 'support-worker'}
+    out = _resolve_traces([{'spans': [
+        _span('1', None, 'generate_content', _wl_labels({**k8s, 'k8s.container.name': 'support-worker'})),
+        _span('2', None, 'generate_content', _wl_labels(legacy)),
+        _span('3', None, 'generate_content', _wl_labels({**k8s, 'service.name': 'support-worker'})),  # no container name
+        _span('4', None, 'generate_content', _wl_labels({**k8s, 'service.name': 'billing-api'})),  # no such container
+        _span('5', None, 'generate_content', _wl_labels({**k8s, 'k8s.namespace.name': 'kube-system',
+                                                         'k8s.container.name': 'kube-dns'})),
+    ]}])
+    self.assertEqual(_calls(out, 'gke'), {'agents-cluster/support/support-worker': 3})
+    self.assertEqual(out['unattributed'], {'gke:agents-cluster/support/billing-api': 1})
+    self.assertEqual(out['skipped_system_namespace_calls'], 1)
+
+  def test_unresolvable_workloads_are_counted_by_name_only(self):
+    out = _resolve_traces([{'spans': [
+        _run_span('1', {'faas.name': 'deleted-svc'}),
+        _run_span('2', {'faas.name': 'deleted-svc'}),
+        _span('3', None, 'generate_content', _wl_labels({
+            'cloud.platform': 'gcp_kubernetes_engine', 'k8s.cluster.name': 'agents-cluster',
+            'k8s.namespace.name': 'support', 'k8s.container.name': 'other'})),
+        _span('4', None, 'generate_content', _wl_labels({'service.name': 'local-dev'})),  # no platform at all
+        # service.name alone is not enough: trace attribution needs cloud.platform (resource detection),
+        # even when the name matches an inventoried Cloud Run service.
+        _span('5', None, 'generate_content', _wl_labels({'service.name': 'support-agent'})),
+    ]}])
+    self.assertEqual((out['cloud_run'], out['gke'], out['unattributed_llm_calls']), ({}, {}, 5))
+    self.assertEqual(out['top_unattributed'],
+                     ['cloud_run:deleted-svc', 'gke:agents-cluster/support/other', 'unknown_platform:local-dev',
+                      'unknown_platform:support-agent'])
+
+  def test_records_and_results_never_carry_content(self):
+    trace = {'spans': [_run_span('1', {'faas.name': 'support-agent'}, conv='conv-raw-id-42')]}
+    entries = [{'timestamp': '2026-10-01T10:00:00Z', 'jsonPayload': {'prompt': _W_SECRET},
+                'resource': {'type': 'cloud_run_revision', 'labels': {'service_name': 'support-agent'}},
+                'labels': _wl_labels({}, conv='conv-raw-id-42')}]
+    trace_records = ge_fleet.extract_workload_trace_records([trace])
+    log_records = ge_fleet.extract_workload_log_records(entries)
+    for rec in trace_records + log_records:
+      self.assertLessEqual(set(rec), _RECORD_KEYS)  # allowlisted keys only, never a whole label dict
+    bundle = ge_fleet.build_workload_token_usage({'records': log_records}, {'records': trace_records}, _W_SERVICES, _W_GKE)
+    blob = json.dumps([trace_records, log_records, bundle, ge_fleet.summarize_workload_token_attribution(bundle)])
+    self.assertNotIn(_W_SECRET, blob)
+    self.assertNotIn('conv-raw-id-42', blob)  # conversations are only counted, from a digest
+    self.assertEqual(bundle['logs']['cloud_run']['support-agent']['conversations'], 1)
+
+
+class WorkloadLogAttributionTest(unittest.TestCase):
+
+  @staticmethod
+  def _entry(rtype, rlabels, **usage):
+    return {'timestamp': '2026-10-01T10:00:00Z', 'resource': {'type': rtype, 'labels': rlabels},
+            'labels': _wl_labels({}, **usage), 'jsonPayload': {'message': _W_SECRET}}
+
+  def test_log_resource_types_and_identity(self):
+    entries = [
+        self._entry('cloud_run_revision', {'service_name': 'support-agent', 'revision_name': 'support-agent-00007-abc'}),
+        self._entry('generic_task', {'job': 'support-agent', 'location': 'us-central1', 'task_id': 'instance-1'}),
+        self._entry('generic_task', {'job': 'reasoning-engine-1234567890'}),  # Agent Engine runtime
+        self._entry('generic_task', {'job': 'nightly-batch'}),  # not a Cloud Run service
+        self._entry('k8s_container', {'cluster_name': 'agents-cluster', 'namespace_name': 'support',
+                                      'container_name': 'support-worker'}),
+        self._entry('aiplatform.googleapis.com/ReasoningEngine', {'reasoning_engine_id': RE}),  # read elsewhere
+        self._entry('global', {}),
+        {'timestamp': '2026-10-01T10:00:00Z', 'labels': {},
+         'resource': {'type': 'cloud_run_revision', 'labels': {'service_name': 'docs-mcp'}}},  # no usage labels
+    ]
+    records = ge_fleet.extract_workload_log_records(entries)
+    self.assertEqual(len(records), 5)
+    out = ge_fleet.resolve_workload_usage(records, _W_SERVICES, _W_GKE)
+    self.assertEqual(_calls(out, 'cloud_run'), {'support-agent': 2})
+    self.assertEqual(_calls(out, 'gke'), {'agents-cluster/support/support-worker': 1})
+    self.assertEqual(out['skipped'], {'agent_engine:1234567890': 1})
+    self.assertEqual(out['unattributed'], {'generic_task:nightly-batch': 1})
+
+
+class WorkloadTokenCostAndSummaryTest(unittest.TestCase):
+
+  def test_each_model_priced_with_its_own_card(self):
+    cards = {'a': {'input': 1.0, 'output': 10.0, 'cached_read': 0.1}, 'b': {'input': 2.0, 'output': 20.0, 'cached_read': 0.2}}
+    by_model = {'a': {'input_tokens': 1_000_000, 'output_tokens': 0, 'cached_tokens': 0},
+                'publishers/google/models/b': {'input_tokens': 1_000_000, 'output_tokens': 100_000, 'cached_tokens': 500_000}}
+    # a: 1M x $1 = 1.0; b: 500k uncached x $2 + 500k cached x $0.2 + 100k x $20 = 1.0 + 0.1 + 2.0 = 3.1.
+    self.assertEqual(ge_fleet._estimate_usage_cost_usd(by_model, cards), (4.1, []))
+
+  def test_any_unpriced_model_leaves_the_runtime_unpriced(self):
+    by_model = {'a': {'input_tokens': 10, 'output_tokens': 1}, 'mystery-model': {'input_tokens': 5},
+                '(model not logged)': {'output_tokens': 3}, 'idle-model': {}}
+    self.assertEqual(ge_fleet._estimate_usage_cost_usd(by_model, {'a': {'input': 1.0, 'output': 10.0}}),
+                     (None, ['(model not logged)', 'mystery-model']))
+
+  def test_summary_prefers_log_counts_per_name_and_never_sums(self):
+    bundle = {
+        'logs': {'cloud_run': {'a': {'llm_calls': 2}}, 'gke': {}, 'unattributed': {'cloud_run:x': 3}, 'skipped': {}},
+        'traces': {'cloud_run': {'a': {'llm_calls': 2}, 'b': {'llm_calls': 1}}, 'gke': {'c/n/w': {'llm_calls': 1}},
+                   'unattributed': {'cloud_run:x': 5, 'cloud_run:y': 1}, 'skipped': {'gemini_enterprise': 4}},
+        'log_source': 'ok', 'trace_source': 'ok', 'log_entries_scanned': 7, 'traces_scanned': 3, 'truncated': True,
+    }
+    s = ge_fleet.summarize_workload_token_attribution(bundle)
+    self.assertEqual((s['cloud_run_services_with_tokens'], s['gke_workloads_with_tokens']), (2, 1))
+    self.assertEqual(s['unattributed_llm_calls'], 4)  # x: logs 3 (not 3 + 5); y: traces 1
+    self.assertEqual(s['top_unattributed'], ['cloud_run:x', 'cloud_run:y'])
+    self.assertEqual((s['skipped_agent_engine_or_ge_calls'], s['truncated']), (4, True))
+    self.assertEqual((s['log_entries_scanned'], s['traces_scanned']), (7, 3))
+    empty = ge_fleet.summarize_workload_token_attribution(None)
+    self.assertEqual((empty['log_source'], empty['trace_source'], empty['unattributed_llm_calls'], empty['top_unattributed']),
+                     ('not_run', 'not_run', 0, []))
 
 
 if __name__ == '__main__':

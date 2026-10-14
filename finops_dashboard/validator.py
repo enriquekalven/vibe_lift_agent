@@ -432,7 +432,9 @@ def _add_live_finops_checks(state, fleet, fleet_agents, fleet_totals, add_check)
   mism = [f'{a}={tt.get(a)} vs {b}={ut.get(b)}' for a, b in pairs if int(tt.get(a) or 0) != int(ut.get(b) or 0)]
   if abs(float(tt.get('est_cost_usd') or 0) - float(ut.get('est_cost_usd') or 0)) > 0.005:
     mism.append(f"cost {tt.get('est_cost_usd')} vs {ut.get('est_cost_usd')}")
-  agent_in = sum(int(r.get('input_tokens') or 0) for r in te.get('agents') or [] if isinstance(r, Mapping))
+  # fleet.totals covers registered agents only; standalone runtimes are summed in unregistered_summary.
+  agent_in = sum(int(r.get('input_tokens') or 0) for r in te.get('agents') or []
+                 if isinstance(r, Mapping) and r.get('registration_status') != 'UNREGISTERED_STANDALONE')
   fleet_in = int(fleet_totals.get('input_tokens') or 0)
   if agent_in != fleet_in:
     mism.append(f'agent input tokens {agent_in} vs fleet total {fleet_in}')

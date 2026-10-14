@@ -1,6 +1,6 @@
 # Testing
 
-423 tests across 22 files. They run offline: `GOOGLE_APPLICATION_CREDENTIALS` points at a file that does not
+452 tests across 22 files. They run offline: `GOOGLE_APPLICATION_CREDENTIALS` points at a file that does not
 exist, and every Google Cloud API is replaced by an in-process fake (`FakeGoogleApi` in
 [`tests/test_fleet.py`](../tests/test_fleet.py)), so no live project is touched.
 
@@ -30,6 +30,7 @@ is shown as unknown, never as an invented value. These tests enforce it.
 | **No invented numbers.** Missing telemetry shows as unknown, not zero | `test_live_data_sources.TokenSourceJoinTest` (`test_traffic_without_telemetry_is_unknown_not_zero`, `test_source_failure_is_unknown_not_zero`); `test_honest_metrics.JudgeFallbackTest.test_missing_score_is_not_invented` |
 | No modelled savings or simulator payloads in live mode (including cold-start 0-turn live projects) | `test_honest_metrics.LiveUserAnalyticsTest` (`test_live_payload_has_no_modelled_savings`, `test_cold_start_live_gcp_mode_detected_in_validator`); `test_live_data_sources.LiveValidatorChecksTest.test_simulator_payload_and_missing_evidence_flagged` |
 | Token counts: each LLM call counted once; logs and traces never double-counted; cloud turns deduplicated & bounded | `TraceTokensTest`, `GeAssistantTraceTokensTest`, `TokenSourceJoinTest.test_logs_preferred_and_never_summed_with_traces`, `test_long_running_agent_enforces_max_turns_and_deduplicates_cloud_turns` |
+| **Cloud Run and GKE tokens are attributed per span.** Each span or log entry counts only for the workload its own labels name; Gemini Enterprise and Agent Engine calls in the same trace are never counted for a workload; logs win over traces (never summed); unknown stays `None`; each model is priced with its own card; no prompt text or conversation id reaches the payload | `test_live_data_sources.WorkloadTraceAttributionTest`, `WorkloadLogAttributionTest`, `WorkloadTokenCostAndSummaryTest`; `test_fleet.WorkloadTokenInventoryTest`, `WorkloadTokenCollectionTest` |
 | **Dead agents need evidence.** Only an HTTP 404 marks a registration dead; a failed lookup is "unverified" | `RegistrationTest` (`test_404_is_backend_not_found_with_cleanup_command`, `test_lookup_failure_is_unverified_not_dead`) |
 | FinOps figures reconcile exactly | `LiveFinopsTest` (drift drivers sum to the observed change; token economics match model usage; projections use observed tokens) |
 | Validator and LLM judge: the judge cannot override a failed deterministic check | `test_honest_metrics.JudgeFallbackTest`; `LiveValidatorChecksTest.test_live_payload_passes`; `test_finops_dashboard...test_telemetry_grounding_validator_and_live_gcp_no_fake_users` |

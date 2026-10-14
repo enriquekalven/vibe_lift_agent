@@ -6500,8 +6500,9 @@ __FINOPS_ENHANCEMENTS_JS__
         return td;
       }
       if (Number(m.requests || 0) > 0 && kind === 'cloud_run') {
-        const td = el('td', null, [el('span', 'token-na', ['Not measured']), el('span', 'cell-sub', ['Cloud Run: requests only'])]);
-        td.title = 'Cloud Run reports request metrics only; FinOps Dashboard has no per-service token source for Cloud Run.';
+        const td = el('td', null, [el('span', 'token-na', ['Not measured']), el('span', 'cell-sub', ['no gen_ai telemetry'])]);
+        td.title = (a.notes || []).join(' ') ||
+          'No OpenTelemetry gen_ai token data was attributed to this Cloud Run service (Cloud Logging or Cloud Trace).';
         return td;
       }
       return el('td', 'mono', ['—']);
@@ -6811,7 +6812,7 @@ __FINOPS_ENHANCEMENTS_JS__
           ]));
         });
         (te.agents_without_token_telemetry || []).forEach(function(r) {
-          const td = el('td', 'token-na', [r.runs_on === 'cloud_run' ? 'Not measured (Cloud Run reports requests only)' : 'No gen_ai token data exported']);
+          const td = el('td', 'token-na', [r.runs_on === 'cloud_run' ? 'Not measured (no gen_ai token telemetry attributed)' : 'No gen_ai token data exported']);
           td.colSpan = 7;
           const nameCell = r.registration_status === 'UNREGISTERED_STANDALONE'
             ? el('td', null, [r.display_name || '—', ' ', badge('standalone', 'badge-yellow')])
@@ -7110,7 +7111,7 @@ __FINOPS_ENHANCEMENTS_JS__
         } else if (b.kind === 'cloud_run') {
           runsOn = 'Cloud Run · ' + b.service;
           runsOnSub = b.region || '';
-        } else if (b.kind === 'gke') {
+        } else if (b.kind === 'gke' || b.kind === 'gke_workload') {
           runsOn = 'GKE · ' + (b.cluster_name || 'cluster') + ' / ' + (b.container_name || 'workload');
           runsOnSub = [b.namespace, b.location].filter(Boolean).join(' · ');
         } else if (b.kind === 'external_endpoint') {
@@ -7121,7 +7122,7 @@ __FINOPS_ENHANCEMENTS_JS__
         } else if (b.kind === 'dialogflow') {
           runsOn = 'Dialogflow';
         }
-        const scope = {agent: 'per-agent telemetry', service: 'service-level telemetry'}[a.telemetry_scope] || 'inventory only';
+        const scope = {agent: 'per-agent telemetry', service: 'service-level telemetry', container: 'container-level telemetry'}[a.telemetry_scope] || 'inventory only';
         const lastCell = el('td', 'mono', [m.last_activity ? fmtAgo(m.last_activity) : '—']);
         if (m.last_activity) lastCell.title = m.last_activity;
         const hasAgentResource = !!(a.resource_name && String(a.resource_name).indexOf('/agents/') >= 0);

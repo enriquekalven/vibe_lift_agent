@@ -2263,14 +2263,14 @@ var VL = (function() {
 
     var models = (b.models || []).join(', ');
     wrap.appendChild(section('Runtime & tokens', [kv([
-      ['Runs on', ({agent_engine: 'Vertex AI Agent Engine', cloud_run: 'Cloud Run', gke: 'GKE', external_endpoint: 'External endpoint',
+      ['Runs on', ({agent_engine: 'Vertex AI Agent Engine', cloud_run: 'Cloud Run', gke: 'GKE', gke_workload: 'GKE', external_endpoint: 'External endpoint',
                     gemini_enterprise_hosted: 'Gemini Enterprise hosted', dialogflow: 'Dialogflow'})[b.kind] || (b.kind ? b.kind : 'Google-managed')],
       ['Resource', b.resource || b.service || b.url || null, true],
       ['Region', b.location || b.region || null, true],
       ['Framework', b.framework || null],
       ['Models', models || null, true],
       ['Token source', m.token_source || null],
-      ['Telemetry scope', {agent: 'Per agent', service: 'Whole Cloud Run service (all traffic)', none: 'Inventory only'}[a.telemetry_scope] || null],
+      ['Telemetry scope', {agent: 'Per agent', service: 'Whole Cloud Run service (all traffic)', container: 'GKE container (all replicas)', none: 'Inventory only'}[a.telemetry_scope] || null],
       ['Registration', a.registration ? [a.registration.status, a.registration.evidence].filter(Boolean).join(' \u2014 ') : null],
     ])]));
 
