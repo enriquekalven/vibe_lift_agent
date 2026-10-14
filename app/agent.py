@@ -301,14 +301,14 @@ def open_dashboard(focus_tab: int = 6, initial_agent: str = "it_service_desk") -
   economics, or the optimizer simulator in the UI.
 
   Args:
-      focus_tab: Tab to open (6 = Overview, the default; 0 = Agents; 3 = Cost; 4 = Users. Advanced tabs: 1 = Goals & Metrics, 2 = Optimizer & Testing, 5 = Tools & SDK).
+      focus_tab: Tab to open (6 = Overview, the default; 0 = Agents; 3 = Cost; 4 = Users; 7 = Antigravity. Advanced tabs: 1 = Goals & Metrics, 2 = Optimizer & Testing, 5 = Tools & SDK).
       initial_agent: Optional Gemini Enterprise agent identifier to analyze ('it_service_desk', 'finops_analytics', 'deep_research').
 
   Returns:
       JSON string with dashboard URL, status, active agent, and focus tab details.
   """
   tab = _safe_nonneg_int(focus_tab, 6)
-  if tab not in range(7):
+  if tab not in range(8):
     tab = 6
   agent_name = str(initial_agent or "it_service_desk")
   dashboard_url = os.environ.get("FINOPS_PUBLIC_URL", "").strip().rstrip("/")

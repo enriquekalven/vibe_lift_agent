@@ -1409,7 +1409,7 @@ def handle_request(client, filings, retriever):
     state = server._global_controller.get_state_payload(fast_mcp=True)
     html = ui_template.render_dashboard_html(initial_state=state)
 
-    # 1. Verify 6 step-by-step tabs and panels exist
+    # 1. Verify 6 step-by-step tabs (plus the top-level Antigravity tab) and panels exist
     expected_tabs = (
         ('tabBtn0', 'tabPanel0', 'Gemini Enterprise Agent Fleet'),
         ('tabBtn1', 'tabPanel1', 'Goals &amp; Metrics'),
@@ -1417,6 +1417,7 @@ def handle_request(client, filings, retriever):
         ('tabBtn3', 'tabPanel3', 'Cost &amp; Billing'),
         ('tabBtn4', 'tabPanel4', 'Users &amp; Feedback'),
         ('tabBtn5', 'tabPanel5', 'Tools &amp; SDK'),
+        ('tabBtn7', 'tabPanel7', 'Antigravity'),
     )
     for btn_id, panel_id, label in expected_tabs:
       self.assertIn(f'id="{btn_id}"', html)
@@ -1466,6 +1467,66 @@ def handle_request(client, filings, retriever):
             source_text.lower(),
             f'Found academic/AI big phrase "{phrase}" in {fname}',
         )
+
+  def test_antigravity_is_a_top_level_basic_tab_holding_the_moved_panel(self) -> None:
+    from finops_dashboard.ui import template as ui_template
+
+    state = server._global_controller.get_state_payload(fast_mcp=True)
+    html = ui_template.render_dashboard_html(initial_state=state)
+
+    # Nav: tabBtn7 is a basic tab (not adv-only) right after Users (tabBtn4) and before the advanced tabs.
+    nav = re.search(r'<nav class="tabs-bar"[^>]*>(.*?)</nav>', html, flags=re.S)
+    self.assertIsNotNone(nav)
+    buttons = re.findall(r'<button id="(tabBtn\d+)" class="([^"]*)"', nav.group(1))
+    order = [btn_id for btn_id, _ in buttons]
+    self.assertEqual(order.count('tabBtn7'), 1, order)
+    pos = order.index('tabBtn7')
+    self.assertEqual(order[pos - 1], 'tabBtn4', order)
+    self.assertNotIn('adv-only', buttons[pos][1].split())
+    self.assertNotIn('sim-panel', buttons[pos][1].split())
+    self.assertTrue(all('adv-only' in cls.split() for _, cls in buttons[pos + 1:]), buttons)
+    self.assertRegex(
+        nav.group(1),
+        r'<button id="tabBtn7" class="tab-btn" onclick="switchTab\(7\)" title="Google Antigravity IDE FinOps[^"]*">\s*Antigravity\s*</button>',
+    )
+
+    # Panel: moved (not copied) out of the Cost tab into its own tabPanel7, so every element id stays unique.
+    self.assertEqual(html.count('<section id="tabPanel7" class="hidden">'), 1)
+    ancestry = _element_ancestry(html)
+    for element_id in ('antigravityFinopsPanel', 'agyStatusBadge', 'agyPoolBadge', 'agyFinopsKpis', 'agyPoolBody',
+                       'agyModelsBody', 'agyUsersBody', 'agyFinopsNote'):
+      self.assertEqual(html.count(f'id="{element_id}"'), 1, element_id)
+      ids, _ = ancestry[element_id]
+      self.assertIn('tabPanel7', ids, element_id)
+      self.assertNotIn('tabPanel3', ids, element_id)
+    self.assertIn('tabPanel3', ancestry['agyTabPointer'][0])  # the Cost tab keeps a one-line pointer to the new tab
+
+    # Script: tab 7 is switchable, is never advanced-only, and ?tab=antigravity deep-links to it.
+    valid = re.search(r'const validTabs = \[([\d, ]+)\];', html)
+    advanced = re.search(r'const ADVANCED_ONLY_TABS = \[([\d, ]*)\];', html)
+    self.assertIsNotNone(valid)
+    self.assertIsNotNone(advanced)
+    self.assertIn('7', valid.group(1).replace(' ', '').split(','))
+    self.assertNotIn('7', advanced.group(1).replace(' ', '').split(','))
+    self.assertIn('const TAB_ALIASES = {antigravity: 7};', html)
+
+  def test_open_dashboard_can_focus_the_antigravity_tab(self) -> None:
+    self.assertEqual(mcp_server.ANTIGRAVITY_TAB, 7)
+    self.assertIn(mcp_server.ANTIGRAVITY_TAB, mcp_server.VALID_TABS)
+    self.assertEqual(mcp_server._parse_focus_tab('7'), mcp_server.ANTIGRAVITY_TAB)
+    self.assertEqual(mcp_server._parse_focus_tab(8), mcp_server.OVERVIEW_TAB)
+    code, _, body = mcp_server.handle_jsonrpc_sync({
+        'jsonrpc': '2.0',
+        'id': 'agy-open',
+        'method': 'tools/call',
+        'params': {'name': 'open_dashboard', 'arguments': {'focus_tab': mcp_server.ANTIGRAVITY_TAB}},
+    })
+    self.assertEqual(code, 200)
+    result = json.loads(body)['result']
+    self.assertFalse(result.get('isError'))
+    self.assertEqual(result['structuredContent']['focus_tab'], mcp_server.ANTIGRAVITY_TAB)
+    self.assertEqual(json.loads(adk_agent_module.open_dashboard(focus_tab=7))['focus_tab'], 7)
+    self.assertEqual(json.loads(adk_agent_module.open_dashboard(focus_tab=8))['focus_tab'], 6)
 
   def test_telemetry_grounding_validator_and_live_gcp_no_fake_users(self) -> None:
     from fastapi.testclient import TestClient

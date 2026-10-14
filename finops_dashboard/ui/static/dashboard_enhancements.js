@@ -3861,7 +3861,8 @@ var VL = (function() {
       if (!visible(btn) || btn.classList.contains('active')) return;
       var idx = Number(String(btn.id || '').replace('tabBtn', ''));
       var label = (btn.textContent || '').replace(/\s+/g, ' ').trim();
-      items.push({kind: 'Go to', group: 'Go to', title: label, keywords: ['tab ' + label, 'go ' + label], boost: 40,
+      // The button title (e.g. "... seats, WTU allowance & PAYG") makes a tab findable by what it covers.
+      items.push({kind: 'Go to', group: 'Go to', title: label, keywords: ['tab ' + label, 'go ' + label].concat(btn.title ? [btn.title] : []), boost: 40,
                   run: function() { try { switchTab(idx); } catch (e) { /* not ready */ } }});
     });
     var agents = Array.isArray(fl.agents) ? fl.agents.slice() : [];

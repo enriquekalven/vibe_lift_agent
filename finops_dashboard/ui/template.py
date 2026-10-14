@@ -742,6 +742,9 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     <button id="tabBtn4" class="tab-btn" onclick="switchTab(4)">
       Users
     </button>
+    <button id="tabBtn7" class="tab-btn" onclick="switchTab(7)" title="Google Antigravity IDE FinOps: seats, WTU allowance &amp; PAYG">
+      Antigravity
+    </button>
     <button id="tabBtn1" class="tab-btn adv-only" onclick="switchTab(1)">
       Goals &amp; Metrics
     </button>
@@ -1806,81 +1809,9 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
 
-      <div class="panel" id="antigravityFinopsPanel">
-        <div class="panel-header">
-          <div class="panel-title">
-            <span>Google Antigravity IDE FinOps: Weekly Seat Allowance Pool, WTU Meter &amp; PAYG Chargeback</span>
-            <span id="agyStatusBadge" class="badge badge-blue">Checking&hellip;</span>
-            <span id="agyPoolBadge" class="badge badge-green">&mdash;</span>
-          </div>
-          <div style="font-size:12px;color:var(--text-secondary);">
-            Tracks <span class="mono">businessaicode.googleapis.com/inference_response</span> metadata logs (prompt &amp; response text stripped at ingest), Gemini Enterprise seat subscriptions (<span class="mono">licenseConfigs</span> / <span class="mono">userLicenses</span>), weekly WTU pool quotas (<span class="mono">1 WTU = $0.000002</span>; weekly allowance per seat by tier, default Plus $3.75 / Standard $2.50, set with <span class="mono">FINOPS_AGY_TIER_ALLOWANCES</span>), and PAYG overage chargeback (Fair Share vs When-Used; Anthropic Claude 100% PAYG).
-          </div>
-        </div>
-        <div class="kpi-grid" id="agyFinopsKpis" style="margin-bottom:12px;"></div>
-
-        <div class="live-sub" style="margin-top:8px;">Weekly Seat Allowance Pool Status (Floating 7-Day Window by Tier)</div>
-        <div class="table-scroll" style="margin-bottom:12px;">
-          <table>
-            <thead>
-              <tr>
-                <th>Gemini Enterprise Tier</th>
-                <th>Seats (Assigned / Purchased)</th>
-                <th>Weekly Allowance / Seat</th>
-                <th>Pool Limit (WTU / $)</th>
-                <th>Pool Used (WTU / $)</th>
-                <th>Pool Utilization</th>
-                <th>PAYG Overage ($)</th>
-                <th>Window Reset &amp; Meter Source</th>
-              </tr>
-            </thead>
-            <tbody id="agyPoolBody"></tbody>
-          </table>
-        </div>
-
-        <div class="live-sub" style="margin-top:8px;">Antigravity Model &amp; Effort Breakdown (WTU Meter vs PAYG Overage)</div>
-        <div class="table-scroll" style="margin-bottom:12px;">
-          <table>
-            <thead>
-              <tr>
-                <th>Model</th>
-                <th>Effort</th>
-                <th>Provider</th>
-                <th>Calls</th>
-                <th>Prompt Tok</th>
-                <th>Cached Tok</th>
-                <th>Output Tok</th>
-                <th>Thinking Tok</th>
-                <th>WTU</th>
-                <th>Pool Included ($)</th>
-                <th>PAYG Overage ($)</th>
-              </tr>
-            </thead>
-            <tbody id="agyModelsBody"></tbody>
-          </table>
-        </div>
-
-        <div class="live-sub" style="margin-top:8px;">Per-Developer Antigravity Usage &amp; PAYG Chargeback (Fair Share vs When-Used)</div>
-        <div class="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Developer Principal</th>
-                <th>Tier</th>
-                <th>Trajectories</th>
-                <th>Calls</th>
-                <th>Total Tokens</th>
-                <th>WTU</th>
-                <th>Pool Included ($)</th>
-                <th>PAYG Fair Share ($)</th>
-                <th>PAYG When-Used ($)</th>
-                <th>Total Cost ($)</th>
-              </tr>
-            </thead>
-            <tbody id="agyUsersBody"></tbody>
-          </table>
-        </div>
-        <div class="live-note" id="agyFinopsNote" style="margin-top:8px;"></div>
+      <div class="live-note" id="agyTabPointer" style="margin:0 0 16px;">
+        Google Antigravity IDE spend (seats, weekly WTU allowance &amp; PAYG chargeback) now has its own tab.
+        <button class="btn" style="padding:2px 8px;font-size:11.5px;margin-left:6px;" onclick="switchTab(7)">Open Antigravity &rarr;</button>
       </div>
 
       <div class="panel live-only adv-only" id="liveWhatIfPanel">
@@ -2520,6 +2451,86 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
     </section>
 
+    <!-- TAB 7: GOOGLE ANTIGRAVITY IDE FINOPS (SEAT POOLS, WTU ALLOWANCE & PAYG CHARGEBACK) -->
+    <section id="tabPanel7" class="hidden">
+      <div class="panel" id="antigravityFinopsPanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Google Antigravity IDE FinOps: Weekly Seat Allowance Pool, WTU Meter &amp; PAYG Chargeback</span>
+            <span id="agyStatusBadge" class="badge badge-blue">Checking&hellip;</span>
+            <span id="agyPoolBadge" class="badge badge-green">&mdash;</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary);">
+            Tracks <span class="mono">businessaicode.googleapis.com/inference_response</span> metadata logs (prompt &amp; response text stripped at ingest), Gemini Enterprise seat subscriptions (<span class="mono">licenseConfigs</span> / <span class="mono">userLicenses</span>), weekly WTU pool quotas (<span class="mono">1 WTU = $0.000002</span>; weekly allowance per seat by tier, default Plus $3.75 / Standard $2.50, set with <span class="mono">FINOPS_AGY_TIER_ALLOWANCES</span>), and PAYG overage chargeback (Fair Share vs When-Used; Anthropic Claude 100% PAYG).
+          </div>
+        </div>
+        <div class="kpi-grid" id="agyFinopsKpis" style="margin-bottom:12px;"></div>
+
+        <div class="live-sub" style="margin-top:8px;">Weekly Seat Allowance Pool Status (Floating 7-Day Window by Tier)</div>
+        <div class="table-scroll" style="margin-bottom:12px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Gemini Enterprise Tier</th>
+                <th>Seats (Assigned / Purchased)</th>
+                <th>Weekly Allowance / Seat</th>
+                <th>Pool Limit (WTU / $)</th>
+                <th>Pool Used (WTU / $)</th>
+                <th>Pool Utilization</th>
+                <th>PAYG Overage ($)</th>
+                <th>Window Reset &amp; Meter Source</th>
+              </tr>
+            </thead>
+            <tbody id="agyPoolBody"></tbody>
+          </table>
+        </div>
+
+        <div class="live-sub" style="margin-top:8px;">Antigravity Model &amp; Effort Breakdown (WTU Meter vs PAYG Overage)</div>
+        <div class="table-scroll" style="margin-bottom:12px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>Effort</th>
+                <th>Provider</th>
+                <th>Calls</th>
+                <th>Prompt Tok</th>
+                <th>Cached Tok</th>
+                <th>Output Tok</th>
+                <th>Thinking Tok</th>
+                <th>WTU</th>
+                <th>Pool Included ($)</th>
+                <th>PAYG Overage ($)</th>
+              </tr>
+            </thead>
+            <tbody id="agyModelsBody"></tbody>
+          </table>
+        </div>
+
+        <div class="live-sub" style="margin-top:8px;">Per-Developer Antigravity Usage &amp; PAYG Chargeback (Fair Share vs When-Used)</div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Developer Principal</th>
+                <th>Tier</th>
+                <th>Trajectories</th>
+                <th>Calls</th>
+                <th>Total Tokens</th>
+                <th>WTU</th>
+                <th>Pool Included ($)</th>
+                <th>PAYG Fair Share ($)</th>
+                <th>PAYG When-Used ($)</th>
+                <th>Total Cost ($)</th>
+              </tr>
+            </thead>
+            <tbody id="agyUsersBody"></tbody>
+          </table>
+        </div>
+        <div class="live-note" id="agyFinopsNote" style="margin-top:8px;"></div>
+      </div>
+    </section>
+
     <!-- TAB 5: TOOLS, SKILLS/MCP & @FINOPS_TELEMETRY PYTHON SDK -->
     <section id="tabPanel5" class="hidden">
       <div class="panel">
@@ -2666,16 +2677,24 @@ __FINOPS_ENHANCEMENTS_JS__
       document.body.classList.toggle('simple-mode', !on);
       document.addEventListener('DOMContentLoaded', function() { applyAdvancedMode(on); });
     })();
+    // ?tab=<id> deep links (Copy link writes the numeric id); readable aliases such as ?tab=antigravity also work.
+    const TAB_ALIASES = {antigravity: 7};
+    function tabFromSearch(search) {
+      const s = String(search || '');
+      const named = /[?&]tab=([a-z]+)/i.exec(s);
+      if (named && Object.prototype.hasOwnProperty.call(TAB_ALIASES, named[1].toLowerCase())) return TAB_ALIASES[named[1].toLowerCase()];
+      const mt = /[?&]tab=([0-9])/.exec(s);
+      return mt ? Number(mt[1]) : null;
+    }
     window.addEventListener('load', function deepLinkTab() {
-      const mt = /[?&]tab=([0-9])/.exec(location.search);
-      if (!mt) return;
-      const t = Number(mt[1]);
+      const t = tabFromSearch(location.search);
+      if (t === null) return;
       if (ADVANCED_ONLY_TABS.indexOf(t) >= 0 && !isAdvancedMode()) applyAdvancedMode(true);
       switchTab(t);
     });
 
     function switchTab(tabIndex) {
-      const validTabs = [0, 1, 2, 3, 4, 5, 6];
+      const validTabs = [0, 1, 2, 3, 4, 5, 6, 7];
       let tab = validTabs.indexOf(Number(tabIndex)) >= 0 ? Number(tabIndex) : 6;
       if (!isAdvancedMode() && ADVANCED_ONLY_TABS.indexOf(tab) >= 0) tab = 6;
       currentTabIndex = tab;
@@ -2686,7 +2705,7 @@ __FINOPS_ENHANCEMENTS_JS__
         if (panel) panel.classList.toggle('hidden', tab !== i);
       });
       const banner = document.getElementById('demoSelectorBanner');
-      if (banner) banner.classList.toggle('hidden', tab === 0 || tab === 6 || tab === 3 || tab === 4);
+      if (banner) banner.classList.toggle('hidden', tab === 0 || tab === 6 || tab === 3 || tab === 4 || tab === 7);
       if (tab === 2) initPromptXray();
       VL.onTab(tab);
       notifyHostSizeChanged();

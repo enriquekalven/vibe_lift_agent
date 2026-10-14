@@ -225,7 +225,7 @@ def _get_controller():
 
 # Dashboard tab ids (match switchTab() in ui_template.py). Overview is the default landing tab.
 # Goals & Metrics (1), Optimizer & Testing (2) and Tools & SDK (5) are Advanced-mode tabs; asking
-# for one turns Advanced mode on in the UI.
+# for one turns Advanced mode on in the UI. Antigravity (7) is a basic tab like Agents, Cost and Users.
 FLEET_TAB = 0
 GOALS_METRICS_TAB = 1
 OPTIMIZER_TESTING_TAB = 2
@@ -233,7 +233,8 @@ COST_BILLING_TAB = 3
 USERS_FEEDBACK_TAB = 4
 TOOLS_SDK_TAB = 5
 OVERVIEW_TAB = 6
-VALID_TABS = frozenset(range(7))
+ANTIGRAVITY_TAB = 7
+VALID_TABS = frozenset(range(8))
 
 
 def _safe_nonneg_int(value: Any, default: int = 0) -> int:
@@ -535,7 +536,8 @@ _TOOLS: list[dict[str, Any]] = [
                 'focus_tab': {
                     'type': 'integer',
                     'description': (
-                        'Tab to open: 6 = Overview (default), 0 = Agents, 3 = Cost, 4 = Users. '
+                        'Tab to open: 6 = Overview (default), 0 = Agents, 3 = Cost, 4 = Users, '
+                        '7 = Antigravity (Google Antigravity IDE seats, WTU allowance & PAYG). '
                         'Advanced tabs: 1 = Goals & Metrics, 2 = Optimizer & Testing, 5 = Tools & SDK.'
                     ),
                 },

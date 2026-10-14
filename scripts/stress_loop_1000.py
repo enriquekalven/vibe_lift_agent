@@ -818,7 +818,7 @@ def _run_pillar_check(pillar: int, step_idx: int, cx: _LoopContext) -> None:
             'params': {'name': 'open_dashboard', 'arguments': caller_args},
         })
         assert 'session_id' in caller_args, 'Caller arguments dict must not be mutated'
-        assert out['result']['structuredContent']['focus_tab'] in range(7)
+        assert out['result']['structuredContent']['focus_tab'] in range(8)
       elif sub == 3:
         out, _ = _call_mcp({
             'jsonrpc': '2.0', 'id': 4, 'method': 'tools/call',
@@ -953,7 +953,7 @@ def _run_pillar_check(pillar: int, step_idx: int, cx: _LoopContext) -> None:
         assert 'breakpoint_line' in res and 'prefix_hash' in res
       elif sub == 2:
         res = json.loads(adk_agent.open_dashboard(focus_tab=w, initial_agent=''))  # type: ignore[arg-type]
-        assert res['status'] == 'opened' and res['focus_tab'] in range(7)
+        assert res['status'] == 'opened' and res['focus_tab'] in range(8)
       elif sub == 3:
         res = json.loads(adk_agent.query_live_finops_and_mart(days=w))  # type: ignore[arg-type]
         assert 1 <= res['window_days'] <= 365

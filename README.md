@@ -96,7 +96,7 @@ flowchart LR
 
 ## Core Capabilities
 
-The dashboard has 4 basic tabs (**Overview**, **Agents**, **Cost**, **Users**) and 3 advanced tabs (**Goals & Metrics**, **Optimizer & Testing**, **SDK & Tools**). When it is connected to a real project, panels that run on example inputs are hidden.
+The dashboard has 5 basic tabs (**Overview**, **Agents**, **Cost**, **Users**, **Antigravity**) and 3 advanced tabs (**Goals & Metrics**, **Optimizer & Testing**, **SDK & Tools**). When it is connected to a real project, panels that run on example inputs are hidden.
 
 Across tabs, a freshness chip shows how old the data is ("Live · updated 10 s ago"), **Copy link** shares the current view (the URL keeps the tab, app scope, time range, agent search and open agent), and the keyboard works: `/` focuses the search box of the current table, `Esc` closes the agent detail. **Search** (`⌘K` / `Ctrl+K`) is a command palette: type to jump to an agent, user, session, app or time range, filter by health, or run an action (refresh, export, theme, compact rows, budget). A light/dark theme toggle sits in the header: until you pick one, the dashboard follows your OS setting, or the Gemini Enterprise theme in the side panel. Exported PDFs always use the light theme. These features live in [finops_dashboard/ui/static/dashboard_enhancements.js](finops_dashboard/ui/static/dashboard_enhancements.js), which is inlined into the same self-contained HTML.
 

@@ -14,7 +14,7 @@ as "—" / "Not measured", or is labelled as simulator data.
 
 ## Dashboard
 
-Simple mode (default) shows four tabs. **Advanced ▾** reveals three more.
+Simple mode (default) shows five tabs. **Advanced ▾** reveals three more.
 
 | Tab (id) | Mode | Content |
 | :--- | :--- | :--- |
@@ -22,6 +22,7 @@ Simple mode (default) shows four tabs. **Advanced ▾** reveals three more.
 | Agents (0) | Simple | Every agent in every GE app, with runtime metrics |
 | Cost (3) | Simple | Model spend by model; Advanced adds billing-export SKUs and modelled cost panels |
 | Users (4) | Simple | Users seen in audit logs; Advanced adds per-app user groups and alerts |
+| Antigravity (7) | Simple | Google Antigravity IDE FinOps: weekly seat allowance pools and WTU meter by tier, model & effort breakdown, per-developer PAYG chargeback |
 | Goals & Metrics (1), Optimizer & Testing (2), Tools & SDK (5) | Advanced | Optimizer and what-if simulators (labelled as such) |
 
 The **Gemini Enterprise app** dropdown filters by region (`loc:global`, `loc:us`) or by one

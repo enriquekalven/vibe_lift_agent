@@ -458,11 +458,37 @@ async function main() {
   inCtx('exportDashboardPdf({shiftKey: true})');
   check(printCount === 1, 'exportDashboardPdf({shiftKey: true}) invokes window.print()');
 
-  // Enable Advanced mode and test tab switching across all 7 tabs (0..6)
+  // Basic view: Antigravity (7) is a top-level basic tab, so it opens without Advanced mode (advanced tabs fall back).
   sandbox.fetch = function () { return Promise.reject(new Error('offline test')); };
+  let syncedUrl = '';
+  sandbox.history.replaceState = function (s, t, u) { syncedUrl = String(u); };
+  check(inCtx('isAdvancedMode() === false'), 'dashboard starts in the basic view');
+  inCtx('switchTab(7)');
+  check(inCtx('currentTabIndex') === 7, 'switchTab(7) opens the Antigravity tab in the basic view');
+  check(inCtx("document.getElementById('tabBtn7').classList.contains('active') && !document.getElementById('tabPanel7').classList.contains('hidden')"),
+        'Antigravity tab button is active and its panel is shown');
+  check(inCtx("document.getElementById('tabPanel3').classList.contains('hidden') && document.getElementById('tabPanel6').classList.contains('hidden')"),
+        'other tab panels are hidden while the Antigravity tab is open');
+  // The moved panel still renders from state.antigravity_finops while its tab is visible (first view and refresh).
+  const agyRendered = "(function (a) { if (!a) return true;" +
+    " var rows = function (id, list) { return document.getElementById(id).children.length === Math.max(1, (list || []).length); };" +
+    " return document.getElementById('agyFinopsKpis').children.length > 0 && rows('agyPoolBody', a.pools) &&" +
+    " rows('agyModelsBody', a.by_model_effort) && rows('agyUsersBody', a.by_user); })(currentState && currentState.antigravity_finops)";
+  check(inCtx(agyRendered), 'Antigravity KPIs and tables are painted on the visible tab 7');
+  inCtx('renderState(__good);');
+  check(inCtx('currentTabIndex') === 7 && inCtx(agyRendered), 'a state refresh repaints the Antigravity panel and keeps tab 7 open');
+  check(/[?&]tab=7(&|$)/.test(syncedUrl), 'URL / Copy link keeps the Antigravity tab (' + syncedUrl + ')');
+  inCtx('switchTab(1)');
+  check(inCtx('currentTabIndex') === 6, 'advanced-only tab 1 falls back to Overview in the basic view');
+  check(inCtx("tabFromSearch('?tab=antigravity') === 7 && tabFromSearch('?w=24&tab=Antigravity') === 7"), '?tab=antigravity deep-links to tab 7');
+  check(inCtx("tabFromSearch('?tab=7') === 7 && tabFromSearch('?tab=3') === 3 && tabFromSearch('?tab=nope') === null && tabFromSearch('') === null"),
+        'numeric ?tab= deep links are unchanged and unknown names are ignored');
+  sandbox.history.replaceState = noop;
+
+  // Enable Advanced mode and test tab switching across all 8 tabs (0..7)
   inCtx('toggleAdvancedMode()');
   check(inCtx('isAdvancedMode() === true'), 'toggleAdvancedMode enables advanced mode');
-  for (let t = 0; t <= 6; t++) {
+  for (let t = 0; t <= 7; t++) {
     inCtx('switchTab(' + t + ')');
     check(inCtx('currentTabIndex') === t, 'switchTab(' + t + ') activates tab ' + t);
   }

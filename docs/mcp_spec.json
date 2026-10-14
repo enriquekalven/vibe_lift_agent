@@ -16,7 +16,7 @@
           },
           "focus_tab": {
             "type": "integer",
-            "description": "Tab to open: 6 = Overview (default), 0 = Agents, 3 = Cost, 4 = Users. Advanced tabs: 1 = Goals & Metrics, 2 = Optimizer & Testing, 5 = Tools & SDK."
+            "description": "Tab to open: 6 = Overview (default), 0 = Agents, 3 = Cost, 4 = Users, 7 = Antigravity (Google Antigravity IDE seats, WTU allowance & PAYG). Advanced tabs: 1 = Goals & Metrics, 2 = Optimizer & Testing, 5 = Tools & SDK."
           },
           "window_hours": {
             "type": "integer",
