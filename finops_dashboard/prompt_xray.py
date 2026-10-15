@@ -32,7 +32,7 @@ from finops_dashboard import telemetry
 
 MAX_PROMPT_CHARS = 400_000
 CHARS_PER_TOKEN_HEURISTIC = 4.0
-DEFAULT_MODEL = 'gemini-3.8-flash'
+DEFAULT_MODEL = 'gemini-2.5-flash'
 # Heatmap segments longer than this are shown as head + collapsed marker + tail.
 _COLLAPSE_OVER_CHARS = 2400
 _COLLAPSE_KEEP_CHARS = 700

@@ -33,7 +33,7 @@ class TestLiveModePolicyTable(unittest.TestCase):
 
   def test_every_post_route_is_classified(self) -> None:
     post_routes = stress_loop_1000._assert_live_policy_covers_all_post_routes(self.app)
-    self.assertGreaterEqual(len(post_routes), 25)
+    self.assertGreaterEqual(len(post_routes), 20)
     self.assertEqual(sorted(post_routes), sorted(stress_loop_1000.LIVE_MODE_POLICY))
 
   def test_guarded_routes_fail_closed_in_live_mode(self) -> None:
@@ -62,17 +62,15 @@ class TestLiveModePolicyTable(unittest.TestCase):
 
   def test_reset_in_live_mode_keeps_sme_ratings_and_sdk_events(self) -> None:
     """The concrete harm the guard prevents: a live-mode reset must not discard recorded evidence."""
-    from finops_dashboard import sme_eval, telemetry
+    from finops_dashboard import telemetry
 
-    store = sme_eval.get_sme_evaluation_store()
-    store.submit_rating({'persona_id': 'cfo_exec', 'overall_rating': 4, 'verdict': 'APPROVED_WITH_NOTES'})
-    before_ratings = len(store.list_ratings())
-    self.assertGreaterEqual(before_ratings, 1)
+    telemetry.record_ingest_dlq('/api/aive_log', {'bad': 1}, ['missing user_email'])
+    before_dlq = len(telemetry.get_ingest_dlq_events())
+    self.assertGreaterEqual(before_dlq, 1)
     with mock.patch.object(self.ctrl, '_is_live_gcp', return_value=True), mock.patch.dict('os.environ', {'FINOPS_ENABLE_SIMULATOR': ''}):
       r = self.client.post('/api/reset', json={})
     self.assertEqual(r.json().get('status'), 'DISABLED_IN_LIVE_MODE')
-    self.assertEqual(len(store.list_ratings()), before_ratings, 'live-mode reset must not wipe SME ratings')
-    self.assertIsNotNone(telemetry.get_ingest_dlq_events())
+    self.assertEqual(len(telemetry.get_ingest_dlq_events()), before_dlq, 'live-mode reset must not wipe DLQ/SDK events')
 
   def test_simulator_override_env_var_re_enables_guarded_routes(self) -> None:
     with mock.patch.object(self.ctrl, '_is_live_gcp', return_value=True), mock.patch.dict('os.environ', {'FINOPS_ENABLE_SIMULATOR': '1'}):

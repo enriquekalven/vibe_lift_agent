@@ -11,13 +11,13 @@ import os
 import subprocess
 import urllib.request
 
-JUDGE_MODEL = os.environ.get("FINOPS_EVAL_JUDGE_MODEL", "gemini-3.8-flash")
+JUDGE_MODEL = os.environ.get("FINOPS_EVAL_JUDGE_MODEL", "gemini-2.5-flash")
 JUDGE_LOCATION = (
     os.environ.get("FINOPS_EVAL_JUDGE_LOCATION")
     or ("global" if JUDGE_MODEL.startswith("gemini-3") else None)
     or os.environ.get("GOOGLE_CLOUD_LOCATION")
     or os.environ.get("GOOGLE_CLOUD_REGION")
-    or "global"
+    or "us-central1"
 )
 
 

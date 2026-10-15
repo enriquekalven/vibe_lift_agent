@@ -319,28 +319,24 @@ class BlindspotRemediationTest(unittest.TestCase):
   def test_structured_audit_sink_and_sme_state_dir_persistence(self):
     import tempfile
 
-    from finops_dashboard import sme_eval, telemetry
+    from finops_dashboard import telemetry
     with tempfile.TemporaryDirectory() as tmpdir:
       with mock.patch.dict(os.environ, {'FINOPS_STATE_DIR': tmpdir}):
-        store1 = sme_eval.SmeEvaluationStore()
-        store1.submit_rating(persona_id='finops_lead', reviewer_ldap='user-a', overall_rating=5, notes='Persisted')
         telemetry.log_csat_rating('sess-1', 'evt-1', 'user-a@example.com', 5, 'Great')
-        # New store instance should reload the persisted SME rating from FINOPS_STATE_DIR
-        store2 = sme_eval.SmeEvaluationStore()
-        ratings = store2.list_ratings('finops_lead')
-        self.assertEqual(len(ratings), 1)
-        self.assertEqual(ratings[0]['reviewer_ldap'], 'user-a')
         self.assertTrue(os.path.isfile(os.path.join(tmpdir, 'csat_rating.jsonl')))
-        store2.clear()
-        self.assertEqual(len(store2.list_ratings()), 0)
+        with open(os.path.join(tmpdir, 'csat_rating.jsonl'), encoding='utf-8') as f:
+          lines = [ln for ln in f.read().splitlines() if ln.strip()]
+        self.assertEqual(len(lines), 1)
+        self.assertIn('user-a@example.com', lines[0])
 
   def test_server_reset_restores_default_agent_and_cors_env(self):
     from finops_dashboard import server
     ctrl = server.FinOpsRuntimeController()
-    ctrl.select_agent('deep_research')
-    self.assertEqual(ctrl.optimizer.selected_agent_id, 'deep_research')
-    ctrl.reset()
-    self.assertEqual(ctrl.optimizer.selected_agent_id, 'it_service_desk')
+    with mock.patch.object(ctrl, '_is_live_gcp', return_value=False):
+      ctrl.select_agent('deep_research')
+      self.assertEqual(ctrl.optimizer.selected_agent_id, 'deep_research')
+      ctrl.reset()
+      self.assertEqual(ctrl.optimizer.selected_agent_id, 'it_service_desk')
     with mock.patch.dict(os.environ, {'ALLOWED_ORIGINS': 'https://a.example.com, https://b.example.com'}):
       self.assertEqual(server.resolve_allowed_origins(), ['https://a.example.com', 'https://b.example.com'])
 
@@ -369,10 +365,9 @@ class BlindspotRemediationTest(unittest.TestCase):
     from finops_dashboard import server
     ctrl = server._global_controller
     ctrl.reset()
-    res = json.loads(adk_agent.trigger_alpha_evolve_cycle('it_service_desk'))
-    active = ctrl.optimizer.active_agent
-    self.assertEqual(res['latest_action'], active.actions[0].to_dict())
-    self.assertNotEqual(res['latest_action'], active.actions[-1].to_dict())
+    res = json.loads(adk_agent.lint_agent_finops('for x in items:\n    client.generate_content(x)\n'))
+    self.assertIn('findings_count', res)
+    self.assertGreaterEqual(res['findings_count'], 1)
 
     with mock.patch.object(ctrl.gcp_telemetry, 'fetch_live_cloud_turns', return_value=[]) as m_turns:
       payload = json.loads(adk_agent.query_gcp_telemetry(hours_ago=72))
@@ -380,13 +375,32 @@ class BlindspotRemediationTest(unittest.TestCase):
       m_turns.assert_called_once_with(hours_ago=72, max_results=15)
 
   def test_long_running_agent_enforces_max_turns_and_deduplicates_cloud_turns(self):
-    from finops_dashboard import long_running_agent, telemetry
-    opt = alpha_evolve_optimizer.FinOpsAlphaEvolveOptimizer()
-    agent = long_running_agent.LongRunningFinOpsAgent(opt, max_turns=10)
-    for _ in range(15):
-      agent.step_turn()
-    self.assertEqual(len(agent.turns), 10)
-    self.assertEqual(len(agent.step_descriptions), 10)
+    from finops_dashboard import telemetry
+    store = telemetry.CloudTurnStore(max_turns=10)
+    many_turns = [
+        telemetry.TurnUsageLog(
+            timestamp=f'2026-09-30T12:{i:02d}:00Z',
+            agent_name='live-agent',
+            model='gemini-2.5-flash',
+            turn_index=i,
+            prompt_prefix_hash=f'hash-{i}',
+            cache_breakpoint_line=None,
+            cache_breakpoint_reason='Mart turn',
+            prompt_token_count=4000,
+            cached_content_token_count=3000,
+            cache_creation_input_tokens=0,
+            uncached_input_tokens=1000,
+            candidates_token_count=200,
+            thoughts_token_count=50,
+            status_code=200,
+            tool_called='search',
+            evolution_generation=0,
+        )
+        for i in range(15)
+    ]
+    store.ingest_gcp_cloud_turns(many_turns)
+    self.assertEqual(len(store.turns), 10)
+    self.assertEqual(len(store.step_descriptions), 10)
 
     cloud_turn = telemetry.TurnUsageLog(
         timestamp='2026-09-30T12:00:00Z',
@@ -406,10 +420,10 @@ class BlindspotRemediationTest(unittest.TestCase):
         tool_called='search',
         evolution_generation=0,
     )
-    agent.ingest_gcp_cloud_turns([cloud_turn, cloud_turn])
-    matching = [t for t in agent.turns if t.prompt_prefix_hash == 'hash123456']
+    store.ingest_gcp_cloud_turns([cloud_turn, cloud_turn])
+    matching = [t for t in store.turns if t.prompt_prefix_hash == 'hash123456']
     self.assertEqual(len(matching), 1)
-    self.assertLessEqual(len(agent.turns), 10)
+    self.assertLessEqual(len(store.turns), 10)
 
   def test_domain_scoped_project_ids_and_fct_turns_partition_pruning(self):
     from finops_dashboard import billing_export, ge_mart

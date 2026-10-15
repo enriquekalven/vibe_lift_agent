@@ -542,14 +542,6 @@ async function main() {
   await inCtx('runTelemetryValidationAudit(true)');
   check(inCtx("document.getElementById('runLlmJudgeAuditBtn').textContent.indexOf('Audit Verified') === 0"), 'runTelemetryValidationAudit verifies telemetry in embedded mode');
 
-  // Embedded SME Persona Audit & Submit Rating buttons
-  await inCtx('runSmePersonaAudit()');
-  check(inCtx("document.getElementById('smeEvalRunBtn').textContent.indexOf('Audits Verified') === 0"), 'runSmePersonaAudit completes in embedded mode');
-  const prevRatings = inCtx('(currentState.sme_evaluation && currentState.sme_evaluation.ratings ? currentState.sme_evaluation.ratings.length : 0)');
-  await inCtx('submitSmePersonaRating()');
-  const nextRatings = inCtx('(currentState.sme_evaluation && currentState.sme_evaluation.ratings ? currentState.sme_evaluation.ratings.length : 0)');
-  check(nextRatings === prevRatings + 1, 'submitSmePersonaRating records new rating in embedded mode');
-
   // Embedded GE Mart Refresh button
   await inCtx('refreshGeMartNow()');
   check(inCtx("document.getElementById('geMartRefreshBtn').textContent.indexOf('Mart Synced') === 0"), 'refreshGeMartNow syncs mart in embedded mode');

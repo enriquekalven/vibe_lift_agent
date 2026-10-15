@@ -250,11 +250,14 @@ class EnterpriseControlsAndA2ATest(unittest.TestCase):
 
   def test_simulator_actions_disabled_in_live_mode(self) -> None:
     ctrl = server.FinOpsRuntimeController(fleet_service=_FAKE_FLEET)
+    self.assertFalse(hasattr(ctrl, 'inject_anomaly'))
+    self.assertFalse(hasattr(ctrl, 'step_turn'))
+    self.assertFalse(hasattr(ctrl, 'evolve_generation'))
     with mock.patch.object(ctrl, '_is_live_gcp', return_value=True), \
          mock.patch.dict('os.environ', {'FINOPS_ENABLE_SIMULATOR': '0'}):
-      self.assertEqual(ctrl.inject_anomaly()['status'], 'DISABLED_IN_LIVE_MODE')
-      self.assertEqual(ctrl.step_turn()['status'], 'DISABLED_IN_LIVE_MODE')
-      self.assertEqual(ctrl.evolve_generation()['status'], 'DISABLED_IN_LIVE_MODE')
+      self.assertEqual(ctrl.reset()['status'], 'DISABLED_IN_LIVE_MODE')
+      self.assertEqual(ctrl.recompute_finops({})['status'], 'DISABLED_IN_LIVE_MODE')
+      self.assertEqual(ctrl.simulate_what_if({})['status'], 'DISABLED_IN_LIVE_MODE')
 
   def test_a2a_task_execution_for_skills(self) -> None:
     ctrl = server.FinOpsRuntimeController(fleet_service=_FAKE_FLEET)

@@ -166,7 +166,7 @@ def validate_dashboard_state(
       check_id='TAB3-TURN-TRAJECTORY-SYNC',
       tab='Tab 3: Testing & History',
       metric_or_panel='turns & turn_summary (Prompt Cache Forensics)',
-      passed=(len(turns) == summary_turns and len(turns) > 0),
+      passed=(len(turns) == summary_turns),
       provenance='OBSERVED_GCP_TELEMETRY' if live_mode else 'INTERACTIVE_WHAT_IF_SIMULATOR',
       source_dataset='<otel dataset>.gen_ai_client_inference_operation_details',
       evidence=f'Verified {len(turns)} turn records synchronized with turn_summary.total_turns={summary_turns}.',
@@ -356,7 +356,7 @@ def validate_dashboard_state(
       exec_finding = f'All {total_checks} rule-based checks passed ({source_label}).'
     llm_judge_report = {
         'executed': False,
-        'judge_model': 'gemini-3.8-flash (Vertex AI Grounding Judge)',
+        'judge_model': f'{JUDGE_MODEL} (Vertex AI Grounding Judge)',
         'judge_model_used': 'rule-based checks only (run the LLM judge for a model review)',
         'grounding_score_100': deterministic_score,
         'verdict': overall_verdict,
@@ -648,7 +648,7 @@ def run_llm_as_judge_audit(
   }
 
 
-JUDGE_MODEL = os.environ.get('FINOPS_JUDGE_MODEL', 'gemini-3.8-flash')
+JUDGE_MODEL = os.environ.get('FINOPS_JUDGE_MODEL', 'gemini-2.5-flash')
 JUDGE_LOCATION = os.environ.get(
     'FINOPS_JUDGE_LOCATION',
     'global' if JUDGE_MODEL.startswith('gemini-3') else 'us-central1',

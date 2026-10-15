@@ -62,7 +62,6 @@ from finops_dashboard import (
     optimizer,
     prompt_xray,
     server,
-    sme_eval,
     telemetry,
 )
 from finops_dashboard import validator as telemetry_validator
@@ -79,10 +78,7 @@ WEIRD_NUMBERS: list[Any] = [
 # DISABLED_IN_LIVE_MODE when connected to a live GCP project; 'allowed' routes must never answer that.
 # A new POST route that is missing from this table fails the loop at startup.
 LIVE_MODE_POLICY: dict[str, str] = {
-    # Synthetic simulator mutations: must fail closed on live telemetry.
-    '/api/inject_anomaly': 'guarded',
-    '/api/step_turn': 'guarded',
-    '/api/evolve_generation': 'guarded',
+    # Demo profile mutations: must fail closed on live telemetry.
     '/api/what_if_simulate': 'guarded',
     '/api/recompute_finops': 'guarded',
     '/api/reset': 'guarded',
@@ -96,8 +92,6 @@ LIVE_MODE_POLICY: dict[str, str] = {
     '/api/what_if_live': 'allowed',
     '/api/prompt_xray': 'allowed',
     '/api/nl2sql': 'allowed',
-    '/api/sme_eval/run': 'allowed',
-    '/api/sme_eval/rate': 'allowed',
     '/api/validate_telemetry': 'allowed',
     '/api/ge_mart/refresh': 'allowed',
     '/api/sync_gcp_telemetry': 'allowed',
@@ -115,7 +109,6 @@ LIVE_POLICY_BODIES: dict[str, Any] = {
     '/api/select_optimizer': {'platform_id': 'alpha_evolve'},
     '/api/validate_telemetry': {'run_llm_judge': False},
     '/api/nl2sql': {'question': 'Show cost by agent'},
-    '/api/sme_eval/rate': {'persona_id': 'cfo_exec', 'overall_rating': 4, 'verdict': 'APPROVED'},
     '/a2a/app': {'jsonrpc': '2.0', 'id': 'live-1', 'method': 'message/send', 'params': {'message': {'parts': [{'text': 'hi'}]}}},
     '/mcp': {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'},
 }
@@ -854,13 +847,12 @@ def _run_pillar_check(pillar: int, step_idx: int, cx: _LoopContext) -> None:
         assert sc['cached_tokens'] <= sc['prompt_tokens']
         assert sc['thoughts_tokens'] == 0  # True is rejected, not coerced to 1
       elif sub == 6:
-        with mock.patch.object(ctrl, '_is_live_gcp', return_value=(step_idx % 2 == 0)):
-          out, _ = _call_mcp({
-              'jsonrpc': '2.0', 'id': 7, 'method': 'tools/call',
-              'params': {'name': 'run_alpha_evolve_generation', 'arguments': {'agent_id': 'it_service_desk'}},
-          })
-          assert not out['result']['isError']
-          assert 'None' not in out['result']['content'][0]['text']
+        out, _ = _call_mcp({
+            'jsonrpc': '2.0', 'id': 7, 'method': 'tools/call',
+            'params': {'name': 'lint_agent_finops', 'arguments': {'code_snippet': 'def f(): pass\n'}},
+        })
+        assert not out['result']['isError']
+        assert 'None' not in out['result']['content'][0]['text']
       elif sub == 7:
         out, _ = _call_mcp({'jsonrpc': '2.0', 'id': 8, 'method': 'tools/call', 'params': {'name': 'get_finops_state', 'arguments': {}}})
         assert 'active_agent' in out['result']['structuredContent']
@@ -967,8 +959,8 @@ def _run_pillar_check(pillar: int, step_idx: int, cx: _LoopContext) -> None:
         res = json.loads(adk_agent.xray_prompt_cache(' Static A ', ' Static B ', monthly_requests=0))
         assert 'status' in res
       elif sub == 7:
-        res = json.loads(adk_agent.trigger_alpha_evolve_cycle(agent_id='it_service_desk'))
-        assert res['simulator'] is True
+        res = json.loads(adk_agent.lint_agent_finops(code_snippet='def f(): pass\n'))
+        assert res['status'] in ('PASS', 'FAIL')
       elif sub == 8:
         res = json.loads(adk_agent.query_ge_agent_fleet(window_hours=w))  # type: ignore[arg-type]
         assert isinstance(res, dict) and ('agents' in res or 'status' in res)
@@ -1087,11 +1079,6 @@ def _run_pillar_check(pillar: int, step_idx: int, cx: _LoopContext) -> None:
       assert val['total_checks'] >= 10 and val['overall_status'] == 'VERIFIED_GROUNDED'
       det = telemetry_validator.validate_dashboard_state(corrupted, run_llm_judge=False)
       assert det['failed_count'] >= 1 and det['overall_status'] != 'VERIFIED_GROUNDED'
-    elif sub == 1:
-      sme = sme_eval.evaluate_persona_rubric(cx.base_state)
-      assert sme['total_checks'] == 30
-      assert sme['passed_checks'] == 30, f"SME failed checks: {[c for c in sme['checks'] if not c['passed']]}"
-      assert sme['overall_compliance_status'] == 'COMPLIANT'
     else:
       # The (stubbed) LLM judge swears everything is grounded; failed deterministic checks must still win.
       det = telemetry_validator.validate_dashboard_state(corrupted, run_llm_judge=True)
@@ -1111,22 +1098,16 @@ def _run_pillar_check(pillar: int, step_idx: int, cx: _LoopContext) -> None:
         c = cx.thread_clients[w_id % len(cx.thread_clients)]
         for _ in range(4):
           op = wrng.random()
-          if op < 0.30:
+          if op < 0.40:
             r = c.get('/api/state?window_hours=24')
             assert r.status_code == 200, r.text[:200]
             st = r.json()
             assert st['active_agent']['agent_id'] in agents, 'unknown active agent under concurrency'
             assert isinstance(st['active_agent'].get('parameters'), list)
-          elif op < 0.50:
+          elif op < 0.70:
             r = c.post('/api/select_agent', json={'agent_id': wrng.choice(agents)})
-          elif op < 0.65:
-            r = c.post('/api/evolve_generation', json={})
-          elif op < 0.75:
-            r = c.post('/api/step_turn', json={})
           elif op < 0.85:
             r = c.post('/api/add_parameter', json={'label': f'P{w_id}', 'baseline_val': 1, 'target_val': 2, 'weight_pct': 5})
-          elif op < 0.92:
-            r = c.post('/api/inject_anomaly', json={})
           else:
             r = c.post('/api/reset', json={})
           assert r.status_code == 200, f'{r.request.url.path} -> HTTP {r.status_code}: {r.text[:200]}'
@@ -1158,13 +1139,13 @@ def _run_pillar_check(pillar: int, step_idx: int, cx: _LoopContext) -> None:
 def _run_bucket_check(i: int, bucket: int, cx: _LoopContext, counts: dict[str, int]) -> None:
   """Executes one top-level bucket check (happy / edge / validation / live policy / fault injection)."""
   rng, ctrl, client, deck = cx.rng, cx.ctrl, cx.client, cx.deck
-  models, agents, personas, platforms = cx.models, cx.agents, cx.personas, cx.platforms
+  models, agents, platforms = cx.models, cx.agents, cx.platforms
 
   if bucket == 0:
     # -----------------------------------------------------------------------
     # 1. NORMAL HAPPY PATHS
     # -----------------------------------------------------------------------
-    sub = (i // 5) % 10
+    sub = (i // 5) % 9
     if sub == 0:
       r = client.get('/api/health')
       assert r.status_code == 200 and r.json()['status'] == 'ok'
@@ -1214,19 +1195,6 @@ def _run_bucket_check(i: int, bucket: int, cx: _LoopContext, counts: dict[str, i
     elif sub == 7:
       r = client.post('/api/nl2sql', json={'question': 'Show cache hit rate and cost by agent'})
       assert r.status_code == 200 and 'generated_sql' in r.json() and 'sql_safety_audit' in r.json()
-    elif sub == 8:
-      store = sme_eval.get_sme_evaluation_store()
-      before = len(store.list_ratings())
-      r = client.post('/api/sme_eval/rate', json={
-          'persona_id': rng.choice(personas),
-          'overall_rating': rng.choice([3, 4, 5]),
-          'verdict': rng.choice(['APPROVED', 'APPROVED_WITH_NOTES', 'NEEDS_WORK']),
-          'would_recommend': True,
-          'reviewer': 'stress-loop-sme',
-          'notes': 'Verified in automated 10000x loop',
-      })
-      assert r.status_code == 200 and r.json()['status'] == 'recorded'
-      assert len(store.list_ratings()) == before + 1
     else:
       r = client.post('/a2a/app', json={
           'jsonrpc': '2.0',
@@ -1299,7 +1267,6 @@ def _run_bucket_check(i: int, bucket: int, cx: _LoopContext, counts: dict[str, i
           '/api/select_optimizer',
           '/api/nl2sql',
           '/a2a/app',
-          '/api/sme_eval/rate',
           '/api/aive_log',
           '/api/reset',
       ])
@@ -1343,7 +1310,7 @@ def _run_bucket_check(i: int, bucket: int, cx: _LoopContext, counts: dict[str, i
     # -----------------------------------------------------------------------
     # 3. USER / INPUT VALIDATION ERRORS - wrong values AND missing fields (HTTP 422 / INVALID_REQUEST)
     # -----------------------------------------------------------------------
-    sub = (i // 5) % 7
+    sub = (i // 5) % 6
     if sub == 0:
       secret_pii = f'secret-ssn-{i}-999-00-1234'
       r = client.post('/api/decorator_ingest', json={
@@ -1366,6 +1333,7 @@ def _run_bucket_check(i: int, bucket: int, cx: _LoopContext, counts: dict[str, i
       ])
       r = client.post('/api/csat_rating', json=bad_csat)
       assert r.status_code == 422 and r.json()['error'] == 'invalid_payload', (bad_csat, r.text[:200])
+      cx.extra_counts['missing_field_validation_checks'] += 1
     elif sub == 2:
       bad_payload = rng.choice([
           {'label': 'Test', 'baseline_val': 'not-a-number', 'target_val': 95, 'weight_pct': 10},
@@ -1394,29 +1362,6 @@ def _run_bucket_check(i: int, bucket: int, cx: _LoopContext, counts: dict[str, i
       assert body['error_kind'] == 'VALIDATION_ERROR'
       assert body['is_code_bug'] is False
     elif sub == 4:
-      # SME ratings: MISSING or invalid fields must be rejected and must never be recorded.
-      store = sme_eval.get_sme_evaluation_store()
-      before = len(store.list_ratings())
-      bad_rating = rng.choice([
-          {},
-          {'persona_id': 'finops_lead'},
-          {'persona_id': 'finops_lead', 'overall_rating': 4},
-          {'persona_id': 'finops_lead', 'overall_rating': 'bad', 'verdict': 'APPROVED'},
-          {'persona_id': 'finops_lead', 'overall_rating': 99, 'verdict': 'APPROVED'},
-          {'persona_id': 'finops_lead', 'overall_rating': True, 'verdict': 'APPROVED'},
-          {'persona_id': 'finops_lead', 'overall_rating': 4.5, 'verdict': 'APPROVED'},
-          {'persona_id': 'finops_lead', 'overall_rating': 4, 'verdict': 'LGTM'},
-          {'persona_id': 'not_a_real_persona', 'overall_rating': 5, 'verdict': 'APPROVED'},
-      ])
-      r = client.post('/api/sme_eval/rate', json=bad_rating)
-      assert r.status_code == 422, (bad_rating, r.status_code, r.text[:200])
-      body = r.json()
-      assert body['status'] == 'ERROR'
-      assert body['error_kind'] == 'VALIDATION_ERROR'
-      assert body['is_code_bug'] is False
-      assert len(store.list_ratings()) == before, 'a rejected SME rating must never be recorded'
-      cx.extra_counts['missing_field_validation_checks'] += 1
-    elif sub == 5:
       r = client.post('/api/enable_agent_observability', json={'resource_name': 'invalid/resource/path'})
       assert r.status_code == 200
       assert r.json()['status'] == 'INVALID_REQUEST'

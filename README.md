@@ -36,12 +36,12 @@ flowchart LR
     ASGI["app/fast_api_app.py<br/>ASGI app served by uvicorn"]
     MCP["finops_dashboard/mcp_server.py<br/>/mcp JSON-RPC 2.0, 9 tools<br/>ui://finops-analytics/dashboard"]
     REST["finops_dashboard/server.py<br/>/api/* + /a2a/app + dashboard HTML<br/>finops_dashboard/ui/template.py"]
-    ADK["app/agent.py<br/>ADK root_agent, gemini-3.8-flash"]
+    ADK["app/agent.py<br/>ADK root_agent, gemini-2.5-flash"]
     Collect["Collectors<br/>finops_dashboard/fleet.py, gcp_telemetry.py<br/>ge_mart.py, billing_export.py"]
     Econ["Cost & AlphaEvolve cache rewriter<br/>finops_dashboard/finops.py, prompt_xray.py<br/>telemetry.py RATE_CARDS"]
     Judge["finops_dashboard/validator.py<br/>deterministic checks + Vertex AI judge"]
     Ingest["finops_dashboard/telemetry.py<br/>ingest validation: HTTP 422 + Pub/Sub DLQ"]
-    Sim["Demo simulator (disabled in live mode)<br/>finops_dashboard/optimizer.py<br/>finops_dashboard/long_running_agent.py"]
+    Sim["What-If, NL2SQL & FinOps Linter<br/>finops_dashboard/optimizer.py<br/>finops_dashboard/cli_lint.py"]
   end
 
   subgraph APIS["Google Cloud APIs, called as finops-dashboard-runtime-sa"]
@@ -126,14 +126,14 @@ Across tabs, a freshness chip shows how old the data is ("Live · updated 10 s a
 
 ### 3. Prompt Cache X-Ray, AlphaEvolve Optimization & Telemetry Validator
 - **Prompt Cache X-Ray & AlphaEvolve Rewriter** (`xray_prompt_cache`, `/api/prompt_xray`): compares two prompt snapshots character by character, reports the line and column where dynamic content (timestamps, IDs, unsorted JSON) breaks the cached prefix, and proposes a cache-friendly rewrite. The rewriter (`propose_cache_friendly_rewrite` in [finops_dashboard/prompt_xray.py](finops_dashboard/prompt_xray.py)) was evolved via the **AlphaEvolve** harness in [experiments/prompt_cache_evolve/](experiments/prompt_cache_evolve/), lifting `composite_cache_savings_score` from `0.7321` to `0.9957` across 12 multi-turn enterprise prompt benchmarks (canonicalizing multi-line JSON objects, fenced ```` ```json ```` blocks, and mixed static/volatile JSON keys). Live mode compares logged turns from the prompt-log bucket (`FINOPS_PROMPT_XRAY_LIVE=1`).
-- **Telemetry validator** (`/api/validate_telemetry`): deterministic grounding checks on the dashboard numbers, plus an optional Vertex AI Gemini judge ([finops_dashboard/validator.py](finops_dashboard/validator.py), `FINOPS_JUDGE_MODEL`, default `gemini-3.8-flash`).
+- **Telemetry validator** (`/api/validate_telemetry`): deterministic grounding checks on the dashboard numbers, plus an optional Vertex AI Gemini judge ([finops_dashboard/validator.py](finops_dashboard/validator.py), `FINOPS_JUDGE_MODEL`, default `gemini-2.5-flash`).
 
 ### 4. Instrumentation, Validated Ingest & Cloud Pub/Sub Dead-Letter Queue (SDK & Tools tab)
 - **`@finops_telemetry` decorator**: wraps a sync or async agent handler, measures wall-clock latency, and reads token counts from the handler's return value (a Gemini response's `usage_metadata`, or `prompt_tokens` / `cached_tokens` / `output_tokens` keys). Values the handler does not report stay empty; nothing is filled in.
 - **Validated HTTP ingest & Pub/Sub DLQ**: `POST /api/decorator_ingest`, `/api/aive_log` and `/api/csat_rating` check every field. An invalid body gets HTTP 422, is stored as a values-free dead-letter record (`GET /api/dead_letters`: key names, size and SHA-256 only), and is published to the Cloud Pub/Sub Dead-Letter Queue topic (`projects/PROJECT_ID/topics/finops-ingest-dlq` when `FINOPS_DLQ_PUBSUB_TOPIC` is set).
 
 ### 5. Demo Simulator (Disabled in Live Mode; Preserved on `feature/what-if-simulator`)
-- On a real Google Cloud project (`live_data: true`), all simulator buttons and tabs (`sim-panel`) are hidden in the UI and simulator endpoints (`/api/inject_anomaly`, `/api/step_turn`, `/api/evolve_generation`, `/api/what_if_simulate`, `/api/recompute_finops`) return `DISABLED_IN_LIVE_MODE` (unless `FINOPS_ENABLE_SIMULATOR=1`). The full interactive simulator is preserved on the `feature/what-if-simulator` branch and in offline demo mode.
+- On a real Google Cloud project (`live_data: true`), all simulator buttons and tabs (`sim-panel`) are hidden in the UI and parametric simulator endpoints (`/api/what_if_simulate`, `/api/recompute_finops`) return `DISABLED_IN_LIVE_MODE` (unless `FINOPS_ENABLE_SIMULATOR=1`). The full interactive simulator is preserved on the `feature/what-if-simulator` branch and in offline demo mode.
 
 ### 6. Native Gemini Enterprise MCP App (`ui://finops-analytics/dashboard`)
 - **Streamable HTTP MCP server**: MCP `2025-06-18` and `2025-03-26` at `/mcp`, with 9 tools.
@@ -159,11 +159,10 @@ finops-dashboard-mcp-app/
 │   ├── gcp_telemetry.py         # Cloud Run, Logging and BigQuery collectors
 │   ├── ge_mart.py               # BigQuery finops_mart SQL builders, incremental MERGE & PII masking
 │   ├── prompt_xray.py           # Character-level Prompt Cache X-Ray & AlphaEvolve cache-friendly rewriter
-│   ├── sme_eval.py              # 6-Persona x 5-Dimension (30-check) SME evaluation engine
+│   ├── cli_lint.py              # Standalone CLI & CI/CD gate (finops-lint) for AST FinOps & Prompt Cache X-Ray
 │   ├── telemetry.py             # Rate cards, cache economics, Pub/Sub DLQ, @finops_telemetry
 │   ├── validator.py             # Deterministic checks + LLM-as-judge audit
-│   ├── optimizer.py             # Demo simulator (disabled in live mode) and user analytics
-│   ├── long_running_agent.py    # Multi-turn trajectory simulator
+│   ├── optimizer.py             # User analytics, Gemini NL2SQL & Pre-Built FinOps SQL Recipes
 │   └── ui/
 │       ├── template.py          # Dashboard HTML and main script; inlines the assets below
 │       └── static/              # Dashboard enhancement assets
@@ -189,6 +188,8 @@ finops-dashboard-mcp-app/
 │   ├── setup_mart_refresh.sh    # Hourly BigQuery scheduled query that rebuilds fct_turns
 │   ├── register_ge_agent.sh     # Deploys Custom MCP Data Store (BYO_MCP) & registers it to a GE App instance (A2A opt-in)
 │   ├── setup_mcp_connector.py   # Deploys Custom MCP Data Store (NOT Agent Registry) & links dataStoreIds to GE App instance
+│   ├── terraform/               # Reusable Terraform module for Project/Folder/Org-level log sinks + BigQuery mart
+│   ├── dataform/                # Reusable Dataform package for ds_ge_curated_staging views + incremental finops_mart
 │   └── bigquery/
 │       ├── provision_ge_mart.py # Curated views + finops_mart (apply / refresh / scheduled-query DDL)
 │       ├── verify_ge_mart_invariants.py # 13 conservation & reconciliation invariants across raw/curated/mart
@@ -199,11 +200,11 @@ finops-dashboard-mcp-app/
 │   ├── spec.md                  # Architecture and data-source specification
 │   ├── GE_MART.md               # Gemini Enterprise curated views and reporting mart
 │   ├── LOOKER_STUDIO_GUIDE.md   # 4-page Looker Studio L1/L2 IT Support Dashboard guide
-│   ├── SME_EVALUATION_REPORT.md # 6-Persona x 5-Dimension (30-check) SME evaluation report
 │   ├── TESTING.md               # Requirement -> test map, CI gates
 │   ├── SKILL.md                 # Agent skill reference
 │   └── mcp_spec.json            # MCP tool catalog
 ├── .github/workflows/tests.yml  # CI: full test suite on push and PR
+├── .github/workflows/finops-lint.yml # CI/CD gate: AST FinOps & Prompt Cache X-Ray linter
 ├── Dockerfile
 ├── pyproject.toml, requirements.txt, constraints.txt
 └── agents-cli-manifest.yaml
@@ -263,8 +264,8 @@ Runtime variables are read by the service (set on Cloud Run by `deploy/deploy_cl
 | `FINOPS_BQ_MAX_BYTES_BILLED` | `10737418240` (10 GB) | Default `maximumBytesBilled` for the service's BigQuery REST queries (`0` disables it). Plain-English search always sends its own 100 MB cap. |
 | `FINOPS_RATE_CARDS_JSON` | *(empty)* | Optional JSON that adds or overrides list-price rate cards (`input`, `output`, `cached_read`, `cache_write` per 1M tokens) for the fleet and per-user cost estimates. |
 | `FINOPS_PROMPT_XRAY_LIVE` | *(off)* | `1` lets the Prompt Cache X-Ray read logged prompts from the prompt-log bucket. Those are raw user prompts, so it is opt-in. |
-| `FINOPS_JUDGE_MODEL` | `gemini-3.8-flash` | Model used by the LLM-as-judge audit. |
-| `FINOPS_JUDGE_LOCATION` | `global` | Vertex AI location for the judge model. |
+| `FINOPS_JUDGE_MODEL` | `gemini-2.5-flash` | Model used by the LLM-as-judge audit. |
+| `FINOPS_JUDGE_LOCATION` | `us-central1` | Vertex AI location for the judge model. |
 | `FINOPS_JUDGE_TIMEOUT_S` | `25` | Judge call timeout in seconds. |
 
 **Deploy-script variables** (read by the scripts in `deploy/`, not by the service)
@@ -647,14 +648,14 @@ Safe to re-run. Remove a connector with `python3 deploy/setup_mcp_connector.py -
 | Transport | Streamable HTTP (the only transport Gemini Enterprise supports), JSON-RPC 2.0, MCP `2025-06-18` (also accepts `2025-03-26`) |
 | UI resource | `ui://finops-analytics/dashboard` (`text/html;profile=mcp-app`) |
 
-Read-only tools declare `readOnlyHint`, so they run without a confirmation prompt. `run_alpha_evolve_generation` and `set_agent_trace_logging` change state, so Gemini Enterprise asks the user to confirm them.
+Read-only tools declare `readOnlyHint`, so they run without a confirmation prompt. `set_agent_trace_logging` changes state, so Gemini Enterprise asks the user to confirm it.
 
 Exposed MCP tools (9):
 - `open_dashboard`: renders the FinOps Dashboard dashboard in the Gemini Enterprise right side panel (with Fullscreen and PDF export).
 - `query_ge_agent_fleet`: live inventory and telemetry for all agents in Gemini Enterprise.
 - `query_project_telemetry`: Cloud Run service metrics and BigQuery triage log summaries.
 - `calculate_prompt_cache_economics`: prompt prefix cache hit rates and savings.
-- `run_alpha_evolve_generation`: runs one generation of the optimizer **simulator** on a demo profile (`alpha_evolve`, `opus_critic`, `hybrid_ensemble`). No model is called and nothing is deployed.
+- `lint_agent_finops`: runs static AST FinOps linting (`FIN-01`..`FIN-05`) and optional Prompt Cache X-Ray diffing on agent code and prompt pairs.
 - `get_finops_state`: active agent state, parameters and turn trajectory.
 - `xray_prompt_cache`: character-level Prompt Cache X-Ray diff and cache-friendly rewrite.
 - `list_prompt_snapshot_turns`: lists logged OpenTelemetry prompt snapshot turns for live X-Ray comparison.
@@ -742,18 +743,13 @@ Routes marked **Simulator** act only on the built-in demo profiles. `tests/test_
 | `/api/prompt_xray/live_turns` | `GET` | Logged turns the X-Ray can compare (opt-in: `FINOPS_PROMPT_XRAY_LIVE`) |
 | `/api/what_if_live` | `POST` | Projection from observed model usage (model switch or cache share) |
 | `/api/validate_telemetry` | `GET`, `POST` | Deterministic grounding checks, plus the optional Vertex AI judge (`run_llm_judge`) |
-| `/api/nl2sql` | `POST` | Matches the question to a fixed `SELECT` template. On a real project it runs that query on BigQuery with a 100 MB `maximumBytesBilled` cap |
-| `/api/sme_eval`, `/api/sme_eval/run` | `GET`, `POST` | 30-check scorecard of the dashboard (6 personas x 5 dimensions) plus human ratings |
-| `/api/sme_eval/rate` | `POST` | Records a human SME rating |
+| `/api/nl2sql` | `POST` | Generates read-only SQL via Vertex AI Gemini (`FINOPS_NL2SQL_MODEL`) or matches Pre-Built FinOps SQL Recipes (`PRE_BUILT_FINOPS_SQL_RECIPES`). Guarded by `verify_nl2sql_sql` and a 100 MB `maximumBytesBilled` cap |
 | `/api/tokenomics_cockpit`, `/api/recompute_finops` | `GET`, `POST` | **Simulator**: example-input FinOps cockpit; returns `DISABLED_IN_LIVE_MODE` on a real project |
 | `/api/what_if_simulate` | `POST` | **Simulator**: parametric what-if with example inputs; returns `DISABLED_IN_LIVE_MODE` on a real project |
 | `/api/select_agent` | `POST` | **Simulator**: switches the active demo agent profile (`agent_id`) |
 | `/api/select_optimizer` | `POST` | **Simulator**: switches the simulator mode (`platform_id`: `alpha_evolve`, `opus_critic`, `hybrid_ensemble`) |
 | `/api/add_parameter` | `POST` | **Simulator**: adds a weighted objective to the demo profile |
-| `/api/inject_anomaly` | `POST` | **Simulator**: applies a fixed cache-bust scenario to the demo agent (`DISABLED_IN_LIVE_MODE` on a real project) |
-| `/api/step_turn` | `POST` | **Simulator**: appends one synthetic turn (`DISABLED_IN_LIVE_MODE` on a real project) |
-| `/api/evolve_generation` | `POST` | **Simulator**: runs one generation on the demo agent (`DISABLED_IN_LIVE_MODE` on a real project) |
-| `/api/reset` | `POST` | Resets the simulator, parameters and decorator events to the seed state |
+| `/api/reset` | `POST` | Resets the demo profile, parameters and decorator events to the seed state |
 
 ---
 
@@ -767,7 +763,7 @@ Routes marked **Simulator** act only on the built-in demo profiles. `tests/test_
 - **Dashboard CSP**: `/`, `/ui` and `/app` send `Content-Security-Policy` (scripts and fetches limited to the same origin, `object-src 'none'`, `base-uri 'none'`), `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`.
 - **Read-only plain-English search**: fixed templates, a fail-closed SQL check before every query, a 100 MB billing cap per query, and no query at all when the question contains a write keyword.
 - **Error sanitization**: MCP tool and method failures log the stack trace with a `ref=<id>` and return only the exception class and that reference to the caller.
-- **Human confirmation**: the two MCP tools that change state (`run_alpha_evolve_generation`, `set_agent_trace_logging`) are not marked `readOnlyHint`, so Gemini Enterprise asks the user before running them.
+- **Human confirmation**: the MCP tool that changes state (`set_agent_trace_logging`) is not marked `readOnlyHint`, so Gemini Enterprise asks the user before running it.
 - **Guardrail logs**: the `sink-model-armor-sdp` sink copies Model Armor and Sensitive Data Protection log entries into `ds_security_guardrails_raw`. FinOps Dashboard reads those logs; it does not call Model Armor or DLP itself.
 
 **Known gaps** (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#known-gaps)):

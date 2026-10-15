@@ -31,10 +31,8 @@ from finops_dashboard import (
   agy_finops,
   billing_export,
   gcp_telemetry,
-  long_running_agent,
   mcp_server,
   prompt_xray,
-  sme_eval,
   telemetry,
 )
 from finops_dashboard import finops as live_finops
@@ -242,8 +240,7 @@ class FinOpsRuntimeController:
     self._warmer_started = False
     self._last_fleet_payload: dict[str, Any] | None = None
     self.optimizer = alpha_evolve_optimizer.FinOpsAlphaEvolveOptimizer()
-    self.agent = long_running_agent.LongRunningFinOpsAgent(
-        self.optimizer,
+    self.agent = telemetry.CloudTurnStore(
         agent_name=self.optimizer.active_agent.agent_id,
         model=self.optimizer.active_agent.model,
     )
@@ -531,43 +528,7 @@ class FinOpsRuntimeController:
         bq_insights=bq_insights,
         run_llm_judge=False,
     )
-    payload['sme_evaluation'] = sme_eval.evaluate_persona_rubric(
-        payload,
-        ge_fleet_payload=effective_fleet,
-        rendered_html=ui_template.render_dashboard_html(),
-    )
     return payload
-
-  def get_sme_evaluation(self, run_fresh: bool = False) -> dict[str, Any]:
-    """Returns the 6-persona SME evaluation scorecard (automated rubric + human SME ratings)."""
-    state = self.get_state_payload(include_fleet=True, fast_mcp=False)
-    fleet = state.get('ge_fleet') if isinstance(state.get('ge_fleet'), Mapping) else self._last_fleet_payload
-    return sme_eval.evaluate_persona_rubric(
-        state,
-        ge_fleet_payload=fleet,
-        rendered_html=ui_template.render_dashboard_html(),
-    )
-
-  def submit_sme_rating(self, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """Records a human SME evaluation rating for a persona and returns updated state."""
-    raw = body if isinstance(body, Mapping) else {}
-    try:
-      entry = sme_eval.get_sme_evaluation_store().submit_rating(raw)
-    except ValueError as exc:
-      return build_validation_error_response(
-          '/api/sme_eval/rate',
-          [str(exc)],
-          'Send persona_id (one of finops_lead, sre_platform, ai_engineer, product_quality, security_governance, cfo_exec), '
-          'overall_rating (whole number 1-5) and verdict (APPROVED, APPROVED_WITH_NOTES or NEEDS_WORK). '
-          'Ratings are never defaulted: an SME must state the score explicitly.',
-      )
-    state = self.get_state_payload(include_fleet=False)
-    return {
-        'status': 'recorded',
-        'rating': entry,
-        'sme_evaluation': state.get('sme_evaluation'),
-        'state': state,
-    }
 
   def validate_telemetry(self, run_llm_judge: bool = True) -> dict[str, Any]:
     """Runs the deterministic + optional Vertex AI LLM-as-a-Judge telemetry grounding validator."""
@@ -1067,8 +1028,7 @@ class FinOpsRuntimeController:
     """Switches the active agent being analyzed and optimized."""
     with self._lock:
       self.optimizer.select_agent(agent_id)
-      self.agent = long_running_agent.LongRunningFinOpsAgent(
-          self.optimizer,
+      self.agent = telemetry.CloudTurnStore(
           agent_name=self.optimizer.active_agent.agent_id,
           model=self.optimizer.active_agent.model,
       )
@@ -1123,44 +1083,6 @@ class FinOpsRuntimeController:
   @staticmethod
   def _simulator_enabled_in_live_mode() -> bool:
     return os.environ.get('FINOPS_ENABLE_SIMULATOR', '').strip().lower() in ('1', 'true', 'yes', 'on')
-
-  def inject_anomaly(self) -> dict[str, Any]:
-    """Simulator: applies the fixed cache-bust scenario to the active demo agent."""
-    if self._is_live_gcp() and not self._simulator_enabled_in_live_mode():
-      return {
-          'status': 'DISABLED_IN_LIVE_MODE',
-          'reason': 'Synthetic anomaly injection is disabled when connected to a live Google Cloud project.',
-      }
-    with self._lock:
-      self.optimizer.inject_anomaly()
-    return self.get_state_payload(include_fleet=False)
-
-  def step_turn(self) -> dict[str, Any]:
-    """Simulator: appends one synthetic turn (hidden in live mode) and returns updated state."""
-    if self._is_live_gcp() and not self._simulator_enabled_in_live_mode():
-      return {
-          'status': 'DISABLED_IN_LIVE_MODE',
-          'reason': 'Synthetic turn stepping is disabled when connected to a live Google Cloud project.',
-      }
-    with self._lock:
-      self.agent.step_turn()
-    return self.get_state_payload(include_fleet=False)
-
-  def evolve_generation(self) -> dict[str, Any]:
-    """Simulator: runs one optimizer generation on the demo agent and appends a synthetic turn."""
-    if self._is_live_gcp() and not self._simulator_enabled_in_live_mode():
-      return {
-          'status': 'DISABLED_IN_LIVE_MODE',
-          'reason': (
-              'The synthetic demo optimizer is disabled when connected to a live Google Cloud project. '
-              'Use /api/prompt_xray (evolved via AlphaEvolve in experiments/prompt_cache_evolve/) or '
-              '/api/what_if_live for live optimization.'
-          ),
-      }
-    with self._lock:
-      self.optimizer.run_next_generation()
-      self.agent.step_turn()
-    return self.get_state_payload(include_fleet=False)
 
   def dead_letters_payload(self) -> dict[str, Any]:
     """Returns rejected ingest dead-letter events and configured Cloud Pub/Sub DLQ topic."""
@@ -1259,30 +1181,24 @@ class FinOpsRuntimeController:
     }
 
   def reset(self) -> dict[str, Any]:
-    """Resets the optimizer and agent trajectory to the initial seed state (simulator only).
-
-    Fails closed in live mode: a reset also clears ingested SDK decorator events, AIVE logs and every
-    recorded SME rating, which are real evidence when connected to a live Google Cloud project.
-    """
+    """Resets the optimizer catalog and ingested SDK events (disabled in live mode)."""
     if self._is_live_gcp() and not self._simulator_enabled_in_live_mode():
       return {
           'status': 'DISABLED_IN_LIVE_MODE',
           'reason': (
-              'Resetting the demo simulator is disabled when connected to a live Google Cloud project: '
-              'it would also discard ingested SDK events, AIVE logs and recorded SME ratings. '
+              'Resetting the demo state is disabled when connected to a live Google Cloud project: '
+              'it would also discard ingested SDK events and AIVE logs. '
               'Set FINOPS_ENABLE_SIMULATOR=1 to allow it explicitly.'
           ),
       }
     with self._lock:
       self.optimizer = alpha_evolve_optimizer.FinOpsAlphaEvolveOptimizer()
-      self.agent = long_running_agent.LongRunningFinOpsAgent(
-          self.optimizer,
+      self.agent = telemetry.CloudTurnStore(
           agent_name=self.optimizer.active_agent.agent_id,
           model=self.optimizer.active_agent.model,
       )
       telemetry.reset_decorator_events()
       telemetry.reset_aive_logs()
-      sme_eval.get_sme_evaluation_store().clear()
     return self.get_state_payload(include_fleet=False)
 
 
@@ -1424,10 +1340,6 @@ class FinOpsRequestHandler(http.server.BaseHTTPRequestHandler):
       run_judge = ge_fleet.parse_bool((query.get('run_llm_judge') or [''])[0])
       self._send_json(srv.controller.validate_telemetry(run_llm_judge=run_judge))
       return
-    if path == '/api/sme_eval':
-      fresh = ge_fleet.parse_bool((query.get('fresh') or [''])[0])
-      self._send_json(srv.controller.get_sme_evaluation(run_fresh=fresh))
-      return
     if path == '/api/prompt_xray/live_turns':
       self._send_json(srv.controller.prompt_xray_live_turns())
       return
@@ -1437,7 +1349,7 @@ class FinOpsRequestHandler(http.server.BaseHTTPRequestHandler):
     self.send_error(404, 'Not Found')
 
   def do_POST(self) -> None:  # pylint: disable=invalid-name
-    """Serves POST routes for ingest, agent selection, custom parameters, GCP sync, and the simulator."""
+    """Serves POST routes for ingest, agent selection, custom parameters, and GCP sync."""
     try:
       self._handle_post()
     except Exception as exc:  # pylint: disable=broad-except
@@ -1477,13 +1389,6 @@ class FinOpsRequestHandler(http.server.BaseHTTPRequestHandler):
       run_judge = bool(body.get('run_llm_judge', body.get('llm_judge', True)))
       self._send_json(srv.controller.validate_telemetry(run_llm_judge=run_judge))
       return
-    if self.path == '/api/sme_eval/run':
-      self._send_json(srv.controller.get_sme_evaluation(run_fresh=True))
-      return
-    if self.path == '/api/sme_eval/rate':
-      res = srv.controller.submit_sme_rating(body)
-      self._send_json(res, status=422 if res.get('status') == 'ERROR' else 200)
-      return
     if self.path == '/api/select_agent':
       agent_id = str(body.get('agent_id', 'it_service_desk'))
       self._send_json(srv.controller.select_agent(agent_id))
@@ -1514,15 +1419,6 @@ class FinOpsRequestHandler(http.server.BaseHTTPRequestHandler):
         self._send_json(build_validation_error_response('/api/add_parameter', errors), status=422)
         return
       self._send_json(srv.controller.add_parameter(**parsed_params))
-      return
-    if self.path == '/api/inject_anomaly':
-      self._send_json(srv.controller.inject_anomaly())
-      return
-    if self.path == '/api/step_turn':
-      self._send_json(srv.controller.step_turn())
-      return
-    if self.path == '/api/evolve_generation':
-      self._send_json(srv.controller.evolve_generation())
       return
     if self.path == '/api/reset':
       self._send_json(srv.controller.reset())
@@ -1618,8 +1514,8 @@ def build_agent_card(request_base_url: str | None = None) -> dict[str, Any]:
       'displayName': 'FinOps & Tokenomics Analytics Platform',
       'description': (
           'Live Gemini Enterprise agent fleet observability (agent inventory joined with real Cloud '
-          'Monitoring and Cloud Logging telemetry), prompt cache FinOps economics, and an optimizer '
-          'simulator (synthetic numbers), with an interactive MCP App dashboard.'
+          'Monitoring, Cloud Logging, and BigQuery finops_mart telemetry), prompt cache FinOps economics, '
+          'and static AST FinOps linting, with an interactive MCP App dashboard.'
       ),
       'url': a2a_url,
       'version': '1.1.0',
@@ -1633,7 +1529,7 @@ def build_agent_card(request_base_url: str | None = None) -> dict[str, Any]:
               'description': (
                   'CRITICAL: Always call this tool whenever the user asks to see, open, or inspect the '
                   'FinOps & Tokenomics Analytics Dashboard, or asks for the Gemini Enterprise agent fleet, '
-                  'agent telemetry, prompt cache economics, or the optimizer simulator in the interactive UI.'
+                  'agent telemetry, or prompt cache economics in the interactive UI.'
               ),
               'tags': ['analytics', 'dashboard', 'finops', 'optimization'],
           },
@@ -1663,13 +1559,13 @@ def build_agent_card(request_base_url: str | None = None) -> dict[str, Any]:
               'tags': ['economics', 'cache', 'pricing'],
           },
           {
-              'id': 'run_alpha_evolve_generation',
-              'name': 'run_alpha_evolve_generation',
+              'id': 'lint_agent_finops',
+              'name': 'lint_agent_finops',
               'description': (
-                  'Optimizer simulator: one generation of fixed improvement factors on a demo agent profile '
-                  '(synthetic numbers; no model is called and no agent is changed).'
+                  'Runs static AST FinOps linting (FIN-01..FIN-05) on Python agent code and Prompt Cache X-Ray '
+                  'prefix diffing for CI/CD gating.'
               ),
-              'tags': ['simulator', 'optimization'],
+              'tags': ['linter', 'ast', 'cache', 'ci_cd'],
           },
       ],
   }
@@ -1868,21 +1764,6 @@ def register_api_routes(app: Any, controller: FinOpsRuntimeController) -> None:
     run_judge = bool(body.get('run_llm_judge', body.get('llm_judge', True)))
     return controller.validate_telemetry(run_llm_judge=run_judge)
 
-  @app.get('/api/sme_eval')
-  def get_sme_eval(fresh: str | None = None):
-    return controller.get_sme_evaluation(run_fresh=ge_fleet.parse_bool(fresh))
-
-  @app.post('/api/sme_eval/run')
-  def post_sme_eval_run():
-    return controller.get_sme_evaluation(run_fresh=True)
-
-  @app.post('/api/sme_eval/rate')
-  def post_sme_eval_rate(payload: Any = fastapi.Body(default=None)):
-    res = controller.submit_sme_rating(_as_body(payload))
-    if res.get('status') == 'ERROR':
-      return JSONResponse(status_code=422, content=res)
-    return res
-
   @app.post('/api/add_parameter')
   def post_add_parameter(payload: Any = fastapi.Body(default=None)):
     parsed_params, errors = _parse_add_parameter_body(_as_body(payload))
@@ -1892,18 +1773,6 @@ def register_api_routes(app: Any, controller: FinOpsRuntimeController) -> None:
           content=build_validation_error_response('/api/add_parameter', errors),
       )
     return controller.add_parameter(**parsed_params)
-
-  @app.post('/api/inject_anomaly')
-  def post_inject_anomaly():
-    return controller.inject_anomaly()
-
-  @app.post('/api/step_turn')
-  def post_step_turn():
-    return controller.step_turn()
-
-  @app.post('/api/evolve_generation')
-  def post_evolve_generation():
-    return controller.evolve_generation()
 
   @app.post('/api/reset')
   def post_reset():

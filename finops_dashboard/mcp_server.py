@@ -4,8 +4,7 @@ Enables Gemini Enterprise and AI clients to connect to FinOps Dashboard as a BYO
 - Serves the streamable HTTP JSON-RPC 2.0 endpoint at `/mcp`
 - Publishes interactive MCP UI resource `ui://finops-analytics/dashboard`
 - Implements MCP Tools: `open_dashboard`, `query_ge_agent_fleet`, `query_project_telemetry`,
-  `calculate_prompt_cache_economics`, `run_alpha_evolve_generation` (an optimizer simulator with synthetic
-  numbers; the name is kept so existing connectors keep working), `get_finops_state`, `xray_prompt_cache`,
+  `calculate_prompt_cache_economics`, `lint_agent_finops`, `get_finops_state`, `xray_prompt_cache`,
   `list_prompt_snapshot_turns` and `set_agent_trace_logging`.
 """
 
@@ -21,9 +20,8 @@ from typing import Any
 
 from starlette.responses import JSONResponse, Response
 
+from finops_dashboard import cli_lint, telemetry
 from finops_dashboard import fleet as ge_fleet
-from finops_dashboard import optimizer as alpha_evolve_optimizer
-from finops_dashboard import telemetry
 from finops_dashboard.ui import template as ui_template
 
 logger = logging.getLogger('finops-mcp')
@@ -345,7 +343,7 @@ async def _tool_calculate_cache_economics(session_key: str, args: dict[str, Any]
   Nothing is assumed: omitted output or thought counts are 0, and a model without a rate card is
   reported as unpriced instead of being priced with another model's card.
   """
-  model = str(args.get('model') or 'gemini-3.8-flash')
+  model = str(args.get('model') or 'gemini-2.5-flash')
   prompt_tok = _safe_nonneg_int(args.get('prompt_token_count'), 0)
   cached_tok = min(prompt_tok, _safe_nonneg_int(args.get('cached_content_token_count'), 0))
   output_tok = _safe_nonneg_int(args.get('output_token_count'), 0)
@@ -396,38 +394,31 @@ async def _tool_calculate_cache_economics(session_key: str, args: dict[str, Any]
   }
 
 
-async def _tool_run_alpha_evolve_generation(session_key: str, args: dict[str, Any]) -> dict[str, Any]:
-  """Runs one generation of the optimizer simulator (synthetic numbers) on a demo agent profile."""
-  ctrl = _get_controller()
-  agent_id = args.get('agent_id')
-  if agent_id:
-    await asyncio.to_thread(ctrl.select_agent, str(agent_id))
-  platform_id = args.get('platform_id')
-  if platform_id:
-    await asyncio.to_thread(ctrl.select_optimizer, str(platform_id))
-
-  evolved_state = await asyncio.to_thread(ctrl.evolve_generation)
-  if evolved_state.get('status') == 'DISABLED_IN_LIVE_MODE':
-    return {
-        'content': [{'type': 'text', 'text': str(evolved_state.get('reason') or 'Disabled in live mode.')}],
-        'structuredContent': evolved_state,
-    }
-  active = evolved_state.get('active_agent', {})
-  timeline = active.get('timeline', [])
-  latest_gen = timeline[-1] if timeline else {}
-  actions = active.get('actions', [])
-  latest_action = actions[0] if actions else {}
-
+async def _tool_lint_agent_finops(session_key: str, args: dict[str, Any]) -> dict[str, Any]:
+  """Runs static AST FinOps linting (FIN-01..FIN-05) and optional Prompt Cache X-Ray."""
+  code_snippet = str(args.get('code_snippet') or '')
+  file_path = str(args.get('file_path') or '').strip()
+  prev_prompt = str(args.get('previous_prompt') or '')
+  curr_prompt = str(args.get('current_prompt') or '')
+  model = str(args.get('model') or 'gemini-2.5-flash')
+  paths: list[str] = [file_path] if file_path else []
+  if not paths and not code_snippet.strip():
+    paths = [os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'app')]
+  report = await asyncio.to_thread(
+      cli_lint.lint_code_and_prompts,
+      paths=paths,
+      code_snippet=code_snippet if code_snippet.strip() else None,
+      prev_prompt=prev_prompt if prev_prompt.strip() else None,
+      curr_prompt=curr_prompt if curr_prompt.strip() else None,
+      model=model,
+  )
   text_summary = (
-      f"SIMULATED generation {latest_gen.get('generation')} for demo profile "
-      f"`{active.get('display_name') or active.get('agent_id')}`.\n"
-      f"- Status: {active.get('health_status')}\n"
-      f"- Simulated change: {latest_action.get('impact_summary')}\n"
-      f"- {alpha_evolve_optimizer.SIMULATOR_NOTE}"
+      f"FinOps Lint Verdict: {report['status']} "
+      f"(scanned {report['scanned_files_count']} files, {report['findings_count']} AST findings)."
   )
   return {
       'content': [{'type': 'text', 'text': text_summary}],
-      'structuredContent': evolved_state,
+      'structuredContent': report,
   }
 
 
@@ -628,7 +619,7 @@ _TOOLS: list[dict[str, Any]] = [
                 },
                 'model': {
                     'type': 'string',
-                    'description': "Model id with a rate card (default 'gemini-3.8-flash').",
+                    'description': "Model id with a rate card (default 'gemini-2.5-flash').",
                 },
             },
             'required': ['prompt_token_count', 'cached_content_token_count'],
@@ -637,29 +628,42 @@ _TOOLS: list[dict[str, Any]] = [
         'handler': _tool_calculate_cache_economics,
     },
     {
-        'name': 'run_alpha_evolve_generation',
-        'title': 'Run Optimizer Simulator (one generation)',
+        'name': 'lint_agent_finops',
+        'title': 'Run Static AST FinOps Linter & Prompt Cache Gate',
         'description': (
-            'SIMULATOR: runs one generation of the built-in optimizer simulator on a demo agent profile. '
-            'It applies fixed improvement factors to synthetic parameters; it does not call AlphaEvolve or any '
-            'model, read logs, or change any agent. Always tell the user the numbers are simulated.'
+            'Scans Python agent code for FinOps anti-patterns (FIN-01 missing thinking_budget cap, '
+            'FIN-02 unbounded conversation history, FIN-03 volatile timestamp/UUID in system prompt prefix, '
+            'FIN-04 Pro model without Flash tier router, FIN-05 LLM call missing retry/backoff) and optionally '
+            'runs Prompt Cache X-Ray diffing between two prompt snapshots.'
         ),
         'visibility': ['model', 'app'],
         'inputSchema': {
             'type': 'object',
             'properties': {
-                'agent_id': {
+                'code_snippet': {
                     'type': 'string',
-                    'description': "Optional demo agent profile: 'it_service_desk', 'finops_analytics', or 'deep_research'.",
+                    'description': 'Optional inline Python source code to scan for FinOps AST findings.',
                 },
-                'platform_id': {
+                'file_path': {
                     'type': 'string',
-                    'description': "Optional simulated method: 'alpha_evolve', 'opus_critic', or 'hybrid_ensemble'.",
+                    'description': 'Optional Python file or directory path to scan (defaults to app/).',
+                },
+                'previous_prompt': {
+                    'type': 'string',
+                    'description': 'Optional Turn N-1 prompt text for Prompt Cache X-Ray diffing.',
+                },
+                'current_prompt': {
+                    'type': 'string',
+                    'description': 'Optional Turn N prompt text for Prompt Cache X-Ray diffing.',
+                },
+                'model': {
+                    'type': 'string',
+                    'description': "Model rate card for token cache pricing (default 'gemini-2.5-flash').",
                 },
             },
         },
-        'annotations': _STATEFUL_LOCAL,
-        'handler': _tool_run_alpha_evolve_generation,
+        'annotations': _READ_ONLY_LOCAL,
+        'handler': _tool_lint_agent_finops,
     },
     {
         'name': 'get_finops_state',
@@ -693,7 +697,7 @@ _TOOLS: list[dict[str, Any]] = [
                     'description': 'Instead of text: event id of a logged turn from list_prompt_snapshot_turns.',
                 },
                 'current_event_id': {'type': 'string', 'description': 'Event id of the later logged turn.'},
-                'model': {'type': 'string', 'description': "Rate card model (default 'gemini-3.8-flash')."},
+                'model': {'type': 'string', 'description': "Rate card model (default 'gemini-2.5-flash')."},
                 'monthly_requests': {
                     'type': 'integer',
                     'description': 'Optional request volume per month; without it no monthly figure is given.',
@@ -805,11 +809,11 @@ def _tool_descriptor(tool: dict[str, Any]) -> dict[str, Any]:
 _SYSTEM_INSTRUCTION = """\
 CRITICAL: Always call `open_dashboard` FIRST whenever the user asks to open, \
 view, or inspect the FinOps Analytics Platform, or asks for the Gemini Enterprise agent fleet, \
-agent telemetry, FinOps prompt cache economics, or the optimizer simulator for their Google Cloud \
+agent telemetry, or FinOps prompt cache economics for their Google Cloud \
 project. Do NOT skip `open_dashboard`. Calling `open_dashboard` opens the interactive dashboard \
-(live agent fleet telemetry plus an optimizer simulator) directly in Gemini Enterprise's side panel. \
-Tell the user the FinOps Dashboard dashboard is open and summarize the fleet numbers it returns. \
-`run_alpha_evolve_generation` is a simulator: say its numbers are simulated whenever you report them.
+directly in Gemini Enterprise's side panel. \
+Tell the user the FinOps Dashboard is open and summarize the fleet numbers it returns. \
+Use `lint_agent_finops` to run static AST FinOps checks (FIN-01..FIN-05) and Prompt Cache X-Ray gating.
 """
 
 

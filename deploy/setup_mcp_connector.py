@@ -65,7 +65,7 @@ ALL_TOOLS = (
     'query_project_telemetry',
     'calculate_prompt_cache_economics',
     'get_finops_state',
-    'run_alpha_evolve_generation',
+    'lint_agent_finops',
     'xray_prompt_cache',
     'list_prompt_snapshot_turns',
     'set_agent_trace_logging',

@@ -713,12 +713,6 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <button class="btn" id="syncGcpBtn" onclick="syncGcpTelemetry()" title="Sync GCP Telemetry (Cloud Monitoring, BigQuery, Gemini Enterprise)">
         Refresh
       </button>
-      <button class="btn btn-danger adv-only sim-panel" onclick="triggerApi('/api/inject_anomaly')" title="Simulator: applies a fixed cache-bust scenario to the demo agent (synthetic numbers)">
-        Simulate Alert
-      </button>
-      <button class="btn btn-primary adv-only sim-panel" onclick="triggerApi('/api/evolve_generation')" title="Simulator: one generation of fixed improvement factors on the demo agent; nothing is deployed">
-        Run Optimizer (simulated)
-      </button>
       <button class="btn adv-only sim-panel" onclick="triggerApi('/api/reset')">
         Reset
       </button>
@@ -774,7 +768,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="kpi-grid" id="northStarUnitEconKpis" style="margin-bottom:10px;"></div>
 
       <details class="role-disclosure" id="roleGuideDisclosure">
-        <summary>Role Guide, 7-Step Workflow &amp; SME Persona Evaluation Scorecard (FinOps, SRE, AI Engineer, Product, Security, Executive)</summary>
+        <summary>Role Guide &amp; 7-Step FinOps Workflow (FinOps, SRE, AI Engineer, Product, Security, Executive)</summary>
         <div style="margin-top:10px;">
           <div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;margin-bottom:6px;">
             Choose Your Role (where to start and what to check):
@@ -782,85 +776,6 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           <div id="smePersonaLensBar" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;"></div>
           <div id="smePersonaPlaybookCard" class="action-box" style="margin-bottom:10px;"></div>
           <div id="workflowStepsRibbon" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;margin-bottom:12px;"></div>
-
-          <div id="smeEvalScorecardPanel" style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
-              <div>
-                <div style="font-size:12.5px;font-weight:700;color:var(--text-primary);">
-                  SME Multi-Persona Evaluation &amp; Rating Scorecard (6 Personas &times; 5 Rubric Dimensions = 30 Checks)
-                </div>
-                <div style="font-size:11.5px;color:var(--text-secondary);">
-                  Deterministic compliance rubric (Time-to-Insight, Actionability, Data Trust, Ergonomics, Guardrails) paired with live SME reviewer ratings.
-                </div>
-              </div>
-              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                <span id="smeEvalSummaryBadge" class="badge badge-green">Evaluating 30/30 Checks...</span>
-                <button id="smeEvalRunBtn" class="btn" style="padding:4px 10px;font-size:11.5px;" onclick="runSmePersonaAudit()">Re-run 30-Check Persona Audit</button>
-              </div>
-            </div>
-
-            <div class="table-wrap" style="margin-bottom:12px;">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Persona &amp; Primary Tab</th>
-                    <th>Critical User Journey (CUJ) Tested</th>
-                    <th>5-Dimension Rubric Breakdown (20 pts each)</th>
-                    <th class="right">Automated Score</th>
-                    <th class="right">Human SME Rating</th>
-                  </tr>
-                </thead>
-                <tbody id="smeEvalMatrixBody"></tbody>
-              </table>
-            </div>
-
-            <div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:10px;">
-              <div style="font-size:11.5px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">
-                Submit SME Persona Evaluation &amp; Sign-Off Rating (Stored in Live Session Ledger)
-              </div>
-              <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-                <select id="smeEvalPersonaSelect" style="padding:6px 8px;border:1px solid var(--input-border);border-radius:6px;font-size:12px;">
-                  <option value="finops_lead">FinOps &amp; Cloud Economics Lead</option>
-                  <option value="sre_platform">SRE &amp; Agent Platform Engineer</option>
-                  <option value="ai_engineer">AI / Prompt &amp; ADK Agent Engineer</option>
-                  <option value="product_quality">Product Manager &amp; VoC Quality Lead</option>
-                  <option value="security_governance">Security, Governance &amp; Data Privacy Auditor</option>
-                  <option value="cfo_exec">VP Engineering / Executive Sponsor</option>
-                </select>
-                <input id="smeEvalReviewerInput" type="text" placeholder="SME Reviewer (e.g. reviewer@example.com)" style="padding:6px 8px;border:1px solid var(--input-border);border-radius:6px;font-size:12px;min-width:190px;" />
-                <select id="smeEvalRatingSelect" style="padding:6px 8px;border:1px solid var(--input-border);border-radius:6px;font-size:12px;">
-                  <option value="5">5 / 5 &mdash; Exceeds Expectations</option>
-                  <option value="4">4 / 5 &mdash; Meets Expectations</option>
-                  <option value="3">3 / 5 &mdash; Acceptable with Minor Gaps</option>
-                  <option value="2">2 / 5 &mdash; Friction / Missing Metric</option>
-                  <option value="1">1 / 5 &mdash; Blocks Workflow</option>
-                </select>
-                <select id="smeEvalVerdictSelect" style="padding:6px 8px;border:1px solid var(--input-border);border-radius:6px;font-size:12px;">
-                  <option value="APPROVED">APPROVED</option>
-                  <option value="APPROVED_WITH_NOTES">APPROVED_WITH_NOTES</option>
-                  <option value="NEEDS_WORK">NEEDS_WORK</option>
-                </select>
-                <input id="smeEvalNotesInput" type="text" placeholder="Evaluation notes / CUJ feedback..." style="flex:1;min-width:200px;padding:6px 8px;border:1px solid var(--input-border);border-radius:6px;font-size:12px;" />
-                <button id="smeEvalSubmitBtn" class="btn btn-primary" style="padding:6px 12px;font-size:12px;" onclick="submitSmePersonaRating()">Submit SME Rating</button>
-              </div>
-            </div>
-
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Timestamp</th>
-                    <th>SME Reviewer</th>
-                    <th>Persona Evaluated</th>
-                    <th class="right">Rating</th>
-                    <th>Verdict</th>
-                    <th>Evaluation Notes</th>
-                  </tr>
-                </thead>
-                <tbody id="smeEvalRatingsBody"></tbody>
-              </table>
-            </div>
-          </div>
         </div>
       </details>
 
@@ -1404,7 +1319,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
             <button class="btn px-seg-btn active" id="pxSrcPaste" onclick="pxSetSource('paste')">Paste two prompts</button>
             <button class="btn px-seg-btn" id="pxSrcLive" onclick="pxSetSource('live')">Logged turns (OTel + GCS)</button>
           </div>
-          <label class="px-field">Model <select id="pxModel"><option value="gemini-3.8-flash">gemini-3.8-flash</option></select></label>
+          <label class="px-field">Model <select id="pxModel"><option value="gemini-2.5-flash">gemini-2.5-flash</option></select></label>
           <label class="px-field">Requests / month <input id="pxMonthly" type="number" min="0" step="1000" placeholder="optional"></label>
           <button class="btn" id="pxExampleBtn" onclick="pxLoadExample()">Load example</button>
           <button class="btn btn-primary" id="pxRunBtn" onclick="runPromptXray()">Run X-Ray</button>
@@ -1555,9 +1470,6 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
             <span>Turn-by-Turn Prompt Cache Check (<span class="mono">detect_prefix_breakpoint</span>)</span>
             <div style="display:flex;gap:8px;align-items:center;">
               <span class="badge badge-blue">Line-by-Line Prompt Cache Check</span>
-              <button class="btn btn-primary sim-panel" id="stepTurnBtn" onclick="triggerApi('/api/step_turn')" style="padding:4px 10px;font-size:11.5px;" title="Simulator: appends one synthetic turn (hidden in live mode)">
-                + Step Simulated Turn
-              </button>
             </div>
           </div>
           <div style="font-size:12px;color:var(--text-secondary);">
@@ -3303,10 +3215,10 @@ __FINOPS_ENHANCEMENTS_JS__
       }
       pxExample = pxLive && pxLive.example ? pxLive.example : null;
       const models = (pxLive && pxLive.available_models && pxLive.available_models.length)
-        ? pxLive.available_models : ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'];
+        ? pxLive.available_models : ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3.8-flash'];
       const sel = document.getElementById('pxModel');
       if (sel) {
-        const keep = sel.value || (pxLive && pxLive.default_model) || 'gemini-3.8-flash';
+        const keep = sel.value || (pxLive && pxLive.default_model) || 'gemini-2.5-flash';
         sel.replaceChildren();
         models.forEach(function(m) {
           const opt = document.createElement('option');
@@ -3372,7 +3284,7 @@ __FINOPS_ENHANCEMENTS_JS__
     function pxAnalyzeLocally(body) {
       const prev = String(body.previous_prompt || '');
       const curr = String(body.current_prompt || '');
-      const model = String(body.model || 'gemini-3.8-flash');
+      const model = String(body.model || 'gemini-2.5-flash');
       const monthly = Number(body.monthly_requests || 0);
       let idx = 0;
       const minLen = Math.min(prev.length, curr.length);
@@ -3913,241 +3825,8 @@ __FINOPS_ENHANCEMENTS_JS__
 
     function selectSmePersona(personaId) {
       activeSmePersonaId = personaId;
-      const sel = document.getElementById('smeEvalPersonaSelect');
-      if (sel) sel.value = personaId;
       if (currentState) {
         renderSmePersonaSelector(currentState.persona_playbooks);
-      }
-    }
-
-    function renderSmeEvaluation(ev) {
-      if (!ev) return;
-      const panel = document.getElementById('smeEvalScorecardPanel');
-      if (panel) panel.style.display = 'block';
-      const badge = document.getElementById('smeEvalSummaryBadge');
-      if (badge) {
-        const passed = ev.passed_checks ?? 0;
-        const total = ev.total_checks ?? '—';
-        const score = ev.composite_automated_score_100 ?? 0;
-        const smeAvg = (ev.sme_overall_avg_rating_5 !== null && ev.sme_overall_avg_rating_5 !== undefined)
-          ? (ev.sme_overall_avg_rating_5 + '/5 SME (' + (ev.sme_total_ratings_submitted || 0) + ')')
-          : '0 SME ratings';
-        badge.className = (ev.overall_compliance_status === 'COMPLIANT') ? 'badge badge-green' : 'badge badge-yellow';
-        badge.textContent = (ev.overall_compliance_status || 'EVALUATED') + ' • ' + score + '/100 (' + passed + '/' + total + ' checks) • ' + smeAvg;
-      }
-
-      const matrixBody = document.getElementById('smeEvalMatrixBody');
-      if (matrixBody && Array.isArray(ev.personas)) {
-        matrixBody.replaceChildren();
-        ev.personas.forEach(function(p) {
-          const tr = document.createElement('tr');
-          const tdRole = document.createElement('td');
-          const roleTitle = el('div', null, [el('strong', null, [p.role_title || p.persona_id])]);
-          const tabJumpBtn = el('button', 'btn', ['Open ' + (p.primary_tab_name || 'Tab')]);
-          tabJumpBtn.style.padding = '2px 7px';
-          tabJumpBtn.style.fontSize = '11px';
-          tabJumpBtn.style.marginTop = '4px';
-          tabJumpBtn.onclick = function() {
-            selectSmePersona(p.persona_id);
-            if (typeof p.primary_tab_index === 'number') {
-              switchTab(p.primary_tab_index);
-            }
-          };
-          tdRole.appendChild(roleTitle);
-          tdRole.appendChild(tabJumpBtn);
-
-          const tdCuj = document.createElement('td');
-          tdCuj.style.fontSize = '11.5px';
-          tdCuj.textContent = p.cuj_task || '';
-
-          const tdDims = document.createElement('td');
-          const dimWrap = el('div', null, []);
-          dimWrap.style.display = 'flex';
-          dimWrap.style.gap = '4px';
-          dimWrap.style.flexWrap = 'wrap';
-          (p.dimensions || []).forEach(function(d) {
-            const pill = el('span', d.passed ? 'badge badge-green' : 'badge badge-red', [
-              (d.dimension_label || d.dimension_id) + ': ' + d.points_awarded + '/' + d.points_possible
-            ]);
-            pill.title = d.evidence || '';
-            dimWrap.appendChild(pill);
-          });
-          tdDims.appendChild(dimWrap);
-
-          const tdScore = document.createElement('td');
-          tdScore.className = 'right mono';
-          const statusCls = (p.compliance_status === 'COMPLIANT') ? 'badge badge-green' : 'badge badge-yellow';
-          tdScore.appendChild(el('span', statusCls, [(p.automated_score_100 ?? 0) + '/100 ' + (p.compliance_status || '')]));
-
-          const tdSme = document.createElement('td');
-          tdSme.className = 'right mono';
-          if (p.avg_sme_rating_5 !== null && p.avg_sme_rating_5 !== undefined) {
-            tdSme.textContent = p.avg_sme_rating_5 + ' / 5 (' + (p.sme_rating_count || 0) + ') • ' + (p.latest_sme_verdict || '—');
-          } else {
-            tdSme.textContent = 'Unrated (0)';
-          }
-
-          tr.appendChild(tdRole);
-          tr.appendChild(tdCuj);
-          tr.appendChild(tdDims);
-          tr.appendChild(tdScore);
-          tr.appendChild(tdSme);
-          matrixBody.appendChild(tr);
-        });
-      }
-
-      const ratingsBody = document.getElementById('smeEvalRatingsBody');
-      if (ratingsBody) {
-        ratingsBody.replaceChildren();
-        const ratings = Array.isArray(ev.recent_sme_ratings) ? ev.recent_sme_ratings : [];
-        if (ratings.length === 0) {
-          const tr = document.createElement('tr');
-          const td = document.createElement('td');
-          td.colSpan = 6;
-          td.style.color = 'var(--text-secondary)';
-          td.textContent = 'No human SME ratings recorded in this session yet. Select a persona above, test its workflow tab, and submit a rating.';
-          tr.appendChild(td);
-          ratingsBody.appendChild(tr);
-        } else {
-          ratings.forEach(function(r) {
-            const tr = document.createElement('tr');
-            const tdTs = el('td', 'mono', [r.submitted_at || '']);
-            const tdRev = el('td', 'mono', [r.reviewer || '']);
-            const tdRole = el('td', null, [r.role_title || r.persona_id || '']);
-            const tdRate = el('td', 'right mono', [orDash(r.overall_rating, ' / 5')]);
-            const verdCls = r.verdict === 'NEEDS_WORK' ? 'badge badge-red' : r.verdict === 'APPROVED' ? 'badge badge-green' : 'badge badge-blue';
-            const tdVerd = el('td', null, [el('span', verdCls, [r.verdict || '—'])]);
-            const tdNotes = el('td', null, [r.notes || '']);
-            tr.appendChild(tdTs);
-            tr.appendChild(tdRev);
-            tr.appendChild(tdRole);
-            tr.appendChild(tdRate);
-            tr.appendChild(tdVerd);
-            tr.appendChild(tdNotes);
-            ratingsBody.appendChild(tr);
-          });
-        }
-      }
-    }
-
-    async function runSmePersonaAudit() {
-      const btn = document.getElementById('smeEvalRunBtn');
-      const origText = btn ? btn.textContent : 'Re-Run All 6 SME Persona Audits';
-      if (btn) {
-        btn.disabled = true;
-        btn.textContent = 'Running Audits...';
-      }
-      let updated = false;
-      try {
-        if (!isEmbedded()) {
-          const res = await fetch('/api/sme_eval/run', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: '{}',
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (currentState) currentState.sme_evaluation = data;
-            renderSmeEvaluation(data);
-            updated = true;
-          }
-        }
-      } catch (err) {
-        updated = false;
-      }
-      if (!updated && currentState && currentState.sme_evaluation) {
-        const sme = currentState.sme_evaluation;
-        if (sme.summary) {
-          sme.summary.evaluated_at = new Date().toISOString();
-        }
-        renderSmeEvaluation(sme);
-        updated = true;
-      }
-      if (btn) {
-        btn.disabled = false;
-        btn.textContent = updated ? 'Audits Verified \u2713' : origText;
-        if (updated) {
-          setTimeout(function() { btn.textContent = origText; }, 1800);
-        }
-      }
-    }
-
-    async function submitSmePersonaRating() {
-      const personaEl = document.getElementById('smeEvalPersonaSelect');
-      const reviewerEl = document.getElementById('smeEvalReviewerInput');
-      const ratingEl = document.getElementById('smeEvalRatingSelect');
-      const verdictEl = document.getElementById('smeEvalVerdictSelect');
-      const notesEl = document.getElementById('smeEvalNotesInput');
-      const submitBtn = document.getElementById('smeEvalSubmitBtn');
-      const origText = submitBtn ? submitBtn.textContent : 'Submit SME Rating';
-      if (submitBtn) {
-        submitBtn.disabled = true;
-        submitBtn.textContent = 'Submitting...';
-      }
-      const payload = {
-        persona_id: personaEl ? personaEl.value : activeSmePersonaId,
-        reviewer: (reviewerEl && reviewerEl.value.trim()) ? reviewerEl.value.trim() : 'anonymous_sme',
-        overall_rating: ratingEl ? parseInt(ratingEl.value, 10) : 5,
-        verdict: verdictEl ? verdictEl.value : 'APPROVED',
-        task_completed: true,
-        notes: notesEl ? notesEl.value.trim() : '',
-      };
-      let submitted = false;
-      try {
-        if (!isEmbedded()) {
-          const res = await fetch('/api/sme_eval/rate', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(payload),
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (data.state) {
-              currentState = data.state;
-              renderState(currentState);
-            } else if (data.sme_evaluation) {
-              renderSmeEvaluation(data.sme_evaluation);
-            }
-            if (notesEl) notesEl.value = '';
-            submitted = true;
-          }
-        }
-      } catch (err) {
-        submitted = false;
-      }
-      if (!submitted && currentState) {
-        currentState.sme_evaluation = currentState.sme_evaluation || {summary: {}, personas: [], ratings: [], recent_sme_ratings: []};
-        const sme = currentState.sme_evaluation;
-        sme.ratings = Array.isArray(sme.ratings) ? sme.ratings : [];
-        sme.recent_sme_ratings = Array.isArray(sme.recent_sme_ratings) ? sme.recent_sme_ratings : [];
-        const pMatch = (sme.personas || []).find(function(p) { return p.persona_id === payload.persona_id; });
-        const entry = {
-          submitted_at: new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC',
-          persona_id: payload.persona_id,
-          role_title: pMatch ? pMatch.role_title : payload.persona_id,
-          reviewer: payload.reviewer,
-          overall_rating: payload.overall_rating,
-          verdict: payload.verdict,
-          notes: payload.notes,
-        };
-        sme.ratings.unshift(entry);
-        sme.recent_sme_ratings.unshift(entry);
-        sme.summary = sme.summary || {};
-        sme.summary.human_ratings_count = sme.ratings.length;
-        const avg = sme.ratings.reduce(function(acc, r) { return acc + Number(r.overall_rating || 0); }, 0) / sme.ratings.length;
-        sme.summary.avg_human_rating = Math.round(avg * 100) / 100;
-        sme.sme_total_ratings_submitted = sme.ratings.length;
-        sme.sme_overall_avg_rating_5 = sme.summary.avg_human_rating;
-        renderSmeEvaluation(sme);
-        if (notesEl) notesEl.value = '';
-        submitted = true;
-      }
-      if (submitBtn) {
-        submitBtn.disabled = false;
-        submitBtn.textContent = submitted ? 'Submitted \u2713' : origText;
-        if (submitted) {
-          setTimeout(function() { submitBtn.textContent = origText; }, 1800);
-        }
       }
     }
 
@@ -4200,11 +3879,6 @@ __FINOPS_ENHANCEMENTS_JS__
       // 00. Telemetry Grounding & LLM-as-a-Judge Validator
       if (state.telemetry_validation) {
         renderTelemetryValidation(state.telemetry_validation);
-      }
-
-      // 00b. Multi-Persona SME Evaluation & Rating Scorecard
-      if (state.sme_evaluation) {
-        renderSmeEvaluation(state.sme_evaluation);
       }
 
       // 0. SME Persona Lens Selector & Operational Playbook
@@ -6913,11 +6587,11 @@ __FINOPS_ENHANCEMENTS_JS__
       const baseUsd = Number((mu.totals && mu.totals.est_cost_usd) || 0);
       const interval = mu.interval || null;
       if (body.kind === 'cache_share') {
-        const mName = body.model || (models[0] && models[0].model) || 'gemini-3.8-flash';
+        const mName = body.model || (models[0] && models[0].model) || 'gemini-2.5-flash';
         const row = models.find(function(x) { return x.model === mName; }) || models[0] || {
           model: mName, input_tokens: 120000, cached_tokens: 12000, output_tokens: 24000, est_cost_usd: baseUsd,
         };
-        const rc = cards[row.model] || cards['gemini-3.8-flash'];
+        const rc = cards[row.model] || cards['gemini-2.5-flash'];
         const inTok = Number(row.input_tokens || 0);
         const curCached = Number(row.cached_tokens || 0);
         const curShare = inTok > 0 ? Math.round((curCached / inTok) * 1000) / 10 : 0;
@@ -6941,12 +6615,12 @@ __FINOPS_ENHANCEMENTS_JS__
         };
       }
       const fromName = body.from_model || (models[0] && models[0].model) || 'gemini-2.5-pro';
-      const toName = body.to_model || 'gemini-3.8-flash';
+      const toName = body.to_model || 'gemini-2.5-flash';
       const sharePct = Math.max(0, Math.min(100, Number(body.share_pct != null ? body.share_pct : 0)));
       const row = models.find(function(x) { return x.model === fromName; }) || models[0] || {
         model: fromName, input_tokens: 100000, cached_tokens: 0, output_tokens: 20000, est_cost_usd: baseUsd,
       };
-      const toRc = cards[toName] || cards['gemini-3.8-flash'];
+      const toRc = cards[toName] || cards['gemini-2.5-flash'];
       const frac = sharePct / 100;
       const movedBefore = Number(row.est_cost_usd || 0) * frac;
       const movedIn = (Number(row.input_tokens || 0) - Number(row.cached_tokens || 0)) * frac;
@@ -7775,26 +7449,6 @@ __FINOPS_ENHANCEMENTS_JS__
     async function triggerApi(endpoint, payload = {}) {
       if (isEmbedded()) {
         if (applyEmbeddedMutation(endpoint, payload)) return;
-        if (endpoint === '/api/evolve_generation' && currentState && currentState.active_agent) {
-          // The embedded view can't call the HTTP API; run the simulator through the MCP tool instead.
-          const activePlatId = (currentState.optimizer_platforms && currentState.optimizer_platforms.active_platform_id) || 'alpha_evolve';
-          callHost('tools/call', {
-            name: 'run_alpha_evolve_generation',
-            arguments: {agent_id: currentState.active_agent.agent_id, platform_id: activePlatId},
-          }, 15000).then(function(res) {
-            const nextState = res && !res.isError && res.structuredContent
-              ? (res.structuredContent.state || res.structuredContent) : null;
-            if (nextState && nextState.active_agent) {
-              if (!nextState.ge_fleet && currentState && currentState.ge_fleet) {
-                nextState.ge_fleet = currentState.ge_fleet;
-              }
-              renderState(nextState);
-            } else {
-              showApiNotice('The simulator tool returned no result.');
-            }
-          }).catch(function(err) { showApiNotice('Simulator tool call failed: ' + err); });
-          return;
-        }
         showApiNotice('This action is not available in the embedded view. Open the dashboard URL in a browser tab to use it.');
         return;
       }

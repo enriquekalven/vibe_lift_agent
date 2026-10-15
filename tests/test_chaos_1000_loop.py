@@ -64,7 +64,7 @@ class TestChaos1000Loop(unittest.TestCase):
     self.assertGreaterEqual(extra['missing_field_validation_checks'], 30)
     self.assertGreaterEqual(extra['bigquery_error_translation_checks'], 30)
     self.assertGreaterEqual(extra['llm_judge_non_override_checks'], 20)
-    self.assertGreaterEqual(len(report['live_policy_post_routes']), 25)
+    self.assertGreaterEqual(len(report['live_policy_post_routes']), 20)
 
 
 if __name__ == '__main__':

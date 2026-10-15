@@ -1448,3 +1448,85 @@ def with_analytics_logging(
     return _sync_wrapper
 
   return _decorator
+
+
+class CloudTurnStore:
+  """In-memory turn buffer populated strictly from live GCP Cloud Logging/Trace turns."""
+
+  def __init__(
+      self,
+      agent_name: str = 'ge_customer_support_copilot',
+      model: str = 'gemini-2.5-flash',
+      max_turns: int = 35,
+  ) -> None:
+    self.agent_name = agent_name
+    self.model = model
+    self.max_turns = max_turns
+    self.turns: list[TurnUsageLog] = []
+    self.step_descriptions: list[dict[str, Any]] = []
+
+  def reset(self) -> None:
+    """Clears all buffered turns and step descriptions."""
+    self.turns = []
+    self.step_descriptions = []
+
+  def ingest_gcp_cloud_turns(
+      self, cloud_turns: list[Any] | None
+  ) -> int:
+    """Updates turn buffer with real turn-by-turn usage extracted from GCP Cloud Logging/Trace."""
+    if not cloud_turns:
+      return 0
+    real_logs: list[TurnUsageLog] = []
+    real_steps: list[dict[str, Any]] = []
+    seen_keys: set[tuple[str, str, int, str]] = set()
+    for idx, t in enumerate(cloud_turns, start=1):
+      if isinstance(t, TurnUsageLog):
+        log = t
+        turn_num = log.turn_index
+        model_name = log.model
+        phase = 'GCP Cloud Trace / Logging Turn'
+        desc = f'Live telemetry turn from {model_name}'
+      elif isinstance(t, dict):
+        turn_num = int(t.get('turn_number') or t.get('turn_index') or idx)
+        model_name = str(t.get('model') or self.model)
+        in_tok = int(t.get('input_tokens') or t.get('prompt_token_count') or 0)
+        cached_tok = int(t.get('cached_tokens') or t.get('cached_content_token_count') or 0)
+        out_tok = int(t.get('output_tokens') or t.get('candidates_token_count') or 0)
+        log = TurnUsageLog(
+            timestamp=str(t.get('timestamp') or datetime.datetime.now(datetime.UTC).isoformat()),
+            agent_name=str(t.get('agent_name') or self.agent_name),
+            model=model_name,
+            turn_index=turn_num,
+            prompt_prefix_hash=str(t.get('prompt_prefix_hash') or f'turn-{turn_num}'),
+            cache_breakpoint_line=t.get('cache_breakpoint_line'),
+            cache_breakpoint_reason=str(t.get('cache_breakpoint_reason') or 'NONE'),
+            prompt_token_count=in_tok,
+            cached_content_token_count=cached_tok,
+            cache_creation_input_tokens=int(t.get('cache_creation_input_tokens') or 0),
+            uncached_input_tokens=max(0, in_tok - cached_tok),
+            candidates_token_count=out_tok,
+            thoughts_token_count=int(t.get('thoughts_token_count') or 0),
+            status_code=int(t.get('status_code') or 200),
+            tool_called=str(t.get('tool_called') or 'query'),
+            evolution_generation=int(t.get('evolution_generation') or 0),
+        )
+        phase = str(t.get('phase') or 'GCP Cloud Trace / Logging Turn')
+        desc = str(t.get('description') or f'Live telemetry turn from {model_name}')
+      else:
+        continue
+      dedupe_key = (log.timestamp, log.agent_name, log.turn_index, log.prompt_prefix_hash)
+      if dedupe_key in seen_keys:
+        continue
+      seen_keys.add(dedupe_key)
+      real_logs.append(log)
+      real_steps.append({
+          'turn_number': turn_num,
+          'phase': phase,
+          'description': desc,
+      })
+    if self.max_turns and len(real_logs) > self.max_turns:
+      real_logs = real_logs[-self.max_turns :]
+      real_steps = real_steps[-self.max_turns :]
+    self.turns = real_logs
+    self.step_descriptions = real_steps
+    return len(real_logs)

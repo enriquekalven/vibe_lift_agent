@@ -1,0 +1,51 @@
+config {
+  type: "view",
+  schema: dataform.projectConfig.vars.mart_dataset,
+  name: "v_fct_turns",
+  description: "Unified turn fact view joining v_user_activity_curated, v_agentic_operations_curated, v_consolidated_audit_log, and v_model_armor_curated (see deploy/bigquery/ge_mart/mart/v_fct_turns.sql for full CTE pipeline).",
+  dependencies: [
+    "v_user_activity_curated",
+    "v_agentic_operations_curated",
+    "v_consolidated_audit_log",
+    "v_model_armor_curated"
+  ]
+}
+
+-- Compiled from deploy/bigquery/ge_mart/mart/v_fct_turns.sql with Dataform dataset references:
+--   curated = ${dataform.projectConfig.defaultProject}.${dataform.projectConfig.vars.curated_dataset}
+--   mart    = ${dataform.projectConfig.defaultProject}.${dataform.projectConfig.vars.mart_dataset}
+SELECT
+  a.event_id AS turn_id,
+  'USER_ACTIVITY' AS turn_source,
+  a.interaction_kind AS turn_kind,
+  a.event_timestamp,
+  DATE(a.event_timestamp) AS event_date,
+  a.trace_id,
+  a.span_id,
+  a.session_id,
+  a.user_email,
+  a.location,
+  a.engine_id,
+  IF(a.engine_id IS NULL, NULL, CONCAT(COALESCE(a.location, '?'), '/', a.engine_id)) AS engine_key,
+  a.project_ref,
+  COALESCE(a.agent_name, i.agent_name) AS agent_name,
+  COALESCE(a.agent_id, i.agent_resource_id) AS agent_id,
+  a.is_core_assistant,
+  COALESCE(i.model_name, a.model_name) AS model_name,
+  a.turn_status,
+  a.turn_status IN ('FAILED', 'ERROR', 'MODEL_ERROR', 'RATE_LIMITED') AS is_failed,
+  a.turn_status IN ('FAILED', 'ERROR', 'MODEL_ERROR', 'RATE_LIMITED') AS is_actionable_issue,
+  COALESCE(m.armor_blocks > 0, FALSE) AS is_guardrail_blocked,
+  i.llm_calls,
+  i.input_tokens,
+  i.output_tokens,
+  i.cached_input_tokens,
+  i.reasoning_tokens,
+  i.total_tokens,
+  i.tool_call_count,
+  i.tool_failure_count
+FROM ${ref("v_user_activity_curated")} AS a
+LEFT JOIN ${ref("v_agentic_operations_curated")} AS i
+  ON i.trace_id = a.trace_id
+LEFT JOIN ${ref("v_model_armor_curated")} AS m
+  ON m.trace_id = a.trace_id

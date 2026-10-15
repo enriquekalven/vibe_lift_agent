@@ -1,0 +1,17 @@
+config {
+  type: "table",
+  schema: dataform.projectConfig.vars.mart_dataset,
+  name: "fct_turns",
+  description: "Materialized FinOps turn fact table rebuilt from v_fct_turns with partition and cluster keys for sub-second dashboard pushdown queries.",
+  bigquery: {
+    partitionBy: "event_date",
+    clusterBy: ["engine_key", "agent_id", "model_name"]
+  },
+  dependencies: ["v_fct_turns"]
+}
+
+-- Canonical SQL definition mirrored from deploy/bigquery/ge_mart/mart/fct_turns.sql
+SELECT
+  *,
+  CURRENT_TIMESTAMP() AS refreshed_at
+FROM ${ref("v_fct_turns")}

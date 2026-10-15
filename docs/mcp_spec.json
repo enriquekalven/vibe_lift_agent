@@ -75,7 +75,7 @@
           },
           "model": {
             "type": "string",
-            "description": "Gemini model identifier (e.g. 'gemini-3.8-flash')."
+            "description": "Gemini model identifier (e.g. 'gemini-2.5-flash')."
           }
         },
         "required": [
@@ -85,20 +85,31 @@
       }
     },
     {
-      "name": "run_alpha_evolve_generation",
-      "description": "Executes the next AlphaEvolve evolutionary optimization cycle on prompt prefixes, schema pruning, and multi-objective performance parameters for the active agent.",
+      "name": "lint_agent_finops",
+      "description": "Runs the standalone FinOps AST Linter (FIN-01..FIN-05) on Python agent code and optionally runs the character-level Prompt Cache X-Ray & AlphaEvolve cache-friendly rewriter across two prompt turns.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "agent_id": {
+          "code_snippet": {
             "type": "string",
-            "description": "Optional Gemini Enterprise agent identifier: 'it_service_desk', 'finops_analytics', or 'deep_research'."
+            "description": "Python source code of an ADK / Vertex AI / LangChain agent to scan for FinOps anti-patterns."
           },
-          "platform_id": {
+          "previous_prompt": {
             "type": "string",
-            "description": "Optional optimization platform ID: 'alpha_evolve', 'opus_critic', or 'hybrid_ensemble'."
+            "description": "Optional Turn N-1 prompt text for character-level Prompt Cache X-Ray."
+          },
+          "current_prompt": {
+            "type": "string",
+            "description": "Optional Turn N prompt text for character-level Prompt Cache X-Ray."
+          },
+          "model": {
+            "type": "string",
+            "description": "Model identifier for cache savings calculation (default 'gemini-2.5-flash')."
           }
-        }
+        },
+        "required": [
+          "code_snippet"
+        ]
       }
     },
     {

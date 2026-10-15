@@ -105,13 +105,13 @@ def evaluate(instance: dict) -> dict:
               f"Priced cache economics response missed tool figures (expected ratio={ratio_str}%, saved=${saved_str})."
           )
 
-    elif tool_name == "trigger_alpha_evolve_cycle" and isinstance(payload, dict):
+    elif tool_name == "lint_agent_finops" and isinstance(payload, dict):
       checks_total += 1
-      if any(kw in lower for kw in ("simulat", "synthetic", "demo profile")):
+      if any(kw in lower for kw in ("fin-01", "fin-02", "fin-03", "fin-04", "fin-05", "pass", "fail", "finding")):
         checks_passed += 1
-        reasons.append("Optimizer simulator response explicitly disclosed simulated/synthetic nature.")
+        reasons.append("FinOps AST linter response accurately reported rule findings and status.")
       else:
-        reasons.append("Optimizer simulator response failed to disclose that numbers are simulated/synthetic.")
+        reasons.append("FinOps AST linter response did not report rule findings or status.")
 
     elif tool_name in ("xray_prompt_cache", "detect_prompt_breakpoint") and isinstance(payload, dict):
       checks_total += 1

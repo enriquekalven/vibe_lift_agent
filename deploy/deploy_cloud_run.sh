@@ -53,7 +53,7 @@ if [[ "${FINOPS_SKIP_TESTS:-0}" == "1" ]]; then
   warn "FINOPS_SKIP_TESTS=1: deploying WITHOUT running the test suite."
 else
   echo "Running bytecode, lint, and test suite before deploy..."
-  python3 -m compileall -q app finops tests deploy/bigquery
+  python3 -m compileall -q app finops_dashboard tests deploy/bigquery
   if command -v ruff &>/dev/null; then
     ruff check .
   elif [[ -x "${HOME}/.local/bin/ruff" ]]; then

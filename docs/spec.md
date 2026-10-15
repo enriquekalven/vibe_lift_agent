@@ -49,7 +49,7 @@ counted once in totals (`finops_dashboard.fleet.runtime_backend_key`).
 `POST /api/validate_telemetry` runs rule-based checks on `/api/state` (provenance of every
 user row, request totals match per-runtime sums, no fake URIs, and so on). With
 `run_llm_judge: true` it also asks Vertex AI Gemini (`FINOPS_JUDGE_MODEL`, default
-`gemini-3.8-flash`) to review a digest. The LLM can only lower the verdict. If it is
+`gemini-2.5-flash`) to review a digest. The LLM can only lower the verdict. If it is
 unavailable, the reason is returned in `llm_judge.judge_error` and shown in the UI.
 
 ## Configuration
@@ -60,7 +60,7 @@ unavailable, the reason is returned in `llm_judge.judge_error` and shown in the 
 | `FINOPS_GE_ENGINES` | `auto` | GE apps (`auto` or `loc/engine_id,...`) |
 | `FINOPS_GE_LOCATIONS` | `global,us,eu` | Regions scanned by auto-discovery |
 | `FINOPS_BILLING_EXPORT_TABLE` | unset | `project.dataset.table` of the billing export |
-| `FINOPS_JUDGE_MODEL` / `_LOCATION` / `_TIMEOUT_S` | `gemini-3.8-flash` / `global` / `25` | LLM judge |
+| `FINOPS_JUDGE_MODEL` / `_LOCATION` / `_TIMEOUT_S` | `gemini-2.5-flash` / `us-central1` / `25` | LLM judge |
 
 Runtime service account roles: Discovery Engine viewer, Monitoring viewer, BigQuery data
 viewer + job user, `roles/aiplatform.user` (judge), and BigQuery data viewer on the

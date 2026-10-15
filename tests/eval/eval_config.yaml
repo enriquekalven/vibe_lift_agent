@@ -15,7 +15,7 @@ custom_metrics:
   - name: finops_grounding_contract
     custom_function_file: grounding_metric.py
 
-  # 3. Local LLM-as-judge (1 - 5 scale) via Vertex AI gemini-3.8-flash
+  # 3. Local LLM-as-judge (1 - 5 scale) via Vertex AI gemini-2.5-flash
   - name: custom_response_quality
     custom_function_file: response_quality.py
 

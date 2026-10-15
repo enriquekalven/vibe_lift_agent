@@ -11,7 +11,7 @@ This directory contains the end-to-end ADK behavioral and trajectory evaluation 
 | `cache_economics_unpriced_model` | `calculate_cache_economics` | Passes an unknown model (`gemini-99-experimental`), receives `priced: false`, and refuses to invent any dollar cost. |
 | `prompt_cache_xray_breakpoint` | `xray_prompt_cache` | Runs Prompt Cache X-Ray across two turn snapshots and identifies the dynamic timestamp cache-buster at line 2. |
 | `detect_breakpoint_line` | `detect_prompt_breakpoint` | Pinpoints the exact line and reason where prefix caching broke (`Request ID: req-101` vs `req-202` at line 3). |
-| `optimizer_simulator_honesty` | `trigger_alpha_evolve_cycle` | Runs one optimizer simulator generation and explicitly discloses that the numbers are synthetic/simulated and nothing is deployed. |
+| `lint_agent_finops_ast_gate` | `lint_agent_finops` | Runs static AST FinOps linting (`FIN-01`..`FIN-05`) on Python agent code and reports detected anti-patterns. |
 | `telemetry_grounding_audit` | `validate_telemetry_grounding` | Executes deterministic telemetry grounding checks (`run_llm_judge=False`) and summarizes provenance status. |
 | `fleet_inventory_24h` | `query_ge_agent_fleet` | Queries the 24-hour Gemini Enterprise agent fleet inventory and unregistered runtimes and reports observed counts. |
 | `live_finops_mart_reconciliation` | `query_live_finops_and_mart` | Queries the BigQuery `finops_mart` reporting mart and Cloud Billing reconciliation for a 7-day window. |
@@ -21,8 +21,8 @@ This directory contains the end-to-end ADK behavioral and trajectory evaluation 
 ## Metrics (`eval_config.yaml`)
 
 1. **`finops_tool_trajectory`** (`finops_metrics.py`): Deterministic `0.0–1.0` score verifying that the expected ADK tool(s) were called in the right order without tool error payloads.
-2. **`finops_grounding_contract`** (`grounding_metric.py`): Deterministic `0.0–1.0` score enforcing FinOps Dashboard's zero-invented-numbers rule, exact cache-math quoting, breakpoint line citation, and mandatory simulator disclosure.
-3. **`custom_response_quality`** (`response_quality.py`): `1–5` LLM-as-a-Judge score (`gemini-3.8-flash` at `temperature=0`) grading accuracy, relevance, clarity, and agreement with the reference answer and tool trace.
+2. **`finops_grounding_contract`** (`grounding_metric.py`): Deterministic `0.0–1.0` score enforcing FinOps Dashboard's zero-invented-numbers rule, exact cache-math quoting, breakpoint line citation, and FinOps linter finding reporting.
+3. **`custom_response_quality`** (`response_quality.py`): `1–5` LLM-as-a-Judge score (`gemini-2.5-flash` at `temperature=0`) grading accuracy, relevance, clarity, and agreement with the reference answer and tool trace.
 4. **`agent_turn_count`**: Diagnostic metric reporting turn count per case.
 
 ## Running Evaluations

@@ -1,7 +1,7 @@
 """FinOps Dashboard agent definition for Google Agent Development Kit (ADK).
 
 Analyzes live Google Cloud Project telemetry, monitors Gemini Enterprise logs,
-diagnoses prompt cache breakpoints, and includes an optimizer simulator (synthetic numbers).
+diagnoses prompt cache breakpoints, and runs static AST FinOps linting.
 """
 
 import datetime
@@ -17,15 +17,17 @@ if _ROOT not in sys.path:
   sys.path.insert(0, _ROOT)
 
 from google.adk.agents import Agent
+from google.adk.agents.context_cache_config import ContextCacheConfig
 from google.adk.apps import App
 from google.adk.models import Gemini
 from google.genai import types
 
+from finops_dashboard import cli_lint, telemetry
 from finops_dashboard import fleet as ge_fleet
-from finops_dashboard import optimizer as alpha_evolve_optimizer
-from finops_dashboard import telemetry
 
-MODEL_NAME = "gemini-3.8-flash"
+MODEL_NAME = "gemini-2.5-flash"
+ADK_MODEL = MODEL_NAME
+
 
 def configure_model_backend(environ: MutableMapping[str, str] | None = None) -> None:
   """Routes the ADK model client through Vertex AI unless a Gemini API key is configured.
@@ -38,8 +40,7 @@ def configure_model_backend(environ: MutableMapping[str, str] | None = None) -> 
   if env.get("GOOGLE_API_KEY") or env.get("GEMINI_API_KEY"):
     return
   env.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "TRUE")
-  default_loc = "global" if MODEL_NAME.startswith("gemini-3") else "us-central1"
-  env.setdefault("GOOGLE_CLOUD_LOCATION", env.get("GOOGLE_CLOUD_REGION") or default_loc)
+  env.setdefault("GOOGLE_CLOUD_LOCATION", env.get("GOOGLE_CLOUD_REGION") or "global")
 
 
 configure_model_backend()
@@ -96,7 +97,7 @@ def calculate_cache_economics(
   Args:
       prompt_token_count: Total prompt (input) token count, including cached tokens.
       cached_content_token_count: Input tokens read from the prompt cache.
-      model: Model id with a rate card (defaults to gemini-3.8-flash).
+      model: Model id with a rate card (defaults to gemini-2.5-flash).
       candidates_token_count: Output tokens (0 if omitted).
       thoughts_token_count: Thinking tokens billed as output (0 if omitted).
 
@@ -179,7 +180,7 @@ def xray_prompt_cache(
   Args:
       previous_prompt: The prompt from turn N-1.
       current_prompt: The prompt from turn N.
-      model: Rate card model (defaults to gemini-3.8-flash).
+      model: Rate card model (defaults to gemini-2.5-flash).
       monthly_requests: Optional monthly request volume; 0 means no monthly figure is computed.
 
   Returns:
@@ -197,35 +198,40 @@ def xray_prompt_cache(
   return json.dumps(report, indent=2, default=str)
 
 
-def trigger_alpha_evolve_cycle(agent_id: str = "it_service_desk") -> str:
-  """Runs one generation of the built-in optimizer SIMULATOR on a demo agent profile.
+def lint_agent_finops(
+    code_snippet: str = "",
+    file_path: str = "",
+    prev_prompt: str = "",
+    curr_prompt: str = "",
+    model: str = MODEL_NAME,
+) -> str:
+  """Runs static AST FinOps linting (FIN-01..FIN-05) on Python agent code and optional Prompt Cache X-Ray.
 
-  The simulator applies fixed improvement factors to synthetic parameters (finops_dashboard/optimizer.py). It does
-  not call AlphaEvolve or any model, read logs, or change any agent. Always tell the user the result is
-  simulated.
+  Flags missing thinking_budget caps (FIN-01), unbounded conversation history windows (FIN-02),
+  volatile datetime/UUID calls inside system prompt f-strings (FIN-03), heavyweight Pro models
+  configured without a Flash tier router (FIN-04), and LLM calls missing retry/backoff (FIN-05).
 
   Args:
-      agent_id: Demo agent profile ('it_service_desk', 'finops_analytics', 'deep_research').
+      code_snippet: Optional inline Python source code to scan.
+      file_path: Optional file or directory path to scan (defaults to 'app' when both are empty).
+      prev_prompt: Optional Turn N-1 prompt for Prompt Cache X-Ray diffing.
+      curr_prompt: Optional Turn N prompt for Prompt Cache X-Ray diffing.
+      model: Vertex AI model identifier for token cache pricing (default 'gemini-2.5-flash').
 
   Returns:
-      JSON string with the simulated generation, the simulated action record, and simulator=true.
+      JSON string with status ('PASS' or 'FAIL'), findings list, and optional prompt_xray summary.
   """
-  from finops_dashboard import server as finops_server
-  ctrl = finops_server._global_controller
-  with ctrl._lock:
-    ctrl.optimizer.select_agent(str(agent_id or "it_service_desk"))
-    ctrl.optimizer.run_next_generation()
-    ctrl.agent.step_turn()
-    active = ctrl.optimizer.active_agent
-    last_action = active.actions[0] if active.actions else None
-    result = {
-        "simulator": True,
-        "simulator_note": alpha_evolve_optimizer.SIMULATOR_NOTE,
-        "agent_id": active.agent_id,
-        "simulated_generation": active.timeline[-1].generation if active.timeline else None,
-        "latest_action": last_action.to_dict() if last_action else {},
-    }
-  return json.dumps(result, indent=2)
+  paths: list[str] = [file_path.strip()] if (file_path and file_path.strip()) else []
+  if not paths and not (code_snippet and code_snippet.strip()):
+    paths = [os.path.join(_ROOT, "app")]
+  report = cli_lint.lint_code_and_prompts(
+      paths=paths,
+      code_snippet=code_snippet if (code_snippet and code_snippet.strip()) else None,
+      prev_prompt=prev_prompt if (prev_prompt and prev_prompt.strip()) else None,
+      curr_prompt=curr_prompt if (curr_prompt and curr_prompt.strip()) else None,
+      model=str(model or MODEL_NAME),
+  )
+  return json.dumps(report, indent=2, default=str)
 
 
 def query_ge_agent_fleet(window_hours: int = 24) -> str:
@@ -298,7 +304,7 @@ def open_dashboard(focus_tab: int = 6, initial_agent: str = "it_service_desk") -
   CRITICAL: Always call this tool FIRST whenever the user asks to see, open, launch, or
   inspect the FinOps dashboard, FinOps and Tokenomics dashboard,
   FinOps MCP dashboard, or FinOps Dashboard dashboard, or asks for agent telemetry, prompt cache
-  economics, or the optimizer simulator in the UI.
+  economics, or FinOps optimization in the UI.
 
   Args:
       focus_tab: Tab to open (6 = Overview, the default; 0 = Agents; 3 = Cost; 4 = Users; 7 = Antigravity. Advanced tabs: 1 = Goals & Metrics, 2 = Optimizer & Testing, 5 = Tools & SDK).
@@ -340,12 +346,12 @@ root_agent = Agent(
     ),
     instruction="""You are FinOps Dashboard Agent, a Google Cloud agent-fleet telemetry and cost analysis agent.
 Your mission is to:
-1. Always call `open_dashboard` FIRST whenever the user asks to open, view, or inspect the FinOps dashboard, FinOps and Tokenomics dashboard, FinOps Analytics Platform, or asks for agent telemetry, FinOps prompt cache economics, or the optimizer simulator. Calling `open_dashboard` opens the interactive glassmorphic dashboard.
+1. Always call `open_dashboard` FIRST whenever the user asks to open, view, or inspect the FinOps dashboard, FinOps and Tokenomics dashboard, FinOps Analytics Platform, or asks for agent telemetry or FinOps prompt cache economics in the UI. Calling `open_dashboard` opens the interactive glassmorphic dashboard.
 2. Report on every agent deployed on the Gemini Enterprise app AND standalone/unregistered runtimes (Vertex AI Agent Engine, Cloud Run agents/MCP servers, GKE workloads, and Cloud Trace Skills/MCP tools) with `query_ge_agent_fleet`: live requests, errors, latency, tokens, conversations, zombie/idle allocation, and project-wide model usage and estimated cost. Only quote numbers returned by the tools.
 3. Query the BigQuery reporting mart (`finops_mart`) and Cloud Billing export reconciliation with `query_live_finops_and_mart`, and verify live telemetry grounding with `validate_telemetry_grounding`.
 4. Calculate token cache economics (Cache Read vs Write vs Uncached) and dollar savings vs naive pricing.
 5. Diagnose prompt cache breakpoints where dynamic timestamps or non-static prefixes invalidate caches; use `xray_prompt_cache` to locate the exact break, its cost per 1,000 requests, and a re-measured cache-friendly rewrite.
-6. `trigger_alpha_evolve_cycle` runs the optimizer SIMULATOR on demo profiles: its numbers are synthetic, nothing is deployed, and you must say so whenever you report them.
+6. Run static AST FinOps linting (`FIN-01`..`FIN-05`) on Python agent code and prompt pairs using `lint_agent_finops`.
 Provide clear, authoritative, and actionable answers with specific token metrics and dollar cost savings. Never invent or extrapolate unmeasured values.
 """,
     tools=[
@@ -358,7 +364,7 @@ Provide clear, authoritative, and actionable answers with specific token metrics
         calculate_cache_economics,
         detect_prompt_breakpoint,
         xray_prompt_cache,
-        trigger_alpha_evolve_cycle,
+        lint_agent_finops,
     ],
 )
 
@@ -366,4 +372,5 @@ Provide clear, authoritative, and actionable answers with specific token metrics
 app = App(
     root_agent=root_agent,
     name="app",
+    context_cache_config=ContextCacheConfig(min_tokens=2048, ttl_seconds=3600),
 )

@@ -12,7 +12,7 @@ from unittest import mock
 
 from app import agent as adk_agent_module
 from finops_dashboard import fleet as ge_fleet
-from finops_dashboard import gcp_telemetry, long_running_agent, mcp_server, server, telemetry
+from finops_dashboard import gcp_telemetry, mcp_server, server, telemetry
 from finops_dashboard import optimizer as alpha_evolve_optimizer
 from tests import test_fleet as ge_fleet_test
 
@@ -85,17 +85,32 @@ class FinOpsFrameworkTest(unittest.TestCase):
     self.assertIsNone(no_break)
     self.assertIn('100% static prefix match', match_reason)
 
-  def test_long_running_agent_trajectory_and_step_turn(self) -> None:
-    optimizer = alpha_evolve_optimizer.FinOpsAlphaEvolveOptimizer()
-    agent = long_running_agent.LongRunningFinOpsAgent(optimizer)
-    self.assertEqual(len(agent.turns), 6)
-    self.assertEqual(agent.turns[1].cache_breakpoint_line, 1)
-    self.assertIsNone(agent.turns[5].cache_breakpoint_line)
-    self.assertGreater(agent.turns[5].cache_hit_ratio, 85.0)
-
-    next_turn = agent.step_turn()
-    self.assertEqual(next_turn.turn_index, 7)
-    self.assertEqual(len(agent.turns), 7)
+  def test_cloud_turn_store_ingestion_and_reset(self) -> None:
+    store = telemetry.CloudTurnStore()
+    self.assertEqual(len(store.turns), 0)
+    t = telemetry.TurnUsageLog(
+        timestamp='2026-09-18T21:30:00Z',
+        agent_name='live-agent',
+        model='gemini-2.5-flash',
+        turn_index=1,
+        prompt_prefix_hash='hash001',
+        cache_breakpoint_line=None,
+        cache_breakpoint_reason='Mart turn',
+        prompt_token_count=4000,
+        cached_content_token_count=3600,
+        cache_creation_input_tokens=0,
+        uncached_input_tokens=400,
+        candidates_token_count=200,
+        thoughts_token_count=50,
+        status_code=200,
+        tool_called='search',
+        evolution_generation=0,
+    )
+    store.ingest_gcp_cloud_turns([t])
+    self.assertEqual(len(store.turns), 1)
+    self.assertGreater(store.turns[0].cache_hit_ratio, 85.0)
+    store.reset()
+    self.assertEqual(len(store.turns), 0)
 
   def test_alpha_evolve_multi_agent_selection_and_custom_params(self) -> None:
     optimizer = alpha_evolve_optimizer.FinOpsAlphaEvolveOptimizer()
@@ -113,13 +128,6 @@ class FinOpsFrameworkTest(unittest.TestCase):
         weight_pct=15,
     )
     self.assertEqual(len(profile.parameters), initial_param_count + 1)
-
-    optimizer.inject_anomaly()
-    self.assertIn('CRITICAL', profile.health_status)
-
-    gen_next = optimizer.run_next_generation()
-    self.assertEqual(gen_next.timeline[-1].generation, 12)
-    self.assertIn('OPTIMIZED', profile.health_status)
 
   def test_gcp_telemetry_service_collection(self) -> None:
     service = gcp_telemetry.get_gcp_telemetry_service()
@@ -164,12 +172,10 @@ class FinOpsFrameworkTest(unittest.TestCase):
     self.assertEqual(bp_res['breakpoint_line'], 2)
     self.assertIn('Line 2 mutated', bp_res['reason'])
 
-    # Test trigger_alpha_evolve_cycle tool
-    evolve_res = json.loads(adk_agent_module.trigger_alpha_evolve_cycle('it_service_desk'))
-    self.assertEqual(evolve_res['agent_id'], 'it_service_desk')
-    self.assertTrue(evolve_res['simulator'])
-    self.assertIn('simulated_generation', evolve_res)
-    self.assertEqual(evolve_res['latest_action']['status'], 'SIMULATED (nothing deployed)')
+    # Test lint_agent_finops tool
+    lint_res = json.loads(adk_agent_module.lint_agent_finops('for x in items:\n    client.generate_content(x)\n'))
+    self.assertGreaterEqual(lint_res['findings_count'], 1)
+    self.assertEqual(lint_res['findings'][0]['rule_id'], 'FIN-01')
 
     # validate_telemetry_grounding must run the real validator (deterministic, no LLM judge by default)
     with mock.patch.object(
@@ -276,24 +282,6 @@ class FinOpsFrameworkTest(unittest.TestCase):
         labels = [p['label'] for p in added['active_agent']['parameters']]
         self.assertIn('Hallucination Free Rate', labels)
 
-      # 9. Verify POST /api/inject_anomaly & POST /api/evolve_generation
-      req_anom = urllib.request.Request(
-          f'{base_url}/api/inject_anomaly', data=b'{}', method='POST'
-      )
-      with urllib.request.urlopen(req_anom) as resp:
-        anom_state = json.loads(resp.read().decode('utf-8'))
-        self.assertIn('CRITICAL', anom_state['active_agent']['health_status'])
-
-      req_evolve = urllib.request.Request(
-          f'{base_url}/api/evolve_generation', data=b'{}', method='POST'
-      )
-      with urllib.request.urlopen(req_evolve) as resp:
-        evolved = json.loads(resp.read().decode('utf-8'))
-        self.assertEqual(
-            evolved['active_agent']['timeline'][-1]['generation'], 13
-        )
-        self.assertIn('OPTIMIZED', evolved['active_agent']['health_status'])
-
       # 10. Verify GET /ui and GET /app return 200 with HTML
       for ui_path in ('/ui', '/app'):
         with urllib.request.urlopen(f'{base_url}{ui_path}') as ui_resp:
@@ -359,7 +347,7 @@ class FinOpsFrameworkTest(unittest.TestCase):
         self.assertIn('query_project_telemetry', tool_names)
         self.assertIn('query_ge_agent_fleet', tool_names)
         self.assertIn('calculate_prompt_cache_economics', tool_names)
-        self.assertIn('run_alpha_evolve_generation', tool_names)
+        self.assertIn('lint_agent_finops', tool_names)
         self.assertIn('get_finops_state', tool_names)
 
         open_tool = next(t for t in tools_body['result']['tools'] if t['name'] == 'open_dashboard')
@@ -545,18 +533,18 @@ class FinOpsFrameworkTest(unittest.TestCase):
     self.assertEqual(code_bad_rpc, 200)
     self.assertEqual(json.loads(body_bad_rpc)['error']['code'], mcp_server.INVALID_REQUEST)
 
-    # Test tool run_alpha_evolve_generation via MCP tools/call
-    code_evolve, _, body_evolve = mcp_server.handle_jsonrpc_sync({
+    # Test tool lint_agent_finops via MCP tools/call
+    code_lint, _, body_lint = mcp_server.handle_jsonrpc_sync({
         'jsonrpc': '2.0',
-        'id': 'test-evolve',
+        'id': 'test-lint',
         'method': 'tools/call',
         'params': {
-            'name': 'run_alpha_evolve_generation',
-            'arguments': {'agent_id': 'deep_research'},
+            'name': 'lint_agent_finops',
+            'arguments': {'code_snippet': 'for x in items:\n    client.generate_content(x)\n'},
         },
     })
-    self.assertEqual(code_evolve, 200)
-    self.assertIn('active_agent', json.loads(body_evolve)['result']['structuredContent'])
+    self.assertEqual(code_lint, 200)
+    self.assertIn('findings', json.loads(body_lint)['result']['structuredContent'])
 
     # Test tool get_finops_state via MCP tools/call
     code_state, _, body_state = mcp_server.handle_jsonrpc_sync({
@@ -613,7 +601,7 @@ class ProductionAppTest(unittest.TestCase):
     tools = {t['name']: t for t in self._rpc('tools/list', rpc_id=2, session=session).json()['result']['tools']}
     self.assertEqual(sorted(tools), sorted([
         'open_dashboard', 'query_ge_agent_fleet', 'query_project_telemetry',
-        'calculate_prompt_cache_economics', 'run_alpha_evolve_generation', 'get_finops_state',
+        'calculate_prompt_cache_economics', 'lint_agent_finops', 'get_finops_state',
         'xray_prompt_cache', 'list_prompt_snapshot_turns', 'set_agent_trace_logging']))
     self.assertTrue(tools['open_dashboard']['annotations']['readOnlyHint'])
     self.assertTrue(tools['query_ge_agent_fleet']['annotations']['readOnlyHint'])
@@ -1302,7 +1290,6 @@ def handle_request(client, filings, retriever):
         'smePersonaPlaybookCard',
         'workflowStepsRibbon',
         'turnTrajectorySummaryKpis',
-        'stepTurnBtn',
         'cloudRunServicesBody',
         'geSupportEventsBody',
     ):
@@ -1386,18 +1373,12 @@ def handle_request(client, filings, retriever):
       self.assertNotIn('DROP TABLE', nl_dml_body['generated_sql'].upper())
       self.assertTrue(nl_dml_body['generated_sql'].strip().upper().startswith('SELECT'))
 
-      # Verify /api/step_turn and /api/reset endpoints work end-to-end
-      step_resp = client.post('/api/step_turn', json={})
-      self.assertEqual(step_resp.status_code, 200)
-      step_state = step_resp.json()
-      self.assertEqual(len(step_state['turns']), 7)
-      self.assertEqual(step_state['summary']['total_turns'], 7)
-
+      # Verify /api/reset endpoint works end-to-end
       reset_resp = client.post('/api/reset', json={})
       self.assertEqual(reset_resp.status_code, 200)
       reset_state = reset_resp.json()
-      self.assertEqual(len(reset_state['turns']), 6)
-      self.assertEqual(reset_state['summary']['total_turns'], 6)
+      self.assertEqual(len(reset_state['turns']), 0)
+      self.assertEqual(reset_state['summary']['total_turns'], 0)
     finally:
       server._global_controller.reset()
 

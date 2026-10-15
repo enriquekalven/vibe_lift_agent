@@ -17,6 +17,9 @@ dependencies = [
     "absl-py==2.5.0",
 ]
 
+[project.scripts]
+finops-lint = "finops_dashboard.cli_lint:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

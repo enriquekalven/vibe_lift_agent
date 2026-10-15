@@ -13,7 +13,7 @@ _CASE_EXPECTED_TOOLS = {
     "cache_economics_unpriced_model": ["calculate_cache_economics"],
     "prompt_cache_xray_breakpoint": ["xray_prompt_cache"],
     "detect_breakpoint_line": ["detect_prompt_breakpoint"],
-    "optimizer_simulator_honesty": ["trigger_alpha_evolve_cycle"],
+    "lint_agent_finops_ast_gate": ["lint_agent_finops"],
     "telemetry_grounding_audit": ["validate_telemetry_grounding"],
     "fleet_inventory_24h": ["query_ge_agent_fleet"],
     "live_finops_mart_reconciliation": ["query_live_finops_and_mart"],

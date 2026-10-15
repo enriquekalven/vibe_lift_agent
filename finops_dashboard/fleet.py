@@ -819,16 +819,19 @@ def _new_usage_stats() -> dict[str, Any]:
 def _add_usage(acc: dict[str, dict[str, Any]], key: str, record: Mapping[str, Any]) -> None:
   st = acc.setdefault(key, _new_usage_stats())
   model = record.get('model')
+  calls = max(1, int(record.get('llm_calls') or 1))
   bucket = st['by_model'].setdefault(
       model or live_finops.NO_MODEL_LABEL, {'llm_calls': 0, 'input_tokens': 0, 'output_tokens': 0, 'cached_tokens': 0})
   for target in (st, bucket):
-    target['llm_calls'] += 1
+    target['llm_calls'] += calls
     for tok in ('input_tokens', 'output_tokens', 'cached_tokens'):
       target[tok] += int(record.get(tok) or 0)
   if record.get('conversation'):
     st['_conversations'].add(record['conversation'])
+  if record.get('conversations_count'):
+    st['_conversations_count'] = int(st.get('_conversations_count') or 0) + int(record['conversations_count'])
   if model:
-    st['_models'][model] += 1
+    st['_models'][model] += calls
   stamp = record.get('timestamp')
   if stamp and (st['last_activity'] is None or stamp > st['last_activity']):
     st['last_activity'] = stamp
@@ -836,7 +839,9 @@ def _add_usage(acc: dict[str, dict[str, Any]], key: str, record: Mapping[str, An
 
 def _finish_usage(st: dict[str, Any]) -> dict[str, Any]:
   out = dict(st)
-  out['conversations'] = len(out.pop('_conversations'))
+  conv_set = out.pop('_conversations')
+  conv_count = int(out.pop('_conversations_count', 0))
+  out['conversations'] = max(len(conv_set), conv_count)
   out['models'] = [m for m, _ in out.pop('_models').most_common(3)]
   return out
 
@@ -881,13 +886,14 @@ def resolve_workload_usage(
   system_calls = 0
   revision_cache: dict[str, str | None] = {}
   for rec in records or []:
+    calls = max(1, int(rec.get('llm_calls') or 1))
     kind = rec.get('kind')
     if kind == 'agent_engine_or_ge':
-      skipped[str(rec.get('name') or 'agent_engine')] += 1
+      skipped[str(rec.get('name') or 'agent_engine')] += calls
       continue
     engine = _reasoning_engine_identity(rec)
     if engine:
-      skipped[f'agent_engine:{engine}'] += 1
+      skipped[f'agent_engine:{engine}'] += calls
       continue
     if kind == 'cloud_run':
       service = _resolve_run_service(rec, services, revision_cache)
@@ -897,7 +903,7 @@ def resolve_workload_usage(
     elif kind == 'gke':
       cluster, namespace, container = rec.get('cluster'), rec.get('namespace'), rec.get('container')
       if namespace in SYSTEM_K8S_NAMESPACES:
-        system_calls += 1
+        system_calls += calls
         continue
       # All three are required; without a container name, service.name may name the container.
       key = None
@@ -909,7 +915,7 @@ def resolve_workload_usage(
       if key:
         _add_usage(gke_acc, '/'.join(key), rec)
         continue
-    unattributed[_unattributed_name(rec)] += 1
+    unattributed[_unattributed_name(rec)] += calls
   return {
       'cloud_run': {k: _finish_usage(v) for k, v in run_acc.items()},
       'gke': {k: _finish_usage(v) for k, v in gke_acc.items()},
@@ -1596,6 +1602,9 @@ class GeminiEnterpriseFleetService:
       collection: str | None = None,
       api: Any | None = None,
       discover_unregistered: bool | None = None,
+      bq_query_fn: Any | None = None,
+      bq_token_pushdown: bool | None = None,
+      mart_dataset: str | None = None,
   ):
     self.project_id = project_id or gcp_telemetry.get_current_gcp_project()
     self.engine_ids = engine_ids or _env_list('FINOPS_GE_ENGINES', ('auto',))
@@ -1603,6 +1612,15 @@ class GeminiEnterpriseFleetService:
     self.reasoning_engine_locations = _env_list('FINOPS_RE_LOCATIONS', DEFAULT_RE_LOCATIONS)
     self.location = location or os.environ.get('FINOPS_GE_LOCATION', 'global')
     self.collection = collection or os.environ.get('FINOPS_GE_COLLECTION', 'default_collection')
+    self.mart_dataset = mart_dataset or os.environ.get('FINOPS_GE_MART_DATASET', 'finops_mart')
+    self._bq_query_fn = bq_query_fn
+    if bq_token_pushdown is None:
+      default_pushdown = 'true' if bq_query_fn is not None else 'false'
+      self.bq_token_pushdown = parse_bool(
+          os.environ.get('FINOPS_BQ_TOKEN_PUSHDOWN', default_pushdown)
+      )
+    else:
+      self.bq_token_pushdown = bool(bq_token_pushdown)
     if discover_unregistered is None:
       default_unreg = self.project_id not in ('test-project', gcp_telemetry.UNCONFIGURED_PROJECT_ID)
       self.discover_unregistered = parse_bool(
@@ -2287,8 +2305,158 @@ class GeminiEnterpriseFleetService:
         out[labels[label]] += value
     return out
 
+  def _run_bq_token_query(self, project: str, sql: str) -> list[dict[str, Any]] | None:
+    """Executes a read-only BigQuery aggregation query for 100% token coverage without Python memory caps."""
+    if not getattr(self, 'bq_token_pushdown', False):
+      return None
+    fn = getattr(self, '_bq_query_fn', None)
+    try:
+      if callable(fn):
+        res = fn(sql)
+      else:
+        svc = gcp_telemetry.GoogleCloudTelemetryService(project_id=project)
+        res = svc.run_bigquery_query(sql, maximum_bytes_billed=100 * 1024 * 1024)
+      if isinstance(res, tuple) and len(res) == 2:
+        rows, meta = res
+        if isinstance(meta, Mapping) and meta.get('error'):
+          return None
+        return list(rows) if isinstance(rows, list) else None
+      if isinstance(res, list):
+        return list(res)
+    except Exception:
+      return None
+    return None
+
+  def _bigquery_genai_usage(self, project: str, engine_ids: list[str], window_s: int) -> dict[str, Any] | None:
+    """Pushes Reasoning Engine GenAI token aggregation down to BigQuery finops_mart.fct_turns (zero truncation)."""
+    if not engine_ids or not _PROJECT_ID_RE.match(project):
+      return None
+    mart = getattr(self, 'mart_dataset', 'finops_mart') or 'finops_mart'
+    if not _RESOURCE_ID_RE.match(mart):
+      return None
+    safe_ids = [i for i in sorted(set(engine_ids)) if _RESOURCE_ID_RE.match(str(i))]
+    if not safe_ids:
+      return None
+    quoted_ids = ', '.join(f"'{i}'" for i in safe_ids)
+    sql = (
+        'SELECT '
+        'COALESCE(agent_id, engine_id) AS reasoning_engine_id, '
+        'SUM(COALESCE(llm_calls, 1)) AS llm_calls, '
+        'SUM(COALESCE(input_tokens, 0)) AS input_tokens, '
+        'SUM(COALESCE(output_tokens, 0)) AS output_tokens, '
+        'SUM(COALESCE(cached_input_tokens, 0)) AS cached_tokens, '
+        'COUNT(DISTINCT session_id) AS conversations, '
+        "FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', MAX(event_timestamp)) AS last_activity, "
+        "ARRAY_TO_STRING(ARRAY_AGG(DISTINCT model_name IGNORE NULLS LIMIT 3), ',') AS models_csv, "
+        'COUNT(1) AS entries_scanned '
+        f'FROM `{project}.{mart}.fct_turns` '
+        f'WHERE event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {int(max(1, window_s))} SECOND) '
+        f'AND COALESCE(agent_id, engine_id) IN ({quoted_ids}) '
+        'AND (input_tokens IS NOT NULL OR output_tokens IS NOT NULL OR llm_calls IS NOT NULL) '
+        'GROUP BY reasoning_engine_id'
+    )
+    rows = self._run_bq_token_query(project, sql)
+    if rows is None:
+      return None
+    stats: dict[str, dict[str, Any]] = {
+        i: {
+            'llm_calls': 0,
+            'input_tokens': 0,
+            'output_tokens': 0,
+            'cached_tokens': 0,
+            'last_activity': None,
+            'conversations': 0,
+            'models': [],
+        }
+        for i in engine_ids
+    }
+    scanned = 0
+    for row in rows:
+      if not isinstance(row, Mapping):
+        continue
+      eng = str(row.get('reasoning_engine_id') or '')
+      scanned += _to_int(row.get('entries_scanned')) or _to_int(row.get('llm_calls'))
+      if eng not in stats:
+        continue
+      models_raw = str(row.get('models_csv') or '')
+      models = [m.strip() for m in models_raw.split(',') if m.strip()][:3]
+      stats[eng] = {
+          'llm_calls': _to_int(row.get('llm_calls')),
+          'input_tokens': _to_int(row.get('input_tokens')),
+          'output_tokens': _to_int(row.get('output_tokens')),
+          'cached_tokens': _to_int(row.get('cached_tokens')),
+          'last_activity': row.get('last_activity') or None,
+          'conversations': _to_int(row.get('conversations')),
+          'models': models,
+      }
+    return {
+        'by_engine': stats,
+        'entries_scanned': scanned,
+        'truncated': False,
+        'scan_mode': 'BIGQUERY_PUSHDOWN',
+    }
+
+  def _bigquery_workload_log_usage(self, project: str, window_s: int) -> dict[str, Any] | None:
+    """Pushes Cloud Run / GKE workload GenAI token aggregation down to BigQuery finops_mart.fct_turns."""
+    if not _PROJECT_ID_RE.match(project):
+      return None
+    mart = getattr(self, 'mart_dataset', 'finops_mart') or 'finops_mart'
+    if not _RESOURCE_ID_RE.match(mart):
+      return None
+    sql = (
+        'SELECT '
+        'COALESCE(agent_name, agent_id) AS service_name, '
+        'model_name AS model, '
+        'SUM(COALESCE(llm_calls, 1)) AS llm_calls, '
+        'SUM(COALESCE(input_tokens, 0)) AS input_tokens, '
+        'SUM(COALESCE(output_tokens, 0)) AS output_tokens, '
+        'SUM(COALESCE(cached_input_tokens, 0)) AS cached_tokens, '
+        'COUNT(DISTINCT session_id) AS conversations_count, '
+        "FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', MAX(event_timestamp)) AS timestamp, "
+        'COUNT(1) AS entries_scanned '
+        f'FROM `{project}.{mart}.fct_turns` '
+        f'WHERE event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {int(max(1, window_s))} SECOND) '
+        'AND (input_tokens IS NOT NULL OR output_tokens IS NOT NULL OR llm_calls IS NOT NULL) '
+        'GROUP BY service_name, model'
+    )
+    rows = self._run_bq_token_query(project, sql)
+    if rows is None:
+      return None
+    records: list[dict[str, Any]] = []
+    scanned = 0
+    for row in rows:
+      if not isinstance(row, Mapping):
+        continue
+      svc_name = str(row.get('service_name') or '').strip()
+      if not svc_name:
+        continue
+      calls = max(1, _to_int(row.get('llm_calls')) or 1)
+      scanned += _to_int(row.get('entries_scanned')) or calls
+      records.append({
+          'kind': str(row.get('kind') or 'cloud_run'),
+          'service': svc_name,
+          'resource_service': svc_name,
+          'service_name': svc_name,
+          'cluster': row.get('cluster'),
+          'namespace': row.get('namespace'),
+          'container': row.get('container'),
+          'model': row.get('model'),
+          'llm_calls': calls,
+          'input_tokens': _to_int(row.get('input_tokens')),
+          'output_tokens': _to_int(row.get('output_tokens')),
+          'cached_tokens': _to_int(row.get('cached_tokens')),
+          'conversations_count': _to_int(row.get('conversations_count')),
+          'timestamp': row.get('timestamp'),
+      })
+    return {
+        'records': records,
+        'entries_scanned': scanned,
+        'truncated': False,
+        'scan_mode': 'BIGQUERY_PUSHDOWN',
+    }
+
   def _genai_usage(self, project: str, engine_ids: list[str], window_s: int) -> dict[str, Any]:
-    """Aggregates OpenTelemetry GenAI inference events written by ADK agents to Cloud Logging."""
+    """Aggregates OpenTelemetry GenAI inference events via BigQuery pushdown (if enabled) or Cloud Logging."""
     log_window_s = min(window_s, 30 * 24 * 3600)  # Cloud Logging _Default retains 30 days max
     cache_key = (project, tuple(sorted(set(engine_ids))), log_window_s)
     log_cache = getattr(self, '_log_cache', None)
@@ -2297,6 +2465,12 @@ class GeminiEnterpriseFleetService:
         cached = log_cache.get(cache_key)
       if cached is not None and (time.monotonic() - cached[0]) < self.ttl_seconds:
         return json.loads(json.dumps(cached[1]))
+    bq_out = self._bigquery_genai_usage(project, engine_ids, window_s)
+    if bq_out is not None:
+      if log_cache is not None and self.ttl_seconds > 0:
+        with self._cache_lock:
+          log_cache[cache_key] = (time.monotonic(), json.loads(json.dumps(bq_out)))
+      return bq_out
     start = _iso(_utcnow() - datetime.timedelta(seconds=log_window_s))
     ids = ' OR '.join(json.dumps(i) for i in sorted(set(engine_ids)))
     body: dict[str, Any] = {
@@ -2347,7 +2521,7 @@ class GeminiEnterpriseFleetService:
     for s in stats.values():
       s['conversations'] = len(s.pop('_conversations'))
       s['models'] = [m for m, _ in s.pop('_models').most_common(3)]
-    out = {'by_engine': stats, 'entries_scanned': scanned, 'truncated': truncated}
+    out = {'by_engine': stats, 'entries_scanned': scanned, 'truncated': truncated, 'scan_mode': 'CLOUD_LOGGING_PAGINATED'}
     if log_cache is not None and self.ttl_seconds > 0:
       with self._cache_lock:
         log_cache[cache_key] = (time.monotonic(), json.loads(json.dumps(out)))
@@ -2375,7 +2549,7 @@ class GeminiEnterpriseFleetService:
     return out
 
   def _workload_log_usage(self, project: str, window_s: int) -> dict[str, Any]:
-    """Usage records from Cloud Run / GKE gen_ai log entries; the log payload is never downloaded."""
+    """Usage records from Cloud Run / GKE gen_ai log entries via BigQuery pushdown or Cloud Logging."""
     log_window_s = min(window_s, 30 * 24 * 3600)  # Cloud Logging _Default retains 30 days max
     cache_key = (project, _WORKLOAD_LOG_RESOURCE_TYPES, log_window_s)
     log_cache = getattr(self, '_log_cache', None)
@@ -2384,6 +2558,12 @@ class GeminiEnterpriseFleetService:
         cached = log_cache.get(cache_key)
       if cached is not None and (time.monotonic() - cached[0]) < self.ttl_seconds:
         return json.loads(json.dumps(cached[1]))
+    bq_out = self._bigquery_workload_log_usage(project, window_s)
+    if bq_out is not None:
+      if log_cache is not None and self.ttl_seconds > 0:
+        with self._cache_lock:
+          log_cache[cache_key] = (time.monotonic(), json.loads(json.dumps(bq_out)))
+      return bq_out
     start = _iso(_utcnow() - datetime.timedelta(seconds=log_window_s))
     types = ' OR '.join(json.dumps(t) for t in _WORKLOAD_LOG_RESOURCE_TYPES)
     body: dict[str, Any] = {
@@ -2413,7 +2593,7 @@ class GeminiEnterpriseFleetService:
       body['pageToken'] = token
     else:
       truncated = True  # Page limit reached with entries left.
-    out = {'records': records, 'entries_scanned': scanned, 'truncated': truncated}
+    out = {'records': records, 'entries_scanned': scanned, 'truncated': truncated, 'scan_mode': 'CLOUD_LOGGING_PAGINATED'}
     if log_cache is not None and self.ttl_seconds > 0:
       with self._cache_lock:
         log_cache[cache_key] = (time.monotonic(), json.loads(json.dumps(out)))
@@ -3110,6 +3290,11 @@ class GeminiEnterpriseFleetService:
             'truncated': any(r['truncated'] for r in token_results),
             'traces_scanned': sum(r['traces_scanned'] for r in trace_results),
             'traces_truncated': any(r['truncated'] for r in trace_results),
+            **(
+                {'scan_mode': 'BIGQUERY_PUSHDOWN'}
+                if any(r.get('scan_mode') == 'BIGQUERY_PUSHDOWN' for r in token_results)
+                else {}
+            ),
         },
         'source_status': status,
         'errors': errors,

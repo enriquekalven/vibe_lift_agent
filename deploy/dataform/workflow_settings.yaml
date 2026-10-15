@@ -1,0 +1,10 @@
+defaultProject: your-gcp-project-id
+defaultLocation: US
+defaultDataset: finops_mart
+defaultAssertionDataset: finops_assertions
+dataformCoreVersion: 3.0.0
+vars:
+  curated_dataset: ds_ge_curated_staging
+  mart_dataset: finops_mart
+  lookback_days: "90"
+  include_audit_only_successes: "FALSE"

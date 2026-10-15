@@ -18,11 +18,9 @@ from finops_dashboard import (
     fleet,
     gcp_telemetry,
     ge_mart,
-    long_running_agent,
     mcp_server,
     optimizer,
     server,
-    sme_eval,
     telemetry,
     validator,
 )
@@ -705,52 +703,6 @@ class TestValidatorAndSmeEvalFullCoverage(unittest.TestCase):
                 self.assertIsNone(tok3)
                 self.assertIn('gcloud', str(err3))
 
-    def test_sme_eval_explicit_args_and_filter(self) -> None:
-        store = sme_eval.SmeEvaluationStore()
-        entry = store.submit_rating(
-            persona_id='sre_platform',
-            reviewer_ldap='sre_reviewer@example.com',
-            overall_rating=5,
-            verdict='approved_with_notes',  # case-insensitive, but must be a known verdict
-            task_completed=True,
-            dimension_ratings={'time_to_insight': 5, 'actionability_control': 'bad'},  # type: ignore[dict-item]
-            notes='Tested explicit args path',
-        )
-        self.assertEqual(entry['verdict'], 'APPROVED_WITH_NOTES')
-        self.assertEqual(entry['dimension_ratings']['time_to_insight'], 5)
-
-        # Explicit-args path: an unknown verdict or out-of-range rating is rejected, never silently approved.
-        with self.assertRaises(ValueError):
-            store.submit_rating(persona_id='sre_platform', verdict='invalid_verdict')
-        with self.assertRaises(ValueError):
-            store.submit_rating(persona_id='sre_platform', overall_rating=9)
-
-        # Dict (HTTP) payloads fail closed: nothing is ever defaulted to a passing score.
-        before = len(store.list_ratings())
-        for bad_payload, expected_fragment in (
-            ({}, 'persona_id: required'),
-            ({'persona_id': 'finops_lead'}, 'overall_rating: required'),
-            ({'persona_id': 'finops_lead', 'overall_rating': 'bad', 'verdict': 'APPROVED'}, 'overall_rating'),
-            ({'persona_id': 'finops_lead', 'overall_rating': 99, 'verdict': 'APPROVED'}, 'between 1 and 5'),
-            ({'persona_id': 'finops_lead', 'overall_rating': 4.5, 'verdict': 'APPROVED'}, 'whole number'),
-            ({'persona_id': 'finops_lead', 'overall_rating': True, 'verdict': 'APPROVED'}, 'boolean'),
-            ({'persona_id': 'finops_lead', 'overall_rating': 4}, 'verdict: required'),
-            ({'persona_id': 'finops_lead', 'overall_rating': 4, 'verdict': 'LGTM'}, 'verdict: must be one of'),
-        ):
-            with self.subTest(payload=bad_payload):
-                with self.assertRaises(ValueError) as ctx:
-                    store.submit_rating(bad_payload)
-                self.assertIn(expected_fragment, str(ctx.exception))
-        self.assertEqual(len(store.list_ratings()), before, 'rejected payloads must not be recorded')
-        ok = store.submit_rating({'persona_id': 'finops_lead', 'overall_rating': '3', 'verdict': 'needs_work'})
-        self.assertEqual((ok['overall_rating'], ok['verdict']), (3, 'NEEDS_WORK'))
-
-        self.assertEqual(len(store.list_ratings(persona_id='sre_platform')), 1)
-        self.assertEqual(len(store.list_ratings(persona_id='cfo_exec')), 0)
-        with self.assertRaises(ValueError):
-            store.submit_rating(persona_id='nonexistent_persona')
-        self.assertEqual(sme_eval._extract_html_ids(''), set())
-
 
 class TestServerAndHttpHandlerFullCoverage(unittest.TestCase):
     """Covers FinOpsHttpServer routes, live-mode controller branches, and helper functions."""
@@ -776,7 +728,6 @@ class TestServerAndHttpHandlerFullCoverage(unittest.TestCase):
                 '/api/health',
                 '/api/tokenomics_cockpit',
                 '/api/validate_telemetry?run_llm_judge=false',
-                '/api/sme_eval?fresh=true',
             ):
                 with urllib.request.urlopen(f'{base}{path}', timeout=30) as resp:
                     self.assertEqual(resp.status, 200)
@@ -792,8 +743,6 @@ class TestServerAndHttpHandlerFullCoverage(unittest.TestCase):
 
             post_routes = [
                 ('/api/validate_telemetry', {'run_llm_judge': False}),
-                ('/api/sme_eval/run', {}),
-                ('/api/sme_eval/rate', {'persona_id': 'finops_lead', 'overall_rating': 5, 'verdict': 'APPROVED'}),
                 ('/api/select_optimizer', {'platform_id': 'alpha_evolve'}),
                 ('/api/decorator_ingest', {'agent_name': 'http_agent', 'prompt_tokens': 1200, 'cached_tokens': 900}),
                 ('/api/nl2sql', {'question': 'Show top users'}),
@@ -802,7 +751,6 @@ class TestServerAndHttpHandlerFullCoverage(unittest.TestCase):
                 ('/api/what_if_simulate', {'thinking_budget_tok': 'bad', 'history_window_turns': 'bad', 'traffic_canary_pct': 'bad'}),
                 ('/api/what_if_live', {'kind': 'cache_share', 'model': 'gemini-2.5-flash', 'target_cache_share_pct': 60}),
                 ('/api/recompute_finops', {}),
-                ('/api/step_turn', {}),
                 ('/api/ge_mart/refresh', {}),
             ]
             for route, body in post_routes:
@@ -879,7 +827,24 @@ class TestServerAndHttpHandlerFullCoverage(unittest.TestCase):
         self.assertEqual(bad_wi['status'], 'ERROR')
 
         # Test sync_gcp_telemetry when live_turns are present
-        fake_turn = ctrl.agent.turns[0]
+        fake_turn = telemetry.TurnUsageLog(
+            timestamp='2026-10-15T00:00:00Z',
+            agent_name='live-agent',
+            model='gemini-2.5-flash',
+            turn_index=1,
+            prompt_prefix_hash='abc123',
+            cache_breakpoint_line=None,
+            cache_breakpoint_reason='NONE',
+            prompt_token_count=1000,
+            cached_content_token_count=800,
+            cache_creation_input_tokens=0,
+            uncached_input_tokens=200,
+            candidates_token_count=200,
+            thoughts_token_count=0,
+            status_code=200,
+            tool_called='query',
+            evolution_generation=0,
+        )
         with mock.patch.object(ctrl.gcp_telemetry, 'fetch_live_cloud_turns', return_value=[fake_turn]):
             synced_state = ctrl.sync_gcp_telemetry()
             self.assertIn('turns', synced_state)
@@ -958,12 +923,11 @@ class TestFinopsGeMartAndMcpEdgeCases(unittest.TestCase):
         summary = telemetry.summarize_log_stream([zero_turn])
         self.assertEqual(summary['error_rate_pct'], 100.0)
 
-        opt = optimizer.FinOpsAlphaEvolveOptimizer()
-        ag = long_running_agent.LongRunningFinOpsAgent(opt)
-        saved_tl = list(opt.active_agent.timeline)
-        opt.active_agent.timeline.clear()
-        self.assertEqual(ag._current_generation(), 14)
-        opt.active_agent.timeline.extend(saved_tl)
+        store = telemetry.CloudTurnStore()
+        store.ingest_gcp_cloud_turns([zero_turn])
+        self.assertEqual(len(store.turns), 1)
+        store.reset()
+        self.assertEqual(len(store.turns), 0)
 
     def test_mcp_server_and_template_edge_cases(self) -> None:
         self.assertEqual(mcp_server._parse_focus_tab('not-an-int'), mcp_server.OVERVIEW_TAB)
@@ -979,7 +943,7 @@ class TestFinopsGeMartAndMcpEdgeCases(unittest.TestCase):
         res_tel = asyncio.run(mcp_server._dispatch('sess', 'tools/call', {'name': 'query_project_telemetry', 'arguments': {'force_refresh': True}}))
         self.assertFalse(res_tel['isError'])
 
-        res_ev = asyncio.run(mcp_server._dispatch('sess', 'tools/call', {'name': 'run_alpha_evolve_generation', 'arguments': {'platform_id': 'alpha_evolve'}}))
+        res_ev = asyncio.run(mcp_server._dispatch('sess', 'tools/call', {'name': 'lint_agent_finops', 'arguments': {'code_snippet': 'def f():\n    return "gemini-2.5-pro"\n'}}))
         self.assertFalse(res_ev['isError'])
 
         with self.assertRaises(mcp_server._RpcError):

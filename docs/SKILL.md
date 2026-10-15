@@ -1,12 +1,12 @@
 ---
 name: finops-analytics
-description: Gemini Enterprise agent fleet observability, prompt cache economics, and an optimizer simulator. Use this skill to query project telemetry, inspect fleet prompt cache token economics, interact with the FinOps Dashboard MCP App in Gemini Enterprise, or run the optimizer simulator (synthetic numbers; nothing is deployed).
+description: Gemini Enterprise agent fleet observability, prompt cache economics, and static AST FinOps linting. Use this skill to query project telemetry, inspect fleet prompt cache token economics, interact with the FinOps Dashboard MCP App in Gemini Enterprise, or lint Python agent code and prompt pairs.
 allowed-tools:
   - open_dashboard
   - query_project_telemetry
   - query_ge_agent_fleet
   - calculate_prompt_cache_economics
-  - run_alpha_evolve_generation
+  - lint_agent_finops
   - get_finops_state
 ---
 
@@ -21,7 +21,7 @@ allowed-tools:
 | **GE Agent Fleet** | `query_ge_agent_fleet` | Lists every agent deployed on the Gemini Enterprise app with live requests, errors, latency, LLM calls, tokens, conversations, and last activity, plus project-wide model spend. |
 | **Cost & Token Economics** | `calculate_prompt_cache_economics` | Computes prompt cache hit ratio (%) and net dollar savings ($) at list prices from the rate cards in `finops_dashboard/telemetry.py` (`RATE_CARDS`). |
 | **Prompt Engineering** | `get_finops_state` | Each turn carries `cache_breakpoint_line` and `cache_breakpoint_reason`, the line and mutation cause breaking prompt cache prefix matching between agent turns. (`detect_prompt_breakpoint` exists only on the ADK agent API, not on the MCP server.) |
-| **Optimizer Simulator** | `run_alpha_evolve_generation` | **Simulator only.** Applies fixed improvement factors from `finops_dashboard/optimizer.py` to a demo profile and returns synthetic numbers. It runs no search, reads no logs, and changes no agent. |
+| **Static AST & Prompt Cache Linter** | `lint_agent_finops` | Runs static AST FinOps rules (`FIN-01`..`FIN-05`) on Python agent code and optional Prompt Cache X-Ray diffing on consecutive prompts. |
 | **Runtime State** | `get_finops_state` | Retrieves the complete runtime state, turn trajectories, and multi-objective optimization parameters. |
 
 ---
@@ -42,7 +42,7 @@ allowed-tools:
 3. Report project-wide Vertex AI model usage and estimated list-price spend, naming any models without a rate card.
 4. Flag agents with 5xx errors or high p95 latency and recommend prompt-cache optimizations where cache reads are low.
 
-### 3. Prompt cache fixes and the optimizer simulator
+### 3. Prompt cache fixes and static FinOps linting
 1. For real findings, call `get_finops_state` and read each turn's `cache_breakpoint_line` / `cache_breakpoint_reason` to find the prompt prefix that changes between turns.
-2. Recommend the fix yourself (for example, move the changing text after the static prefix). FinOps Dashboard does not change agents.
-3. Call `run_alpha_evolve_generation` only to show what an optimization loop would look like. Tell the user the numbers are simulated and nothing was deployed.
+2. Recommend the fix yourself (for example, move the changing text after the static prefix) or run `xray_prompt_cache` / `lint_agent_finops`.
+3. Call `lint_agent_finops` to check Python agent code for `FIN-01`..`FIN-05` anti-patterns and prompt cache busting before deployment.

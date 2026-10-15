@@ -847,97 +847,128 @@ OPTIMIZER_PLATFORMS: dict[str, dict[str, str]] = {
     },
 }
 
-# ---------------------------------------------------------------------------
-# Optimizer simulator
-# Nothing here calls an optimizer, reads logs or changes an agent. "Run optimizer" applies the fixed
-# per-generation factors below to a demo agent's parameters and "Test alert" applies a fixed scenario.
-# Every status string is computed from the value before and after, so the percentages always match
-# the numbers shown.
-# ---------------------------------------------------------------------------
 SIMULATOR_NOTE = (
-    'Simulator: synthetic numbers from fixed factors in finops_dashboard/optimizer.py. No optimizer is called, '
-    'no logs are read, and no agent is changed.'
+    'Offline reference catalog: baseline vs. target parameters in finops_dashboard/optimizer.py '
+    'used when live BigQuery / Cloud Logging telemetry is not connected.'
 )
-# Lower-is-better parameters: (multiplier per generation, floor).
-_SIM_STEP_DOWN: dict[str, tuple[float, float]] = {
-    'latency_ms': (0.86, 380.0),
-    'cost_usd': (0.84, 1.80),
-    'context_bloat_pct': (0.85, 8.5),
-    'idle_ratio_pct': (0.85, 4.2),
-    'error_rate_pct': (0.0, 0.0),
-}
-# Higher-is-better parameters: (points added per generation, ceiling).
-_SIM_STEP_UP: dict[str, tuple[float, float]] = {
-    'accuracy_pct': (0.6, 99.2),
-    'cache_hit_pct': (1.8, 97.5),
-}
-# "Test alert" scenario: parameter -> (value set, label).
-_SIM_ANOMALY: dict[str, tuple[float, str]] = {
-    'latency_ms': (2390.0, 'SLA BREACH'),
-    'cost_usd': (24.80, 'CACHE BUST SPIKE'),
-    'accuracy_pct': (88.2, 'ACCURACY REGRESSION'),
-    'cache_hit_pct': (14.5, 'PREFIX INVALIDATED'),
-    'error_rate_pct': (9.4, '429 QUOTA ERRORS'),
-    'context_bloat_pct': (68.5, 'CONTEXT BLOAT SPIKE'),
-    'idle_ratio_pct': (44.0, 'TOOL WAIT BOTTLENECK'),
-}
-_SIM_POINT_FIELDS = ('latency_ms', 'cost_usd', 'accuracy_pct', 'cache_hit_pct', 'error_rate_pct')
 
 
-def _pct_change_label(before: float, after: float) -> str:
-  """Signed change from `before` to `after`, e.g. '-14.0%'; 'n/a' when `before` is 0."""
-  if not before:
-    return 'n/a'
-  return f'{(after - before) / abs(before) * 100.0:+.1f}%'
+def generate_nl2sql_with_gemini(
+    question: str,
+    *,
+    project_id: str,
+    mart_dataset: str,
+    allowed_datasets: Sequence[str],
+    llm_sql_generator: Any = None,
+) -> dict[str, Any] | None:
+  """Generates a BigQuery SELECT query over finops_mart using Vertex AI Gemini structured output.
 
-
-def _fmt_sim_value(value: float, unit: str) -> str:
-  """'$2.90', '93%', '593.4 ms'."""
-  if unit == '$':
-    return f'${value:,.2f}'
-  if unit == '%':
-    return f'{value:g}%'
-  return f'{value:g} {unit}'.strip()
-
-
-def _sim_step_value(key: str, value: float) -> float | None:
-  """Value after one simulated generation, or None for parameters the simulator does not model."""
-  if key in _SIM_STEP_DOWN:
-    factor, floor = _SIM_STEP_DOWN[key]
-    return round(max(floor, value * factor), 2)
-  if key in _SIM_STEP_UP:
-    step, ceiling = _SIM_STEP_UP[key]
-    return round(min(ceiling, value + step), 1)
-  return None
-
-
-def _sim_point(
-    agent: DemoAgentProfile, label: str, generation: int, marker: str, fallback: Mapping[str, float]
-) -> TimeSeriesPoint:
-  """Timeline point from the agent's current parameter values.
-
-  A field with no matching parameter takes `fallback`, then the previous point's value.
+  Every candidate SQL string is strictly validated by ``verify_nl2sql_sql`` against
+  ``allowed_datasets`` before being accepted. Returns None if generation is disabled,
+  credentials are unavailable, or the candidate SQL fails read-only verification.
   """
-  current = {p.key: float(p.current_value) for p in agent.parameters}
-  prev = agent.timeline[-1] if agent.timeline else None
+  import json
+  import urllib.request
 
-  def value(field: str) -> float:
-    if field in current:
-      return current[field]
-    if field in fallback:
-      return float(fallback[field])
-    return float(getattr(prev, field)) if prev is not None else 0.0
+  q_clean = (question or '').strip()
+  if not q_clean:
+    return None
 
-  return TimeSeriesPoint(
-      timestamp_label=label,
-      generation=generation,
-      latency_ms=value('latency_ms'),
-      cost_usd=value('cost_usd'),
-      accuracy_pct=value('accuracy_pct'),
-      cache_hit_pct=value('cache_hit_pct'),
-      error_rate_pct=value('error_rate_pct'),
-      event_marker=marker,
+  schema_prompt = (
+      'You are a Principal FinOps BigQuery SQL architect. Generate a single read-only '
+      'BigQuery Standard SQL SELECT query (no CTEs, no semicolons, all table names '
+      f'fully backtick-quoted as `{project_id}.{mart_dataset}.<table>`) to answer '
+      'the user question.\n'
+      'Allowed tables and columns:\n'
+      f'- `{project_id}.{mart_dataset}.fct_turns` (event_date DATE, event_timestamp TIMESTAMP, '
+      'engine_key STRING, agent_name STRING, session_id STRING, user_pseudo_id STRING, '
+      'user_email STRING, department STRING, turn_kind STRING, status STRING, '
+      'latency_ms FLOAT64, input_tokens INT64, output_tokens INT64, reasoning_tokens INT64, '
+      'cached_input_tokens INT64, total_tokens INT64, is_error BOOL)\n'
+      f'- `{project_id}.{mart_dataset}.fct_sessions` (engine_key STRING, session_id STRING, '
+      'user_email STRING, department STRING, turns INT64, chat_turns INT64, failed_turns INT64, '
+      'duration_seconds INT64, total_tokens INT64, session_start TIMESTAMP, session_end TIMESTAMP)\n'
+      f'- `{project_id}.{mart_dataset}.agg_daily_usage` (event_date DATE, engine_key STRING, '
+      'turns INT64, sessions INT64, distinct_users INT64, total_tokens INT64, failed_turns INT64)\n'
+      f'- `{project_id}.{mart_dataset}.v_looker_l1_l2_support` (event_date DATE, engine_key STRING, '
+      'support_tier STRING, resolution_status STRING, turns INT64, total_tokens INT64)\n'
+      'Return JSON with keys: {"intent": "<UPPER_SNAKE_CASE>", "sql": "<SELECT ... LIMIT 25>", '
+      '"executive_summary": "<1-sentence explanation>"}.\n'
+      f'User question: {q_clean}'
   )
+
+  raw_payload: dict[str, Any] | None = None
+  if callable(llm_sql_generator):
+    out = llm_sql_generator(q_clean, project_id, mart_dataset)
+    if isinstance(out, Mapping):
+      raw_payload = dict(out)
+    elif isinstance(out, str):
+      raw_payload = {'sql': out, 'intent': 'GEMINI_GENERATED_FINOPS_SQL'}
+  elif os.environ.get('FINOPS_NL2SQL_GEMINI_ENABLED', '').strip().lower() in ('1', 'true', 'yes'):
+    from finops_dashboard import validator
+    token, err = validator._get_access_token()
+    if token and not err and project_id and project_id not in ('YOUR_PROJECT', 'UNCONFIGURED-PROJECT'):
+      model_id = os.environ.get('FINOPS_NL2SQL_MODEL', 'gemini-2.5-flash').strip() or 'gemini-2.5-flash'
+      location = os.environ.get('FINOPS_NL2SQL_LOCATION', 'us-central1').strip() or 'us-central1'
+      host = 'aiplatform.googleapis.com' if location == 'global' else f'{location}-aiplatform.googleapis.com'
+      url = (
+          f'https://{host}/v1/projects/{project_id}/locations/{location}'
+          f'/publishers/google/models/{model_id}:generateContent'
+      )
+      body = {
+          'contents': [{'role': 'user', 'parts': [{'text': schema_prompt}]}],
+          'generationConfig': {
+              'temperature': 0.0,
+              'maxOutputTokens': 512,
+              'responseMimeType': 'application/json',
+          },
+      }
+      req = urllib.request.Request(
+          url,
+          data=json.dumps(body).encode('utf-8'),
+          headers={
+              'Authorization': f'Bearer {token}',
+              'Content-Type': 'application/json',
+          },
+          method='POST',
+      )
+      try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+          resp_json = json.loads(resp.read().decode('utf-8'))
+        parts = (((resp_json.get('candidates') or [{}])[0].get('content') or {}).get('parts') or [{}])
+        text = str(parts[0].get('text') or '').strip()
+        if text:
+          raw_payload = json.loads(text)
+      except Exception:
+        raw_payload = None
+
+  if not isinstance(raw_payload, dict):
+    return None
+  candidate_sql = str(raw_payload.get('sql') or '').strip()
+  if not candidate_sql:
+    return None
+  verification = verify_nl2sql_sql(candidate_sql, allowed_datasets)
+  if not verification.get('read_only_enforced'):
+    return None
+  return {
+      'question': q_clean,
+      'intent': str(raw_payload.get('intent') or 'GEMINI_GENERATED_FINOPS_SQL'),
+      'generated_sql': candidate_sql,
+      'sql_safety_audit': {
+          'blocked_dml_attempt': False,
+          'max_bytes_billed_cap': NL2SQL_MAX_BYTES_BILLED,
+          'allowed_datasets': list(allowed_datasets),
+          'sql_source': 'GEMINI_NL2SQL_VERIFIED',
+          **verification,
+      },
+      'columns': list(raw_payload.get('columns') or []),
+      'rows': list(raw_payload.get('rows') or []),
+      'executive_summary': str(
+          raw_payload.get('executive_summary')
+          or f'Generated verified read-only BigQuery SELECT over {project_id}.{mart_dataset} via Gemini.'
+      ),
+  }
+
 
 
 def _get_param_val(profile: DemoAgentProfile | None, key: str, default: float) -> float:
@@ -1824,7 +1855,7 @@ def catalog_reference_only(catalog: Mapping[str, Any]) -> dict[str, Any]:
 
 
 class FinOpsAlphaEvolveOptimizer:
-  """Optimizer simulator: demo profiles, user parameters, and simulated generations (nothing is deployed)."""
+  """FinOps catalog, NL2SQL query generator & pre-built recipes, and What-If scenario projector."""
 
   def __init__(self) -> None:
     """Initializes the multi-agent catalog and sets default active agent."""
@@ -1833,8 +1864,6 @@ class FinOpsAlphaEvolveOptimizer:
     self.selected_optimizer_platform: str = 'alpha_evolve'
     self._live_fleet_payload: dict[str, Any] | None = None
     self._live_bq_insights: dict[str, Any] | None = None
-    # Parameter values from before a simulated anomaly, per agent; the next generation starts from them.
-    self._pre_anomaly: dict[str, dict[str, float]] = {}
 
   @property
   def active_agent(self) -> DemoAgentProfile:
@@ -1860,14 +1889,47 @@ class FinOpsAlphaEvolveOptimizer:
       self,
       question: str,
       project_id: str | None = None,
+      llm_sql_generator: Any = None,
   ) -> dict[str, Any]:
-    """Matches a plain-English question to a fixed SELECT template over the FinOps Dashboard mart.
+    """Generates a read-only BigQuery SQL query via Vertex AI Gemini or Pre-Built FinOps SQL Recipes.
 
-    Rows returned here are the simulator's example rows; on a real project
-    server.py runs ``generated_sql`` on BigQuery and replaces them. The
-    ``sql_safety_audit`` read-only and dataset fields are computed from the
-    returned SQL by ``verify_nl2sql_sql``.
+    Every SQL query—whether dynamically synthesized by Gemini structured output over
+    ``finops_mart`` or selected from the Pre-Built FinOps SQL Recipes—is verified by
+    ``verify_nl2sql_sql`` and guarded by the 100 MB ``maximumBytesBilled`` dry-run/execution cap.
     """
+    from finops_dashboard import ge_mart
+    q_clean = (question or '').strip()
+    q_lower = q_clean.lower()
+    dml_tokens = ('drop ', 'delete ', 'update ', 'insert ', 'alter ', 'truncate ', 'grant ', ';')
+    blocked_dml = any(tok in q_lower for tok in dml_tokens)
+
+    live_bq = self._live_bq_insights if isinstance(self._live_bq_insights, dict) else {}
+    live_fl = self._live_fleet_payload if isinstance(self._live_fleet_payload, dict) else {}
+    cand_proj = (
+        project_id
+        or live_bq.get('project_id')
+        or live_fl.get('project_id')
+        or os.environ.get('GOOGLE_CLOUD_PROJECT')
+        or 'UNCONFIGURED-PROJECT'
+    )
+    proj = str(cand_proj) if str(cand_proj) != 'UNCONFIGURED-PROJECT' else 'YOUR_PROJECT'
+    mart_ds = ge_mart.mart_dataset_name()
+    allowed_ds = [f'{proj}.{mart_ds}']
+
+    if not blocked_dml and (
+        callable(llm_sql_generator)
+        or os.environ.get('FINOPS_NL2SQL_GEMINI_ENABLED', '').strip().lower() in ('1', 'true', 'yes')
+    ):
+      gemini_res = generate_nl2sql_with_gemini(
+          q_clean,
+          project_id=proj,
+          mart_dataset=mart_ds,
+          allowed_datasets=allowed_ds,
+          llm_sql_generator=llm_sql_generator,
+      )
+      if gemini_res is not None:
+        return gemini_res
+
     res = self._match_nl2sql_template(question, project_id=project_id)
     audit = dict(as_mapping(res.get('sql_safety_audit')))
     audit.update(verify_nl2sql_sql(str(res.get('generated_sql') or ''), as_list(audit.get('allowed_datasets'))))
@@ -1879,7 +1941,7 @@ class FinOpsAlphaEvolveOptimizer:
       question: str,
       project_id: str | None = None,
   ) -> dict[str, Any]:
-    """Picks the SELECT template for a question by keyword and fills the simulator rows."""
+    """Selects a Pre-Built FinOps SQL Recipe for a question by intent and populates fallback rows."""
     from finops_dashboard import ge_mart
     q_clean = (question or '').strip()
     q_lower = q_clean.lower()
@@ -1905,10 +1967,9 @@ class FinOpsAlphaEvolveOptimizer:
     safety_audit = {
         'blocked_dml_attempt': blocked_dml,
         'max_bytes_billed_cap': NL2SQL_MAX_BYTES_BILLED,
-        # Every template reads only the FinOps Dashboard mart.
+        # Every recipe reads only the FinOps Dashboard mart.
         'allowed_datasets': [f'{proj}.{mart_ds}'],
-        # The question picks a fixed SELECT template; its text never enters the SQL.
-        'sql_source': 'FIXED_SELECT_TEMPLATES',
+        'sql_source': 'PRE_BUILT_FINOPS_SQL_RECIPES',
     }
 
     if any(w in q_lower for w in ('runaway', 'thinking', 'background', 'burn', 'loop')) and not blocked_dml:
@@ -3356,14 +3417,14 @@ class FinOpsAlphaEvolveOptimizer:
 
   def simulate_what_if_scenario(
       self,
-      model_tier: str = 'gemini-3.8-flash',
+      model_tier: str = 'gemini-2.5-flash',
       thinking_budget_tok: int = 1024,
       history_window_turns: int = 2,
       traffic_canary_pct: int = 10,
   ) -> dict[str, Any]:
     """Simulates a What-If FinOps & Latency configuration before Cloud Run Canary deployment."""
     active = self.active_agent
-    clean_model = (model_tier or active.model or 'gemini-3.8-flash').strip()
+    clean_model = (model_tier or active.model or 'gemini-2.5-flash').strip()
     think_cap = max(0, min(16384, int(thinking_budget_tok)))
     win_turns = max(1, min(20, int(history_window_turns)))
     canary_pct = max(1, min(100, int(traffic_canary_pct)))
@@ -3602,85 +3663,3 @@ class FinOpsAlphaEvolveOptimizer:
     agent.parameters.append(new_param)
     return agent
 
-  def inject_anomaly(self) -> DemoAgentProfile:
-    """Simulator: applies the fixed cache-bust + 429 scenario (_SIM_ANOMALY) to the active demo agent."""
-    agent = self.active_agent
-    saved = self._pre_anomaly.setdefault(agent.agent_id, {})
-    for param in agent.parameters:
-      scenario = _SIM_ANOMALY.get(param.key)
-      if scenario is None:
-        continue
-      value, label = scenario
-      saved.setdefault(param.key, param.current_value)
-      before = param.current_value
-      param.current_value = value
-      param.status = f'SIMULATED {label} ({_pct_change_label(before, value)})'
-    agent.health_status = 'SIMULATED CRITICAL ANOMALY (cache bust + 429 scenario)'
-    generation = agent.timeline[-1].generation if agent.timeline else 0
-    agent.timeline.append(
-        _sim_point(
-            agent, 'Simulated anomaly', generation, 'Simulated cache-bust scenario',
-            {k: v for k, (v, _) in _SIM_ANOMALY.items()},
-        )
-    )
-    return agent
-
-  def run_next_generation(self) -> DemoAgentProfile:
-    """Simulator: one generation of the fixed factors in _SIM_STEP_DOWN / _SIM_STEP_UP.
-
-    A generation after a simulated anomaly starts from the pre-anomaly values. Status and impact text
-    are computed from each parameter's value before and after; nothing is deployed.
-    """
-    agent = self.active_agent
-    platform = OPTIMIZER_PLATFORMS.get(
-        self.selected_optimizer_platform, OPTIMIZER_PLATFORMS['alpha_evolve']
-    )
-    platform_short = platform['name'].split(' (')[0]
-    next_gen = (agent.timeline[-1].generation if agent.timeline else 0) + 1
-    restore = self._pre_anomaly.pop(agent.agent_id, {})
-    changes: list[str] = []
-    targeted: list[str] = []
-    for param in agent.parameters:
-      before = param.current_value
-      after = _sim_step_value(param.key, restore.get(param.key, before))
-      if after is None:
-        continue
-      param.current_value = after
-      change = _pct_change_label(before, after)
-      param.status = f'SIMULATED GEN {next_gen} ({change})'
-      targeted.append(param.label)
-      if after != before:
-        changes.append(
-            f'{param.label}: {_fmt_sim_value(before, param.unit)} -> {_fmt_sim_value(after, param.unit)} ({change})'
-        )
-
-    agent.health_status = f'OPTIMIZED IN SIMULATION ({platform_short} • Gen {next_gen})'
-    agent.timeline.append(
-        _sim_point(
-            agent, f'Gen {next_gen} (simulated)', next_gen, f'{platform_short} Gen {next_gen} (simulated)',
-            {'error_rate_pct': 0.0},
-        )
-    )
-    agent.actions.insert(
-        0,
-        AlphaEvolveActionRecord(
-            generation=next_gen,
-            timestamp=f'Simulated • Gen {next_gen} ({platform_short})',
-            action_title=f'Gen {next_gen} [{platform_short}]: simulated generation',
-            parameter_targeted=', '.join(targeted) or 'No simulated parameters on this agent',
-            root_cause_from_logs='Simulated: no logs were read.',
-            action_taken=(
-                'Applied the simulator factors per generation: latency x0.86, cost x0.84, context bloat and '
-                'idle ratio x0.85, error rate to 0, accuracy +0.6 pts, cache hit +1.8 pts (with floors and '
-                'ceilings). Nothing was deployed.'
-            ),
-            impact_summary=' | '.join(changes) or 'No simulated parameter changed.',
-            diff_snippet=(
-                '# Illustrative config change; not applied anywhere\n'
-                f'+ OPTIMIZER_BACKEND = "{self.selected_optimizer_platform}"\n'
-                f'+ GENERATION_ID = {next_gen}'
-            ),
-            status='SIMULATED (nothing deployed)',
-        ),
-    )
-    return agent

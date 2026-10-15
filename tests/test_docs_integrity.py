@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 
 from deploy.bigquery import verify_ge_mart_invariants
-from finops_dashboard import mcp_server, sme_eval, telemetry
+from finops_dashboard import mcp_server, telemetry
 from finops_dashboard.ui import template as ui_template
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -161,11 +161,9 @@ class CountsTest(unittest.TestCase):
     self.assertEqual(len(names), len(set(names)))
     self._assert_all(r'\b(\d+) conservation', len(names), docs=(README, ARCH))
 
-  def test_sme_check_count(self) -> None:
-    personas, dims = len(sme_eval.PERSONA_SPECS), len(sme_eval.RUBRIC_DIMENSIONS)
-    self._assert_all(r'\b(\d+)-Persona', personas, docs=(README,))
-    self._assert_all(r'\b(\d+)-Dimension', dims, docs=(README,))
-    self._assert_all(r'\((\d+)-check\)', personas * dims, docs=(README,))
+  def test_terraform_and_dataform_modules_exist(self) -> None:
+    self.assertTrue((ROOT / 'deploy' / 'terraform' / 'main.tf').is_file())
+    self.assertTrue((ROOT / 'deploy' / 'dataform' / 'workflow_settings.yaml').is_file())
 
   def test_tab_counts(self) -> None:
     html = ui_template.render_dashboard_html()

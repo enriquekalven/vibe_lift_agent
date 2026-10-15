@@ -47,7 +47,7 @@ class Nl2SqlVerifierTest(unittest.TestCase):
         self.assertTrue(audit['read_only_enforced'], audit['verification_errors'])
         self.assertEqual(audit['datasets_queried'], ['proj-a.finops_mart'])
         self.assertEqual(audit['max_bytes_billed_cap'], _CAP)
-        self.assertEqual(audit['sql_source'], 'FIXED_SELECT_TEMPLATES')
+        self.assertEqual(audit['sql_source'], 'PRE_BUILT_FINOPS_SQL_RECIPES')
 
   def test_question_text_never_enters_the_sql(self) -> None:
     opt = optimizer.FinOpsAlphaEvolveOptimizer()
