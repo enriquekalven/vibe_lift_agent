@@ -273,6 +273,26 @@ CREATE TABLE IF NOT EXISTS \`${PROJECT_ID}.${DATASET_ID}.agent_registry_snapshot
 );
 "
 
+# Table: zombie_clearance_queue (Scheduled Clearance Lifecycle: Warn -> Grace Period -> Reclaim)
+echo "Creating table ${DATASET_ID}.zombie_clearance_queue..."
+bq query --use_legacy_sql=false --project_id="${PROJECT_ID}" "
+CREATE TABLE IF NOT EXISTS \`${PROJECT_ID}.${DATASET_ID}.zombie_clearance_queue\` (
+  resource_id STRING,
+  display_name STRING,
+  kind STRING,
+  region STRING,
+  creator_email STRING,
+  first_flagged_idle_at TIMESTAMP,
+  warning_sent_at TIMESTAMP,
+  scheduled_clearance_at TIMESTAMP,
+  snoozed_until TIMESTAMP,
+  status STRING,
+  estimated_monthly_Floor_usd FLOAT64,
+  idle_reason STRING,
+  updated_at TIMESTAMP
+);
+"
+
 # View: vw_fleet_finops_summary
 echo "Creating view ${DATASET_ID}.vw_fleet_finops_summary..."
 bq query --use_legacy_sql=false --project_id="${PROJECT_ID}" "

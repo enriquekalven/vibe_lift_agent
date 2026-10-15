@@ -317,10 +317,11 @@ gcloud run deploy "${SERVICE_NAME}" \
     --concurrency=80 \
     --timeout=300 \
     --cpu-boost \
+    --no-cpu-throttling \
     --min-instances=1 \
     --max-instances=10 \
     $( [[ "${CANARY}" == "1" ]] && printf -- '--no-traffic --tag=candidate' ) \
-    --update-env-vars="^;^GOOGLE_CLOUD_PROJECT=${PROJECT_ID};GOOGLE_CLOUD_REGION=${REGION};GOOGLE_CLOUD_LOCATION=global;GOOGLE_GENAI_USE_VERTEXAI=TRUE;USE_UVICORN=1;ENABLE_MCP_APP=1;FINOPS_SURFACE=${SURFACE};MCP_PROTOCOL_VERSION=2025-06-18;FINOPS_PUBLIC_URL=${PUBLIC_URL};FINOPS_GE_ENGINES=${GE_ENGINES}${EXTRA_ENV}"
+    --update-env-vars="^;^GOOGLE_CLOUD_PROJECT=${PROJECT_ID};GOOGLE_CLOUD_REGION=${REGION};GOOGLE_CLOUD_LOCATION=global;GOOGLE_GENAI_USE_VERTEXAI=TRUE;USE_UVICORN=1;ENABLE_MCP_APP=1;FINOPS_SURFACE=${SURFACE};MCP_PROTOCOL_VERSION=2025-06-18;FINOPS_PUBLIC_URL=${PUBLIC_URL};FINOPS_GE_ENGINES=${GE_ENGINES};FINOPS_BQ_TOKEN_PUSHDOWN=true;FINOPS_BQ_SNAPSHOT_ENABLED=true${EXTRA_ENV}"
 
 # The service is private, so Gemini Enterprise needs permission to call /mcp. The Discovery Engine
 # service agent is the identity granted roles/run.invoker on the verified deployment.
@@ -397,9 +398,10 @@ if [[ "${SPLIT_EDGE}" == "1" ]]; then
       --concurrency=80 \
       --timeout=300 \
       --cpu-boost \
+      --no-cpu-throttling \
       --min-instances=1 \
       --max-instances=10 \
-      --update-env-vars="^;^GOOGLE_CLOUD_PROJECT=${PROJECT_ID};GOOGLE_CLOUD_REGION=${REGION};GOOGLE_CLOUD_LOCATION=global;GOOGLE_GENAI_USE_VERTEXAI=TRUE;USE_UVICORN=1;ENABLE_MCP_APP=0;FINOPS_SURFACE=dashboard;FINOPS_PUBLIC_URL=${DASHBOARD_PUBLIC_URL};FINOPS_GE_ENGINES=${GE_ENGINES}${EXTRA_ENV}"
+      --update-env-vars="^;^GOOGLE_CLOUD_PROJECT=${PROJECT_ID};GOOGLE_CLOUD_REGION=${REGION};GOOGLE_CLOUD_LOCATION=global;GOOGLE_GENAI_USE_VERTEXAI=TRUE;USE_UVICORN=1;ENABLE_MCP_APP=0;FINOPS_SURFACE=dashboard;FINOPS_PUBLIC_URL=${DASHBOARD_PUBLIC_URL};FINOPS_GE_ENGINES=${GE_ENGINES};FINOPS_BQ_TOKEN_PUSHDOWN=true;FINOPS_BQ_SNAPSHOT_ENABLED=true${EXTRA_ENV}"
   IAP_SERVICE_AGENT="service-${PROJECT_NUMBER}@gcp-sa-iap.iam.gserviceaccount.com"
   gcloud beta services identity create --service=iap.googleapis.com --project="${PROJECT_ID}" &>/dev/null || true
   echo "Granting roles/run.invoker on ${DASHBOARD_SERVICE_NAME} to ${IAP_SERVICE_AGENT}..."
