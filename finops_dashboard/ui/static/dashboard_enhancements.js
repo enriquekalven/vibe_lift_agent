@@ -1071,6 +1071,471 @@ var VL = (function() {
     return Math.round(n).toLocaleString('en-US');
   }
 
+  function vlGovernanceScore(input) {
+    var inp = input && typeof input === 'object' ? input : {};
+    var st = inp.state && typeof inp.state === 'object' ? inp.state : inp;
+    var fl = inp.fleet && typeof inp.fleet === 'object' ? inp.fleet : (st.ge_fleet || inp);
+    var agents = Array.isArray(inp.agents) ? inp.agents : (Array.isArray(fl.agents) ? fl.agents : []);
+    var lf = (fl && fl.live_finops) || (st && st.live_finops) || {};
+    var uc = (st && st.user_centric) || inp.user_centric || {};
+    var clr = inp.costGovernance || (st && st.cost_governance) || inp.cost_governance || {};
+    var agy = (st && st.antigravity_finops) || lf.antigravity_usage || inp.antigravity || {};
+    var backendThr = (clr && clr.governance_score && clr.governance_score.accountability && clr.governance_score.accountability.thresholds) || inp.thresholds || {};
+    var rawCacheTarget = num(pick(inp.cacheHitTargetPct, backendThr.cache_hit_target_pct));
+    var cacheHitTargetPct = Math.max(1, rawCacheTarget !== null && rawCacheTarget > 0 ? rawCacheTarget : 50);
+    var rawThinkLow = num(pick(inp.thinkingTaxLowPct, backendThr.thinking_tax_low_pct));
+    var thinkingTaxLowPct = Math.max(0, Math.min(99, rawThinkLow !== null ? rawThinkLow : 25));
+    var rawThinkHigh = num(pick(inp.thinkingTaxHighPct, backendThr.thinking_tax_high_pct));
+    var thinkingTaxHighPct = Math.max(thinkingTaxLowPct + 1, Math.min(100, rawThinkHigh !== null ? rawThinkHigh : 65));
+    var rawSeatTarget = num(pick(inp.seatUtilizationTargetPct, backendThr.seat_utilization_target_pct));
+    var seatUtilTargetPct = Math.max(1, Math.min(100, rawSeatTarget !== null && rawSeatTarget > 0 ? rawSeatTarget : 85));
+    var budget = num(pick(inp.budgetUsd, inp.budget, backendThr.monthly_budget_usd));
+
+    // 1. Observability & Trace Readiness (0-20 pts)
+    var totalAgents = agents.length;
+    var traceEnabled = 0;
+    var tokenAttributed = 0;
+    agents.forEach(function(a) {
+      if (!a || typeof a !== 'object') return;
+      var tl = a.trace_logging || {};
+      if (tl.enabled === true || a.observability_enabled === true) traceEnabled += 1;
+      var m = a.metrics || {};
+      if (num(m.input_tokens) !== null || m.token_source || (num(m.llm_calls) || 0) > 0) tokenAttributed += 1;
+    });
+    var tracePts, tokenPts, p1Grounding, p1Score, p1Summary, p1Rec;
+    if (totalAgents > 0) {
+      tracePts = Math.round(12 * traceEnabled / totalAgents);
+      tokenPts = Math.round(8 * tokenAttributed / totalAgents);
+      p1Grounding = 'MEASURED';
+      p1Score = Math.max(0, Math.min(20, tracePts + tokenPts));
+      p1Summary = traceEnabled + '/' + totalAgents + ' agents with trace logging; ' + tokenAttributed + '/' + totalAgents + ' with token telemetry.';
+      p1Rec = p1Score >= 20
+        ? 'All registered agents have trace logging & token attribution enabled.'
+        : 'Enable Discovery Engine trace logging (observabilityConfig) on ' + (totalAgents - traceEnabled) + ' agent(s).';
+    } else {
+      tracePts = 6;
+      tokenPts = 4;
+      p1Grounding = 'UNCONFIGURED_NEUTRAL';
+      p1Score = 10;
+      p1Summary = 'No registered Gemini Enterprise agents in current scope.';
+      p1Rec = 'Register agents in Gemini Enterprise and enable observabilityConfig trace logging.';
+    }
+    var p1Components = [
+      {
+        id: 'trace_logging',
+        label: 'Discovery Engine Trace Logging',
+        points: tracePts,
+        max_points: 12,
+        measured_value: totalAgents > 0 ? traceEnabled : null,
+        target_value: totalAgents > 0 ? totalAgents : null,
+        unit: 'agents',
+        source: 'discoveryengine.googleapis.com/v1alpha (observabilityConfig)',
+        grounding_status: p1Grounding,
+      },
+      {
+        id: 'token_attribution',
+        label: 'OTel / Cloud Logging Token Attribution',
+        points: tokenPts,
+        max_points: 8,
+        measured_value: totalAgents > 0 ? tokenAttributed : null,
+        target_value: totalAgents > 0 ? totalAgents : null,
+        unit: 'agents',
+        source: 'Cloud Monitoring v3 + Cloud Logging + Cloud Trace',
+        grounding_status: p1Grounding,
+      },
+    ];
+
+    // 2. Prompt Cache & Token Efficiency (0-20 pts)
+    var mu = (fl && fl.model_usage) || {};
+    var cache = vlCacheSavings(mu);
+    var cacheSharePct = cache && cache.sharePct !== null ? cache.sharePct : null;
+    if (cacheSharePct === null && agents.length) {
+      var aIn = 0, aCr = 0;
+      agents.forEach(function(a) {
+        var m = (a && a.metrics) || {};
+        var iTok = num(m.input_tokens) || 0;
+        var cTok = Math.min(iTok, Math.max(0, num(m.cached_tokens) || 0));
+        aIn += iTok;
+        aCr += cTok;
+      });
+      if (aIn > 0) cacheSharePct = 100 * aCr / aIn;
+    }
+    var cachePts = cacheSharePct !== null ? Math.round(12 * Math.min(1, Math.max(0, cacheSharePct / cacheHitTargetPct))) : 6;
+    var cacheGrounding = cacheSharePct !== null ? 'MEASURED' : 'UNCONFIGURED_NEUTRAL';
+    var tax = vlThinkingTax(mu, fl && fl.window_hours);
+    var thinkSharePct = tax ? tax.thinkingShareOfOutputPct : null;
+    var thinkPts = 8;
+    var thinkGrounding = thinkSharePct !== null ? 'MEASURED' : 'UNCONFIGURED_NEUTRAL';
+    if (thinkSharePct !== null && (tax.reasoningTokens || 0) > 0) {
+      if (thinkSharePct <= thinkingTaxLowPct) thinkPts = 8;
+      else if (thinkSharePct >= thinkingTaxHighPct) thinkPts = 0;
+      else thinkPts = Math.round(8 * (thinkingTaxHighPct - thinkSharePct) / (thinkingTaxHighPct - thinkingTaxLowPct));
+    }
+    var p2Score = Math.max(0, Math.min(20, cachePts + thinkPts));
+    var p2Summary = (cacheSharePct !== null ? cacheSharePct.toFixed(1) + '% cache hit (target >=' + Math.round(cacheHitTargetPct) + '%)' : 'No prompt cache volume yet') +
+      '; ' + (thinkSharePct !== null ? thinkSharePct.toFixed(1) + '% thinking share.' : '0% thinking overhead.');
+    var p2Rec = p2Score >= 18
+      ? 'Prompt cache reuse and reasoning token budgets meet efficiency targets.'
+      : 'Inspect Prompt Cache X-Ray and cap ThinkingConfig budget on high-reasoning models.';
+    var p2Components = [
+      {
+        id: 'prompt_cache_hit',
+        label: 'Prompt Cache Hit Share',
+        points: cachePts,
+        max_points: 12,
+        measured_value: cacheSharePct !== null ? Math.round(cacheSharePct * 10) / 10 : null,
+        target_value: cacheHitTargetPct,
+        unit: 'pct',
+        source: 'ge_fleet.model_usage (cache_read_tokens / prompt_tokens)',
+        grounding_status: cacheGrounding,
+      },
+      {
+        id: 'thinking_tax_control',
+        label: 'Reasoning Token Share Control',
+        points: thinkPts,
+        max_points: 8,
+        measured_value: thinkSharePct !== null ? Math.round(thinkSharePct * 10) / 10 : null,
+        target_value: thinkingTaxLowPct,
+        unit: 'pct',
+        source: 'ge_fleet.model_usage (reasoning_tokens / combined_output_tokens)',
+        grounding_status: thinkGrounding,
+      },
+    ];
+
+    // 3. Runtime Hygiene & Zombie Control (0-20 pts)
+    var qItems = Array.isArray(clr.queue) ? clr.queue : (Array.isArray(clr.items) ? clr.items : []);
+    var qById = {};
+    qItems.forEach(function(q) {
+      if (q && q.runtime_id) qById[String(q.runtime_id)] = String(q.status || '');
+    });
+    var unreg = Array.isArray(fl && fl.unregistered_runtimes) ? fl.unregistered_runtimes : [];
+    var unaddressedZombies = 0;
+    var warnedZombies = 0;
+    var seenRids = {};
+    unreg.forEach(function(u) {
+      if (!u || typeof u !== 'object') return;
+      var rid = String(u.agent_id || u.runtime_id || '').trim();
+      var fstat = String(u.finops_status || '').toUpperCase();
+      if (fstat === 'ZOMBIE_CANDIDATE' || fstat === 'ZOMBIE_IDLE_ENGINE' || fstat === 'ZOMBIE_IDLE_SERVICE' || fstat === 'ALWAYS_ON_UNREGISTERED') {
+        if (rid) seenRids[rid] = true;
+        var qs = qById[rid] || '';
+        if (qs === 'SNOOZED' || qs === 'RECOVERED_ACTIVE' || qs.indexOf('CLEARED_') === 0) return;
+        if (qs === 'WARNED_GRACE_PERIOD') warnedZombies += 1;
+        else unaddressedZombies += 1;
+      }
+    });
+    qItems.forEach(function(q) {
+      if (!q || typeof q !== 'object') return;
+      var rid = String(q.runtime_id || '').trim();
+      if (seenRids[rid]) return;
+      var qs = String(q.status || '');
+      if (qs === 'PENDING_WARNING') unaddressedZombies += 1;
+      else if (qs === 'WARNED_GRACE_PERIOD') warnedZombies += 1;
+    });
+    var brokenRegs = agents.filter(function(a) {
+      var stReg = (a && a.registration && a.registration.status) || (a && a.backend && a.backend.status);
+      return stReg === 'BACKEND_NOT_FOUND' || stReg === 'NO_BACKEND';
+    }).length;
+    var unwarnedDed = Math.min(20, unaddressedZombies * 5);
+    var remAfterUnwarned = Math.max(0, 20 - unwarnedDed);
+    var warnedDed = Math.min(remAfterUnwarned, warnedZombies * 2);
+    var remAfterWarned = Math.max(0, remAfterUnwarned - warnedDed);
+    var brokenDed = Math.min(remAfterWarned, brokenRegs * 3);
+    var p3Score = Math.max(0, Math.min(20, 20 - unwarnedDed - warnedDed - brokenDed));
+    var p3Summary = unaddressedZombies + ' unwarned zombie runtime(s), ' + warnedZombies + ' in grace window, ' + brokenRegs + ' broken registration(s).';
+    var p3Rec = p3Score >= 20
+      ? 'Zero unaddressed zombie runtimes or broken registrations.'
+      : 'Run Stage 1/2 Scheduled Zombie Clearance or scale idle Cloud Run services to min-instances=0.';
+    var p3Components = [
+      {
+        id: 'base_hygiene_allowance',
+        label: 'Runtime Hygiene Base Allowance',
+        points: 20,
+        max_points: 20,
+        measured_value: agents.length + unreg.length,
+        target_value: 0,
+        unit: 'runtimes_audited',
+        source: 'Cloud Run v2 + Vertex AI ReasoningEngine Inventory',
+        grounding_status: 'MEASURED',
+      },
+      {
+        id: 'unwarned_zombie_penalty',
+        label: 'Unwarned Zombie Runtime Penalty (-5 pts/ea)',
+        points: -unwarnedDed,
+        max_points: 0,
+        measured_value: unaddressedZombies,
+        target_value: 0,
+        unit: 'zombies',
+        source: 'ge_fleet.unregistered_runtimes + zombie_clearance_queue',
+        grounding_status: 'MEASURED',
+      },
+      {
+        id: 'warned_grace_penalty',
+        label: 'Grace-Period Runtime Penalty (-2 pts/ea)',
+        points: -warnedDed,
+        max_points: 0,
+        measured_value: warnedZombies,
+        target_value: 0,
+        unit: 'runtimes',
+        source: 'finops_analytics.zombie_clearance_queue',
+        grounding_status: 'MEASURED',
+      },
+      {
+        id: 'broken_registration_penalty',
+        label: 'Broken Registration Penalty (-3 pts/ea)',
+        points: -brokenDed,
+        max_points: 0,
+        measured_value: brokenRegs,
+        target_value: 0,
+        unit: 'registrations',
+        source: 'ge_fleet.agents[].registration.status',
+        grounding_status: 'MEASURED',
+      },
+    ];
+
+    // 4. Budget Runway & Drift Stability (0-20 pts)
+    var gdu = (st && st.ge_daily_usage) || inp.ge_daily_usage || {};
+    var days = Array.isArray(gdu.days) ? gdu.days : [];
+    var cs = vlCostSummary(days, budget);
+    var rw = vlBudgetRunway(cs);
+    var runwayPts = 8;
+    var rwLabel = 'Monthly budget cap not set (8/12 baseline)';
+    var rwGrounding = 'UNCONFIGURED_NEUTRAL';
+    var rwMeasuredVal = null;
+    if (inp.budgetStatus) {
+      var bs = String(inp.budgetStatus).toLowerCase();
+      if (bs === 'on_track' || bs === 'runway_clear') { runwayPts = 12; rwLabel = 'Budget on track'; rwGrounding = 'MEASURED'; rwMeasuredVal = 'on_track'; }
+      else if (bs === 'at_risk') { runwayPts = 6; rwLabel = 'Budget runway at risk'; rwGrounding = 'MEASURED'; rwMeasuredVal = 'at_risk'; }
+      else if (bs === 'over' || bs === 'exhausted') { runwayPts = 0; rwLabel = 'Projected over budget'; rwGrounding = 'MEASURED'; rwMeasuredVal = 'over'; }
+    } else if (rw && rw.status === 'RUNWAY_CLEAR') {
+      runwayPts = 12; rwLabel = 'Budget on track'; rwGrounding = 'MEASURED'; rwMeasuredVal = 'on_track';
+    } else if (rw && rw.status === 'AT_RISK') {
+      runwayPts = 6; rwLabel = 'Budget runway at risk'; rwGrounding = 'MEASURED'; rwMeasuredVal = 'at_risk';
+    } else if (rw && rw.status === 'EXHAUSTED') {
+      runwayPts = 0; rwLabel = 'Budget exhausted'; rwGrounding = 'MEASURED'; rwMeasuredVal = 'over';
+    }
+    var delta = vlSpendDelta(lf.spend_drift);
+    var changePct = delta && delta.pct !== null ? delta.pct : null;
+    if (changePct === null && fl && fl.model_usage_previous && fl.model_usage_previous.totals && mu && mu.totals) {
+      var prevUsd = num(fl.model_usage_previous.totals.estimated_cost_usd || fl.model_usage_previous.totals.est_cost_usd);
+      var currUsd = num(mu.totals.estimated_cost_usd || mu.totals.est_cost_usd);
+      if (prevUsd !== null && prevUsd > 0 && currUsd !== null) {
+        changePct = Math.round(((currUsd - prevUsd) / prevUsd) * 1000) / 10;
+      }
+    }
+    var driftPts = 6;
+    var driftLabel = 'no prior-window drift baseline';
+    var driftGrounding = 'UNCONFIGURED_NEUTRAL';
+    if (changePct !== null) {
+      driftGrounding = 'MEASURED';
+      var sign = changePct >= 0 ? '+' : '';
+      if (changePct <= 10) { driftPts = 8; driftLabel = sign + changePct.toFixed(1) + '% spend drift (stable)'; }
+      else if (changePct <= 25) { driftPts = 5; driftLabel = sign + changePct.toFixed(1) + '% spend drift (moderate)'; }
+      else if (changePct <= 50) { driftPts = 2; driftLabel = sign + changePct.toFixed(1) + '% spend drift (elevated)'; }
+      else { driftPts = 0; driftLabel = sign + changePct.toFixed(1) + '% spend spike'; }
+    }
+    var p4Score = Math.max(0, Math.min(20, runwayPts + driftPts));
+    var p4Summary = rwLabel + '; ' + driftLabel + '.';
+    var p4Rec = p4Score >= 18
+      ? 'Spend pace and period-over-period drift are within target guardrails.'
+      : 'Set a monthly AI budget cap on the Cost tab and inspect the Spend Drift Waterfall.';
+    var p4Components = [
+      {
+        id: 'budget_runway',
+        label: 'Monthly Budget Runway Pace',
+        points: runwayPts,
+        max_points: 12,
+        measured_value: rwMeasuredVal,
+        target_value: 'on_track',
+        unit: 'status',
+        source: 'ge_daily_usage + FINOPS_MONTHLY_BUDGET_USD',
+        grounding_status: rwGrounding,
+      },
+      {
+        id: 'spend_drift',
+        label: 'Period-over-Period Spend Drift',
+        points: driftPts,
+        max_points: 8,
+        measured_value: changePct,
+        target_value: 10,
+        unit: 'pct',
+        source: 'live_finops.spend_drift / model_usage_previous',
+        grounding_status: driftGrounding,
+      },
+    ];
+
+    // 5. Seat & Identity Attribution (0-20 pts)
+    var agyKpis = (agy && (agy.kpis || agy.seats)) || {};
+    var purchasedSeats = num(agyKpis.purchased_seats) || 0;
+    var assignedSeats = num(agyKpis.assigned_seats) || 0;
+    var idleSeats = num(agyKpis.idle_seats) || 0;
+    var activeSeatsExplicit = num(pick(agyKpis.active_seats_7d, agyKpis.active_seats));
+    var seatDenom = purchasedSeats || assignedSeats;
+    var seatPts = 7;
+    var seatTxt = 'Seat inventory not connected (7/10 baseline)';
+    var seatGrounding = 'UNCONFIGURED_NEUTRAL';
+    var seatRatioPct = null;
+    if (seatDenom > 0) {
+      var activeSeats = activeSeatsExplicit !== null ? Math.max(0, activeSeatsExplicit) : Math.max(0, (assignedSeats || seatDenom) - idleSeats);
+      var seatRatio = activeSeats / seatDenom;
+      seatRatioPct = Math.round(seatRatio * 1000) / 10;
+      seatPts = Math.round(10 * Math.min(1, Math.max(0, (seatRatio * 100) / seatUtilTargetPct)));
+      seatTxt = activeSeats + '/' + seatDenom + ' active seats (' + Math.round(seatRatio * 100) + '%)';
+      seatGrounding = 'MEASURED';
+    }
+    var sessions = Array.isArray(uc.ge_sessions) ? uc.ge_sessions : [];
+    var pUsers = Array.isArray(uc.power_users_ldap) ? uc.power_users_ldap : [];
+    var attrPts = 7;
+    var attrTxt = 'No session identity sample in current window';
+    var attrGrounding = 'UNCONFIGURED_NEUTRAL';
+    var attrRatioPct = null;
+    var isVerifiedUser = function(raw) {
+      var v = String(raw || '').trim().toLowerCase();
+      return v !== '' && v !== 'unattributed' && v !== 'anonymous' && v !== 'unknown' && v !== DASH.toLowerCase();
+    };
+    if (sessions.length) {
+      var verSess = sessions.filter(function(s) { return s && isVerifiedUser(s.user_email); }).length;
+      attrRatioPct = Math.round((verSess / sessions.length) * 1000) / 10;
+      attrPts = Math.round(10 * verSess / sessions.length);
+      attrTxt = verSess + '/' + sessions.length + ' sessions LDAP-attributed';
+      attrGrounding = 'MEASURED';
+    } else if (pUsers.length) {
+      var verUsers = pUsers.filter(function(u) { return u && isVerifiedUser(u.user_ldap || u.ldap || u.user_email); }).length;
+      attrRatioPct = Math.round((verUsers / pUsers.length) * 1000) / 10;
+      attrPts = Math.round(10 * verUsers / pUsers.length);
+      attrTxt = verUsers + '/' + pUsers.length + ' top users LDAP-attributed';
+      attrGrounding = 'MEASURED';
+    }
+    var p5Score = Math.max(0, Math.min(20, seatPts + attrPts));
+    var p5Summary = seatTxt + '; ' + attrTxt + '.';
+    var p5Rec = p5Score >= 18
+      ? 'High seat utilization and verified LDAP session attribution.'
+      : 'Reclaim idle Antigravity/GE seats and enforce authenticated user identity on agent sessions.';
+    var p5Components = [
+      {
+        id: 'seat_utilization',
+        label: 'Assigned Seat Utilization (7d)',
+        points: seatPts,
+        max_points: 10,
+        measured_value: seatRatioPct,
+        target_value: seatUtilTargetPct,
+        unit: 'pct',
+        source: 'antigravity_finops.kpis (active_seats_7d / purchased_seats)',
+        grounding_status: seatGrounding,
+      },
+      {
+        id: 'identity_attribution',
+        label: 'Verified LDAP Session Attribution',
+        points: attrPts,
+        max_points: 10,
+        measured_value: attrRatioPct,
+        target_value: 100,
+        unit: 'pct',
+        source: 'user_centric.ge_sessions / power_users_ldap',
+        grounding_status: attrGrounding,
+      },
+    ];
+
+    var mkPillar = function(id, label, shortLabel, sc, summary, rec, actionLabel, tabIdx, targetId, comps) {
+      var stLbl = sc >= 16 ? 'healthy' : (sc >= 10 ? 'warning' : 'critical');
+      var stCode = sc >= 16 ? 'OPTIMAL' : (sc >= 10 ? 'MODERATE' : 'ACTION_NEEDED');
+      return {
+        id: id,
+        label: label,
+        shortLabel: shortLabel,
+        score: sc,
+        max: 20,
+        maxScore: 20,
+        max_score: 20,
+        ptsLost: Math.max(0, 20 - sc),
+        pct: Math.round(sc / 20 * 100),
+        status: stLbl,
+        statusCode: stCode,
+        summary: summary,
+        recommendation: rec,
+        actionLabel: actionLabel,
+        actionTab: tabIdx,
+        actionTarget: targetId,
+        tabIndex: tabIdx,
+        targetId: targetId,
+        components: comps || [],
+      };
+    };
+
+    var pillars = [
+      mkPillar('observability', 'Observability & Trace Readiness', 'Observability', p1Score, p1Summary, p1Rec, 'Manage Trace Logging', 0, 'enableAllObsBtn', p1Components),
+      mkPillar('token_efficiency', 'Prompt Cache & Token Efficiency', 'Token Efficiency', p2Score, p2Summary, p2Rec, 'Inspect Tokenomics', 3, 'vlTokenomicsPanel', p2Components),
+      mkPillar('runtime_hygiene', 'Runtime Hygiene & Zombie Control', 'Runtime Hygiene', p3Score, p3Summary, p3Rec, 'Review Clearance Queue', 3, 'scheduledClearancePanel', p3Components),
+      mkPillar('budget_stability', 'Budget Runway & Drift Stability', 'Budget & Drift', p4Score, p4Summary, p4Rec, 'Configure Budget Cap', 3, 'vlSpendPanel', p4Components),
+      mkPillar('seat_attribution', 'Seat & Identity Attribution', 'Seats & Identity', p5Score, p5Summary, p5Rec, 'Audit Seats & Users', 7, 'antigravityFinopsPanel', p5Components),
+    ];
+
+    var totalScore = pillars.reduce(function(acc, p) { return acc + p.score; }, 0);
+    var measuredEarned = 0, measuredPossible = 0, unconfEarned = 0, unconfPossible = 0;
+    var unconfIds = [];
+    var sumCheckOk = (totalScore === pillars.reduce(function(acc, p) { return acc + p.score; }, 0)) &&
+      (pillars.reduce(function(acc, p) { return acc + p.max; }, 0) === 100);
+    pillars.forEach(function(p) {
+      var cPts = 0, cMax = 0;
+      (p.components || []).forEach(function(c) {
+        cPts += c.points;
+        cMax += c.max_points;
+        if (c.grounding_status === 'MEASURED') {
+          measuredEarned += c.points;
+          measuredPossible += c.max_points;
+        } else {
+          unconfEarned += c.points;
+          unconfPossible += c.max_points;
+          unconfIds.push(c.id);
+        }
+      });
+      if (cPts !== p.score || cMax !== p.max) sumCheckOk = false;
+    });
+
+    var grade = totalScore >= 85 ? 'A' : (totalScore >= 70 ? 'B' : (totalScore >= 55 ? 'C' : (totalScore >= 40 ? 'D' : 'F')));
+    var status = totalScore >= 85 ? 'OPTIMAL' : (totalScore >= 70 ? 'GOVERNED' : (totalScore >= 50 ? 'NEEDS_TUNING' : 'CRITICAL'));
+    var statusLabel = totalScore >= 85 ? 'Exemplary Governance' : (totalScore >= 70 ? 'Governed' : (totalScore >= 50 ? 'Needs Tuning' : 'Action Required'));
+    var tier = totalScore >= 85 ? 'EXEMPLARY' : (totalScore >= 70 ? 'GOVERNED' : (totalScore >= 50 ? 'NEEDS_TUNING' : 'AT_RISK'));
+    var badgeClass = totalScore >= 85 ? 'badge-green' : (totalScore >= 70 ? 'badge-blue' : (totalScore >= 50 ? 'badge-yellow' : 'badge-red'));
+    var recs = pillars.filter(function(p) { return p.score < 20; }).slice().sort(function(a, b) { return a.score - b.score; });
+    var topAction = recs.length ? recs[0] : null;
+    var headline = topAction
+      ? ('Top governance opportunity (+' + topAction.ptsLost + ' pts): ' + topAction.recommendation)
+      : 'All 5 Enterprise AI Governance & Tokenomics pillars are operating at full score (100/100).';
+
+    return {
+      score: totalScore,
+      maxScore: 100,
+      max_score: 100,
+      grade: grade,
+      status: status,
+      statusLabel: statusLabel,
+      tier: tier,
+      badgeClass: badgeClass,
+      headline: headline,
+      pillars: pillars,
+      accountability: {
+        total_points_earned: totalScore,
+        total_points_possible: 100,
+        measured_points_earned: measuredEarned,
+        measured_points_possible: measuredPossible,
+        unconfigured_neutral_points: unconfEarned,
+        unconfigured_points_possible: unconfPossible,
+        unconfigured_components: unconfIds,
+        sum_check_ok: sumCheckOk,
+        thresholds: {
+          cache_hit_target_pct: cacheHitTargetPct,
+          thinking_tax_low_pct: thinkingTaxLowPct,
+          thinking_tax_high_pct: thinkingTaxHighPct,
+          seat_utilization_target_pct: seatUtilTargetPct,
+          monthly_budget_usd: budget,
+        },
+      },
+      topAction: topAction,
+      recommendations: recs,
+    };
+  }
+
   function vlBuildPdfReport(report) {
     var r = report || {};
     var fl = r.fleet || (r.state && r.state.ge_fleet) || {};
@@ -1091,23 +1556,47 @@ var VL = (function() {
     var muTotals = mu.totals || {};
     var uc = st.user_centric || {};
     var pUsers = Array.isArray(uc.power_users_ldap) ? uc.power_users_ldap : [];
+    var gov = vlGovernanceScore({fleet: fl, state: st, agents: agents, budgetUsd: pick(r.budgetUsd, r.budget)});
 
-    var kpis = Array.isArray(r.kpis) && r.kpis.length ? r.kpis.slice(0, 8) : [];
+    var kpis = Array.isArray(r.kpis) && r.kpis.length ? r.kpis.slice(0, 7) : [];
     if (!kpis.length) {
       var attnCount = (hc.failing || 0) + (hc.broken || 0) + (hc.degraded || 0);
       kpis = [
+        {label: 'AI Governance Score', value: gov.score + ' / 100 (' + gov.grade + ')',
+         sub: gov.tier + ' | 5-pillar posture'},
         {label: 'Agents Enabled', value: String(pick(totals.enabled, agents.length)) + ' / ' + String(pick(totals.agents, agents.length)),
          sub: (hc.healthy || 0) + ' healthy | ' + attnCount + ' need attention'},
-        {label: 'Requests (' + winLbl + ')', value: num(totals.requests) !== null ? Math.round(num(totals.requests)).toLocaleString('en-US') : '--',
-         sub: (num(totals.errors_5xx) || 0) + ' 5xx | ' + (num(totals.errors_4xx) || 0) + ' 4xx'},
         {label: 'Est. Model Spend', value: num(muTotals.est_cost_usd) !== null ? usdText(num(muTotals.est_cost_usd), 2) : '--',
          sub: (num(muTotals.invocations) !== null ? Math.round(num(muTotals.invocations)).toLocaleString('en-US') + ' calls' : 'List price estimate')},
         {label: 'Agent Tokens (In / Out)', value: fmtCompactTok(totals.input_tokens) + ' / ' + fmtCompactTok(totals.output_tokens),
          sub: (num(totals.llm_calls) !== null ? Math.round(num(totals.llm_calls)).toLocaleString('en-US') + ' LLM calls' : 'OTel gen_ai telemetry')},
       ];
+    } else if (!kpis.some(function(k) { return k && /governance score/i.test(String(k.label || '')); })) {
+      kpis.unshift({
+        label: 'AI Governance Score',
+        value: gov.score + ' / 100 (' + gov.grade + ')',
+        sub: gov.tier + ' | 5-pillar posture',
+      });
     }
 
     var sections = [];
+    // Governance & Tokenomics 0-100 Scorecard Section
+    sections.push({
+      title: 'Enterprise AI Governance & Tokenomics Scorecard (' + gov.score + '/100 -- Grade ' + gov.grade + ' ' + gov.tier + ')',
+      subtitle: gov.headline,
+      headers: ['Governance Pillar', 'Score', 'Status', 'Measured Telemetry Evidence', 'Recommended Action'],
+      widths: [148, 56, 74, 212, 230],
+      rows: gov.pillars.map(function(p) {
+        return [
+          p.label,
+          p.score + ' / ' + p.maxScore,
+          p.status,
+          p.summary,
+          p.recommendation,
+        ];
+      }),
+    });
+
     // Section 1: Fleet Health & Attention Summary + Agent Inventory
     if (agents.length) {
       var agentRows = agents.slice(0, 40).map(function(a) {
@@ -1201,20 +1690,6 @@ var VL = (function() {
         rows: checks.slice(0, 20).map(function(c) {
           return [c.check_id || '--', c.tab || '--', c.metric || '--', c.expected || '--', c.actual || '--', c.source || '--', c.status || '--'];
         }),
-      });
-    } else if (!sections.length) {
-      sections.push({
-        title: '1. Dashboard Summary',
-        subtitle: 'Exported from FinOps Analytics Platform.',
-        headers: ['Property', 'Value'],
-        widths: [220, 500],
-        rows: [
-          ['Active View', activeTab],
-          ['Gemini Enterprise Scope', scope],
-          ['Time Window', winLbl],
-          ['GCP Project', proj],
-          ['Export Timestamp', exportedAt],
-        ],
       });
     }
 
@@ -2068,6 +2543,140 @@ var VL = (function() {
         [h('i', {class: 'vl-dot vl-dot-' + l.id}), l.label, h('span', {class: 'vl-chip-n'}, [String(counts[l.id])])]));
     });
     box.appendChild(h('span', {class: 'vl-strip-rules', title: healthRulesText()}, ['How is this computed?']));
+    safeRun('VL.renderHealthStrip.governanceScore', function() { renderGovernanceScore(state(), rawFleet() || {agents: list}); });
+  }
+
+  var govScoreExpanded = false;
+
+  function runGovernanceAction(p) {
+    if (!p) return;
+    var tabIdx = typeof p.actionTab === 'number' ? p.actionTab : 6;
+    try { switchTab(tabIdx); } catch (e) {}
+    if (p.actionTarget) {
+      var target = byId(p.actionTarget);
+      if (target) {
+        var panel = target.closest('.panel') || target;
+        if (panel && panel.scrollIntoView) panel.scrollIntoView({block: 'start'});
+      }
+    }
+  }
+
+  function toggleGovernanceScorecard(forceOpen) {
+    govScoreExpanded = typeof forceOpen === 'boolean' ? forceOpen : !govScoreExpanded;
+    try { switchTab(6); } catch (e) {}
+    renderGovernanceScore(state(), rawFleet());
+    var panel = byId('vlGovScorePanel');
+    if (govScoreExpanded && panel && panel.scrollIntoView) {
+      panel.scrollIntoView({block: 'nearest'});
+    }
+  }
+
+  function renderGovernanceScore(st, fl) {
+    var stObj = st || state() || {};
+    var flObj = fl || rawFleet() || stObj.ge_fleet || {};
+    var gov = vlGovernanceScore({
+      fleet: flObj,
+      state: stObj,
+      costGovernance: stObj.cost_governance || null,
+      budgetUsd: readBudget(),
+    });
+    if (!gov) return;
+
+    var chip = byId('vlGovScoreChip');
+    if (chip) {
+      var tierCls = gov.score >= 85 ? 'vl-gov-chip-ok' : (gov.score >= 70 ? 'vl-gov-chip-good' : (gov.score >= 50 ? 'vl-gov-chip-warn' : 'vl-gov-chip-bad'));
+      chip.className = 'btn vl-gov-chip ' + tierCls;
+      chip.setAttribute('aria-expanded', govScoreExpanded ? 'true' : 'false');
+      chip.title = 'Enterprise AI Governance & Tokenomics Score: ' + gov.score + '/100 (' + gov.grade + ' \u00b7 ' + gov.statusLabel + '). Click to inspect 5-pillar breakdown.';
+      setKids(chip, [
+        h('span', {class: 'vl-gov-dot'}),
+        h('span', {}, ['Gov Score: ']),
+        h('strong', {class: 'mono'}, [gov.score + '/100']),
+        h('span', {class: 'vl-gov-grade mono'}, [gov.grade]),
+      ]);
+      chip.classList.remove('hidden');
+    }
+
+    var box = byId('vlGovScorePanel');
+    if (!box) return;
+    var badgeTone = gov.score >= 85 ? 'badge-green' : (gov.score >= 70 ? 'badge-blue' : (gov.score >= 50 ? 'badge-yellow' : 'badge-red'));
+    var toggleBtn = h('button', {
+      type: 'button',
+      class: 'btn btn-xs',
+      'aria-expanded': govScoreExpanded ? 'true' : 'false',
+      onclick: function() {
+        govScoreExpanded = !govScoreExpanded;
+        renderGovernanceScore(state(), rawFleet());
+      },
+    }, [govScoreExpanded ? 'Hide 5-pillar breakdown \u25b4' : 'Inspect 5 pillars & remediate \u25be']);
+
+    var topAct = gov.topAction;
+    var quickFixBtn = topAct && topAct.ptsLost > 0 ? h('button', {
+      type: 'button',
+      class: 'btn btn-xs btn-primary',
+      onclick: function() { runGovernanceAction(topAct); },
+    }, [topAct.actionLabel + ' (+' + topAct.ptsLost + ' pts)']) : null;
+
+    var acct = gov.accountability || {};
+    var acctBadge = acct.total_points_possible === 100 ? h('span', {
+      class: 'badge badge-gray mono',
+      title: 'Measured telemetry points: ' + acct.measured_points_earned + '/' + acct.measured_points_possible +
+             ' | Unconfigured neutral baseline: ' + acct.unconfigured_neutral_points + '/' + acct.unconfigured_points_possible,
+    }, [
+      'Measured ' + acct.measured_points_earned + '/' + acct.measured_points_possible + ' pts' +
+      (acct.unconfigured_points_possible > 0 ? ' \u00b7 Baseline ' + acct.unconfigured_neutral_points + '/' + acct.unconfigured_points_possible + ' pts' : ' \u00b7 100% Grounded'),
+    ]) : null;
+
+    var cards = govScoreExpanded ? h('div', {class: 'vl-gov-grid'}, (gov.pillars || []).map(function(p) {
+      var pct = p.max > 0 ? Math.min(100, Math.max(0, Math.round(100 * p.score / p.max))) : 0;
+      var barCls = p.status === 'healthy' ? 'vl-gov-bar-ok' : (p.status === 'warning' ? 'vl-gov-bar-warn' : 'vl-gov-bar-bad');
+      var cardBadge = p.status === 'healthy' ? 'badge-green' : (p.status === 'warning' ? 'badge-yellow' : 'badge-red');
+      var compRows = Array.isArray(p.components) && p.components.length ? h('div', {class: 'vl-gov-comp-list'}, p.components.map(function(c) {
+        if (c.max_points === 0 && c.points === 0) return null;
+        var ptStr = c.max_points > 0 ? (c.points + '/' + c.max_points + ' pts') : ((c.points >= 0 ? '+' : '') + c.points + ' pts');
+        var isUnconf = c.grounding_status && c.grounding_status !== 'MEASURED';
+        return h('div', {class: 'vl-gov-comp-row mono', title: 'Source: ' + (c.source || '') + ' (' + (c.grounding_status || 'MEASURED') + ')'}, [
+          h('span', {class: 'vl-gov-comp-lbl'}, [c.label + (isUnconf ? ' (baseline)' : '')]),
+          h('span', {class: 'vl-gov-comp-pts'}, [ptStr]),
+        ]);
+      })) : null;
+      return h('div', {class: 'vl-gov-card'}, [
+        h('div', {class: 'vl-gov-card-top'}, [
+          h('strong', {class: 'vl-gov-card-title'}, [p.label]),
+          h('span', {class: 'badge ' + cardBadge + ' mono'}, [p.score + '/' + p.max + ' pts']),
+        ]),
+        h('div', {class: 'vl-gov-bar', role: 'img', 'aria-label': p.label + ' score ' + p.score + ' of ' + p.max}, [
+          h('div', {class: 'vl-gov-bar-fill ' + barCls, style: 'width:' + pct + '%'}),
+        ]),
+        compRows,
+        h('div', {class: 'vl-gov-card-sum mono'}, [p.summary]),
+        h('div', {class: 'vl-gov-card-rec'}, [p.recommendation]),
+        p.actionLabel ? h('div', {class: 'vl-gov-card-foot'}, [
+          h('button', {
+            type: 'button',
+            class: 'btn btn-xs',
+            onclick: function() { runGovernanceAction(p); },
+          }, [p.actionLabel + (p.ptsLost > 0 ? ' (+' + p.ptsLost + ' pts)' : ' \u2192')]),
+        ]) : null,
+      ]);
+    })) : null;
+
+    setKids(box, [
+      h('div', {class: 'vl-gov-head'}, [
+        h('div', {class: 'vl-gov-head-left'}, [
+          h('span', {class: 'vl-strip-title'}, ['Enterprise AI Governance Score']),
+          h('span', {class: 'vl-gov-big mono'}, [gov.score + '/100']),
+          h('span', {class: 'badge ' + badgeTone}, ['Grade ' + gov.grade + ' \u00b7 ' + gov.statusLabel]),
+          acctBadge,
+          topAct && topAct.ptsLost > 0
+            ? h('span', {class: 'vl-gov-sub'}, ['Top opportunity: ' + topAct.label + ' (' + topAct.summary + ')'])
+            : h('span', {class: 'vl-gov-sub'}, ['All 5 FinOps & Governance pillars are operating at target thresholds.']),
+        ]),
+        h('div', {class: 'vl-links'}, [quickFixBtn, toggleBtn]),
+      ]),
+      cards,
+    ]);
+    box.classList.remove('hidden');
   }
 
   function focusAgents(opts) {
@@ -3301,6 +3910,7 @@ var VL = (function() {
     renderBudgetRunway(cs);
     renderDriftWaterfall();
     renderTokenomics(fl);
+    renderGovernanceScore(st, fl);
 
     var chartBox = byId('vlSpendChart');
     var legend = byId('vlSpendLegend');
@@ -3940,6 +4550,8 @@ var VL = (function() {
                               run: function() { try { switchTab(3); } catch (e) { return; } toggleBudgetForm(true); revealTable('vlSpendKpis'); }} : null,
       byId('vlTokenomicsPanel') ? {title: 'Inspect Tokenomics & thinking-token tax', keywords: ['tokenomics', 'thinking', 'repricing', 'flash', 'cost'],
                                    run: function() { try { switchTab(3); } catch (e) { return; } var p = byId('vlTokenomicsPanel'); if (p && p.scrollIntoView) p.scrollIntoView({block: 'start'}); }} : null,
+      byId('vlGovScorePanel') ? {title: 'Inspect Enterprise AI Governance Score (0\u2013100)', keywords: ['governance', 'score', 'scorecard', 'compliance', 'pillars', 'tokenomics', 'zombie'],
+                                 run: function() { toggleGovernanceScorecard(true); }} : null,
     ];
     actions.forEach(function(a) {
       if (!a) return;
@@ -4306,12 +4918,14 @@ var VL = (function() {
       if (st) renderSpend(st);
       else if (fleet) renderTokenomics(fleet);
     });
+    safeRun('VL.onFleet.governanceScore', function() { renderGovernanceScore(state(), fleet); });
   }
   function onState(st) {
     if (!st) return;
     safeRun('VL.onState.spend', function() { renderSpend(st); });
     safeRun('VL.onState.adoption', function() { renderAdoption(st); });
     safeRun('VL.onState.freshness', function() { renderFreshness(); });
+    safeRun('VL.onState.governanceScore', function() { renderGovernanceScore(st, rawFleet()); });
   }
 
   function mount() {
@@ -4356,6 +4970,10 @@ var VL = (function() {
     ['modelUsageBody', 'liveTeAgentsBody', 'liveDriftModelsBody', 'cloudRunServicesBody'].forEach(function(id) {
       smartTable(id, {toolbar: false});
     });
+    var govChip = byId('vlGovScoreChip');
+    if (govChip) {
+      govChip.addEventListener('click', function() { toggleGovernanceScorecard(); });
+    }
     var chip = byId('vlFreshChip');
     if (chip) {
       chip.addEventListener('click', function() { try { refreshFleet(true); } catch (e) { /* not ready */ } });
@@ -4379,10 +4997,11 @@ var VL = (function() {
     resolveTheme: vlResolveTheme,
     paletteScore: vlPaletteScore, paletteFilter: vlPaletteFilter,
     alertPolicies: vlAlertPolicies, alertTarget: vlAlertTarget, autoAlertWindow: vlAutoAlertWindow,
-    classifyError: vlClassifyError, buildPdfReport: vlBuildPdfReport,
+    classifyError: vlClassifyError, governanceScore: vlGovernanceScore, buildPdfReport: vlBuildPdfReport,
     // DOM (browser only)
     mount: mount, smartTable: smartTable, setTableQuery: setTableQuery, setTableFacet: setTableFacet,
-    renderHealthStrip: renderHealthStrip, agentRowDecorate: agentRowDecorate, healthCell: healthCell, typeCell: typeCell, agentSpark: agentSpark,
+    renderHealthStrip: renderHealthStrip, renderGovernanceScore: renderGovernanceScore, toggleGovernanceScorecard: toggleGovernanceScorecard,
+    agentRowDecorate: agentRowDecorate, healthCell: healthCell, typeCell: typeCell, agentSpark: agentSpark,
     openAgent: openAgent, closeAgent: closeAgent, openUser: openUser, userRowDecorate: userRowDecorate, sessionReceiptNode: sessionReceiptNode,
     decorateAttention: decorateAttention, attentionSummary: attentionSummary,
     spendDeltaNode: spendDeltaNode, requestsSparkNode: requestsSparkNode, usersSparkNode: usersSparkNode,

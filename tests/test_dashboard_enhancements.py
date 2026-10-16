@@ -448,6 +448,63 @@ const pdfRes = VL.buildPdfReport({
   },
 });
 out.pdfReport = {pdf: pdfRes.pdf, pageCount: pdfRes.pageCount, filename: pdfRes.filename, byteLen: pdfRes.bytes.length};
+out.govOptimal = VL.governanceScore({
+  budgetUsd: 5000,
+  fleet: {
+    window_hours: 24,
+    agents: [
+      {agent_id: 'a1', display_name: 'Copilot 1', state: 'ENABLED', backend: {kind: 'agent_engine'},
+       trace_logging: {supported: true, enabled: true},
+       metrics: {requests: 120, input_tokens: 100000, output_tokens: 10000, cached_tokens: 60000, token_source: 'otel'}},
+      {agent_id: 'a2', display_name: 'Copilot 2', state: 'ENABLED', backend: {kind: 'cloud_run'},
+       trace_logging: {supported: true, enabled: true},
+       metrics: {requests: 80, input_tokens: 80000, output_tokens: 8000, cached_tokens: 45000, token_source: 'otel'}},
+    ],
+    unregistered_runtimes: [],
+    model_usage: {
+      models: [
+        {model: 'gemini-2.5-flash', invocations: 200, input_tokens: 180000, cache_read_tokens: 220000, output_tokens: 16000, reasoning_tokens: 2000, est_cost_usd: 0.12},
+      ],
+      rate_cards: {'gemini-2.5-flash': {'input': 0.30, 'output': 2.50, 'cached_read': 0.03}},
+    },
+  },
+  state: {
+    ge_daily_usage: {days: CASES.billing_days},
+    live_finops: {spend_drift: {status: 'LIVE', cost_before_usd: 100, cost_now_usd: 104, change_pct: 4.0}},
+    antigravity_finops: {seats: {assigned_seats: 100, active_seats_7d: 92}},
+    user_centric: {ge_sessions: [{session_id: 's1', user_email: 'alice@acme.com'}, {session_id: 's2', user_email: 'bob@acme.com'}]},
+  },
+});
+out.govDegraded = VL.governanceScore({
+  budgetUsd: 500,
+  fleet: {
+    window_hours: 24,
+    agents: [
+      {agent_id: 'a1', display_name: 'Broken Agent', state: 'ENABLED', backend: {kind: 'agent_engine', status: 'BACKEND_NOT_FOUND'},
+       trace_logging: {supported: true, enabled: false},
+       metrics: {requests: 10, input_tokens: null, output_tokens: null}},
+      {agent_id: 'a2', display_name: 'Untraced Agent', state: 'ENABLED', backend: {kind: 'cloud_run'},
+       trace_logging: {supported: true, enabled: false},
+       metrics: {requests: 20, input_tokens: null, output_tokens: null}},
+    ],
+    unregistered_runtimes: [
+      {agent_id: 're-zombie-1', finops_status: 'ZOMBIE_IDLE_ENGINE', metrics: {requests: 0}},
+      {agent_id: 're-zombie-2', finops_status: 'ZOMBIE_IDLE_SERVICE', metrics: {requests: 0}},
+    ],
+    model_usage: {
+      models: [
+        {model: 'gemini-2.5-pro', invocations: 100, input_tokens: 500000, cache_read_tokens: 10000, output_tokens: 100000, reasoning_tokens: 80000, est_cost_usd: 2.5},
+      ],
+      rate_cards: {'gemini-2.5-pro': {'input': 1.25, 'output': 10.0, 'cached_read': 0.125}},
+    },
+  },
+  state: {
+    ge_daily_usage: {days: CASES.billing_days},
+    live_finops: {spend_drift: {status: 'LIVE', cost_before_usd: 100, cost_now_usd: 185, change_pct: 85.0}},
+    antigravity_finops: {seats: {assigned_seats: 100, active_seats_7d: 30}},
+    user_centric: {ge_sessions: [{session_id: 's1', user_email: ''}, {session_id: 's2', user_email: 'anonymous'}]},
+  },
+});
 process.stdout.write(JSON.stringify(out));
 """
 
@@ -734,6 +791,40 @@ class DashboardEnhancementLogicTest(unittest.TestCase):
     self.assertIn('36 36 m 756 36 l S', pdf)
     self.assertNotIn('36 756 36 m S', pdf)
     self.assertNotIn("showApiNotice('Downloaded executive PDF report", _JS)
+    self.assertIn('Enterprise AI Governance & Tokenomics Scorecard', pdf)
+    self.assertIn('AI Governance Score', pdf)
+
+  def test_governance_score_five_pillars(self):
+    opt = self.out['govOptimal']
+    self.assertEqual(opt['score'], 100)
+    self.assertEqual(opt['grade'], 'A')
+    self.assertEqual(opt['status'], 'OPTIMAL')
+    self.assertEqual(len(opt['pillars']), 5)
+    self.assertTrue(all(p['score'] == 20 and p['max'] == 20 for p in opt['pillars']))
+    self.assertIsNone(opt['topAction'])
+    self.assertTrue(opt['accountability']['sum_check_ok'])
+    self.assertEqual(opt['accountability']['total_points_earned'], 100)
+    self.assertEqual(opt['accountability']['total_points_possible'], 100)
+    self.assertEqual(opt['accountability']['measured_points_possible'], 100)
+    self.assertEqual(opt['accountability']['unconfigured_points_possible'], 0)
+    for p in opt['pillars']:
+      self.assertEqual(sum(c['points'] for c in p['components']), p['score'], p['id'])
+      self.assertEqual(sum(c['max_points'] for c in p['components']), p['max'], p['id'])
+
+    deg = self.out['govDegraded']
+    self.assertLess(deg['score'], 30)
+    self.assertEqual(deg['grade'], 'F')
+    self.assertEqual(deg['status'], 'CRITICAL')
+    self.assertTrue(deg['accountability']['sum_check_ok'])
+    by_id = {p['id']: p for p in deg['pillars']}
+    self.assertEqual(by_id['observability']['score'], 0)
+    self.assertEqual(by_id['runtime_hygiene']['score'], 7)  # 20 - (2 * 5 unwarned zombies) - (1 * 3 broken)
+    self.assertEqual(by_id['budget_stability']['score'], 0)
+    for p in deg['pillars']:
+      self.assertEqual(sum(c['points'] for c in p['components']), p['score'], p['id'])
+      self.assertEqual(sum(c['max_points'] for c in p['components']), p['max'], p['id'])
+    self.assertIsNotNone(deg['topAction'])
+    self.assertGreaterEqual(deg['topAction']['ptsLost'], 15)
 
 
 if __name__ == '__main__':
