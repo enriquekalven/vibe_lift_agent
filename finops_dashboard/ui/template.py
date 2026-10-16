@@ -703,6 +703,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       </button>
       <button type="button" class="btn vl-palette-btn" id="vlPaletteBtn" aria-haspopup="dialog" aria-expanded="false" aria-keyshortcuts="Meta+K Control+K" title="Search agents, users, sessions, apps and commands">&#8981; Search <kbd class="vl-kbd">Ctrl K</kbd></button>
       <span id="activeGenBadge" class="badge badge-blue adv-only">ACTIVE CONFIG</span>
+      <button type="button" class="btn vl-gov-chip hidden" id="vlGovScoreChip" aria-expanded="false" title="Enterprise AI Governance &amp; Tokenomics Score (0–100). Click to inspect 5-pillar breakdown.">Gov Score: &mdash;</button>
       <button type="button" class="btn vl-fresh vl-fresh-wait" id="vlFreshChip" title="How fresh the fleet data is. Click to refresh."><i class="vl-fresh-dot"></i>Loading&hellip;</button>
       <button class="btn verify-chip" onclick="toggleTelemetryValidatorDrawer()" id="toggleTelemetryValidatorBtn" title="See which data source backs each number">
         Data check: <span id="telemetryValidatorSummaryBadge" class="mono">checking&hellip;</span>
@@ -897,6 +898,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     <section id="tabPanel6">
       <div class="exec-headline" id="execHeadline">Loading live data from Google Cloud&hellip;</div>
       <div id="vlHealthStrip" class="vl-strip hidden" aria-label="Fleet health"></div>
+      <div id="vlGovScorePanel" class="vl-gov-panel hidden" aria-label="Enterprise AI Governance and Tokenomics Scorecard"></div>
       <div class="kpi-grid" id="execKpis"></div>
       <div class="panel trend-panel">
         <div class="panel-header"><div class="panel-title"><span>Requests over time</span></div></div>
@@ -7457,17 +7459,32 @@ __FINOPS_ENHANCEMENTS_JS__
     function renderCostGovernance(gov) {
       const body = document.getElementById('govClearanceBody');
       if (!body || !gov || typeof gov !== 'object') return;
+      if (currentState && typeof currentState === 'object') {
+        currentState.cost_governance = gov;
+      }
+      if (typeof VL !== 'undefined' && VL && typeof VL.renderGovernanceScore === 'function') {
+        try { VL.renderGovernanceScore(currentState, execLastFleet); } catch (_) {}
+      }
       const sum = gov.summary || {};
+      const gs = gov.governance_score && typeof gov.governance_score === 'object' ? gov.governance_score : null;
       const kpisEl = document.getElementById('govClearanceKpis');
       if (kpisEl) {
         kpisEl.replaceChildren();
-        const kpiItems = [
+        const kpiItems = [];
+        if (gs && typeof gs.score === 'number') {
+          kpiItems.push({
+            label: 'Enterprise AI Governance Score',
+            val: String(gs.score) + '/100 (' + String(gs.grade || '—') + ')',
+            sub: String(gs.status_label || '5-Pillar Fleet Posture'),
+          });
+        }
+        kpiItems.push(
           {label: 'Total Tracked Runtimes', val: String(sum.total_tracked || 0), sub: 'Monitored across Reasoning Engines & Cloud Run'},
           {label: 'Warned / Pending Clearance', val: String(sum.pending_clearance_count || 0), sub: 'Owner notified via email / webhook'},
           {label: 'Cleared / Reclaimed', val: String(sum.cleared_count || 0), sub: 'Scaled to zero or deleted after grace window'},
           {label: 'Snoozed / Keep-Alive', val: String(sum.snoozed_count || 0), sub: '7-day HMAC Keep-Alive active'},
-          {label: 'Est. Monthly Reclaimable', val: '$' + Number(sum.est_reclaimable_monthly_usd || 0).toFixed(2), sub: 'Projected idle compute savings'},
-        ];
+          {label: 'Est. Monthly Reclaimable', val: '$' + Number(sum.est_reclaimable_monthly_usd || 0).toFixed(2), sub: 'Projected idle compute savings'}
+        );
         kpiItems.forEach(function(item) {
           kpisEl.appendChild(el('div', 'kpi-card', [
             el('div', 'kpi-title', [item.label]),

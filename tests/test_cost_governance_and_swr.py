@@ -165,7 +165,62 @@ class CostGovernanceAndSwrTest(unittest.TestCase):
         self.assertEqual(len(digest["cache_degradation_alerts"]), 1)
         self.assertEqual(digest["wow_delta"]["spend_delta_pct"], 21.4)
         self.assertIn("WoW Delta", digest["delivery"]["text_preview"])
+        self.assertIn("governance_score", digest)
+        self.assertIn("Enterprise AI Governance Score:", digest["delivery"]["text_preview"])
+        self.assertTrue(0 <= digest["governance_score"]["score"] <= 100)
+        self.assertEqual(len(digest["governance_score"]["pillars"]), 5)
         self.assertTrue(digest["delivery"]["dry_run"])
+
+    def test_compute_governance_score_backend_pillars(self) -> None:
+        gov = CostGovernanceService(project_id="test-proj")
+        fleet_payload = {
+            "agents": [
+                {
+                    "agent_id": "agent-1",
+                    "display_name": "Support Copilot",
+                    "state": "ENABLED",
+                    "backend": {"kind": "agent_engine"},
+                    "trace_logging": {"supported": True, "enabled": True},
+                    "metrics": {
+                        "requests": 100,
+                        "input_tokens": 200000,
+                        "output_tokens": 20000,
+                        "cached_tokens": 120000,
+                        "token_source": "otel",
+                    },
+                }
+            ],
+            "unregistered_runtimes": [],
+            "model_usage": {
+                "models": [
+                    {
+                        "model": "gemini-2.5-flash",
+                        "invocations": 100,
+                        "input_tokens": 200000,
+                        "cache_read_tokens": 120000,
+                        "output_tokens": 18000,
+                        "reasoning_tokens": 2000,
+                    }
+                ],
+                "totals": {"estimated_cost_usd": 10.0, "input_tokens": 200000},
+            },
+            "model_usage_previous": {"totals": {"estimated_cost_usd": 9.8, "input_tokens": 195000}},
+        }
+        user_centric_payload = {
+            "ge_sessions": [{"session_id": "s1", "user_email": "alice@google.com"}],
+        }
+        antigravity_payload = {
+            "seats": {"assigned_seats": 50, "active_seats_7d": 46},
+        }
+        score = gov.compute_governance_score(
+            fleet_payload=fleet_payload,
+            user_centric_payload=user_centric_payload,
+            antigravity_payload=antigravity_payload,
+        )
+        self.assertGreaterEqual(score["score"], 90)
+        self.assertEqual(score["grade"], "A")
+        self.assertEqual(score["status"], "OPTIMAL")
+        self.assertEqual(len(score["pillars"]), 5)
 
     def test_swr_lite_boot_and_embedded_ui_state(self) -> None:
         ctrl = FinOpsRuntimeController()
@@ -915,6 +970,88 @@ class GovernanceEmailAndSchedulingTest(unittest.TestCase):
                     self.assertNotEqual(bad.returncode, 0)
                     self.assertIn("ERROR", bad.stderr)
 
+    def test_governance_score_accountability_ledger_and_configurable_thresholds(self) -> None:
+        from finops_dashboard.cost_governance import compute_governance_score
+
+        fleet = {
+            "agents": [
+                {
+                    "agent_id": "ag-1",
+                    "trace_logging": {"enabled": True},
+                    "registration": {"status": "REGISTERED"},
+                    "metrics": {"input_tokens": 6000, "cached_tokens": 3600, "output_tokens": 900, "llm_calls": 10},
+                },
+            ],
+            "model_usage": {
+                "models": [
+                    {
+                        "model": "gemini-3.8-flash",
+                        "input_tokens": 2400,
+                        "cache_read_tokens": 3600,
+                        "output_tokens": 900,
+                        "reasoning_tokens": 100,
+                    }
+                ],
+                "totals": {"est_cost_usd": 12.0},
+            },
+            "unregistered_runtimes": [],
+            "live_finops": {"spend_drift": {"status": "LIVE", "change_pct": 4.0}},
+        }
+        uc = {"ge_sessions": [{"session_id": "s1", "user_email": "alice@example.com"}]}
+        agy = {"kpis": {"purchased_seats": 100, "assigned_seats": 100, "active_seats_7d": 90}}
+        gdu = {
+            "days": [
+                {"day": f"2026-10-{d:02d}", "ai_net_usd": 10.0}
+                for d in range(1, 16)
+            ]
+        }
+
+        score = compute_governance_score(
+            fleet_payload=fleet,
+            user_centric_payload=uc,
+            antigravity_payload=agy,
+            ge_daily_usage=gdu,
+            monthly_budget_usd=500.0,
+            cache_hit_target_pct=60.0,
+            seat_utilization_target_pct=90.0,
+        )
+        self.assertEqual(score["score"], 100)
+        self.assertEqual(score["grade"], "A")
+        acct = score["accountability"]
+        self.assertTrue(acct["sum_check_ok"])
+        self.assertEqual(acct["total_points_earned"], 100)
+        self.assertEqual(acct["total_points_possible"], 100)
+        self.assertEqual(acct["measured_points_earned"], 100)
+        self.assertEqual(acct["measured_points_possible"], 100)
+        self.assertEqual(acct["unconfigured_neutral_points"], 0)
+        self.assertEqual(acct["unconfigured_points_possible"], 0)
+        self.assertEqual(acct["unconfigured_components"], [])
+        self.assertEqual(acct["thresholds"]["cache_hit_target_pct"], 60.0)
+        self.assertEqual(acct["thresholds"]["seat_utilization_target_pct"], 90.0)
+        self.assertEqual(acct["thresholds"]["monthly_budget_usd"], 500.0)
+
+        for p in score["pillars"]:
+            comp_pts = sum(c["points"] for c in p["components"])
+            comp_max = sum(c["max_points"] for c in p["components"])
+            self.assertEqual(comp_pts, p["score"], p["id"])
+            self.assertEqual(comp_max, p["max_score"], p["id"])
+
+        # Verify evaluate_and_warn_idle_runtimes forwards all payloads so governance_score is never evaluated against None
+        gov = CostGovernanceService(project_id="test-proj", token_fn=lambda: None)
+        eval_res = gov.evaluate_and_warn_idle_runtimes(
+            fleet,
+            send_warnings=False,
+            lookup_bq=False,
+            persist_to_bq=False,
+            user_centric_payload=uc,
+            antigravity_payload=agy,
+            ge_daily_usage=gdu,
+        )
+        embedded_gov = eval_res["governance_score"]
+        self.assertTrue(embedded_gov["accountability"]["sum_check_ok"])
+        self.assertGreaterEqual(embedded_gov["accountability"]["measured_points_possible"], 88)
+
 
 if __name__ == "__main__":
     unittest.main()
+

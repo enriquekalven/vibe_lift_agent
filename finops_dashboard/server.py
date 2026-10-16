@@ -533,6 +533,13 @@ class FinOpsRuntimeController:
         send_warnings=False,
         lookup_bq=False,
         persist_to_bq=False,
+        user_centric_payload=as_mapping(user_centric) if isinstance(user_centric, Mapping) else None,
+        antigravity_payload=(
+            as_mapping(antigravity_finops_payload)
+            if isinstance(antigravity_finops_payload, Mapping)
+            else None
+        ),
+        ge_daily_usage=as_mapping(ge_daily_usage) if isinstance(ge_daily_usage, Mapping) else None,
     )
     fleet_stale = bool(
         isinstance(fleet_payload, Mapping)
@@ -606,6 +613,7 @@ class FinOpsRuntimeController:
     lookup_bq = ge_fleet.parse_bool(raw.get('lookup_bq', True)) and self._is_live_gcp()
     fleet = self.get_fleet_payload(window_hours=window_hours, allow_stale=True, max_wait_s=5.0)
     self.cost_governance.project_id = self.gcp_telemetry.project_id
+    user_centric = as_mapping(self.optimizer.get_user_centric_payload())
     return self.cost_governance.evaluate_and_warn_idle_runtimes(
         fleet,
         grace_period_hours=(
@@ -615,6 +623,7 @@ class FinOpsRuntimeController:
         dry_run_email=dry_run_email,
         lookup_bq=lookup_bq,
         persist_to_bq=persist_to_bq,
+        user_centric_payload=user_centric,
     )
 
   def execute_scheduled_clearance(self, body: Mapping[str, Any] | None = None) -> dict[str, Any]:

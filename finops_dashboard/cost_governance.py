@@ -54,7 +54,11 @@ DEFAULT_AUDIT_DATASET = 'ds_ge_audit_raw'
 DEFAULT_GRACE_PERIOD_HOURS = 48
 DEFAULT_IDLE_DAYS_THRESHOLD = 7
 DEFAULT_TOKEN_BUDGET_USD = 500.0
-DEFAULT_CACHE_HIT_TARGET_PCT = 50.0
+DEFAULT_CACHE_HIT_TARGET_PCT = float(os.environ.get('FINOPS_CACHE_HIT_TARGET_PCT', '50.0') or 50.0)
+DEFAULT_THINKING_TAX_LOW_PCT = float(os.environ.get('FINOPS_THINKING_TAX_LOW_PCT', '25.0') or 25.0)
+DEFAULT_THINKING_TAX_HIGH_PCT = float(os.environ.get('FINOPS_THINKING_TAX_HIGH_PCT', '65.0') or 65.0)
+DEFAULT_SEAT_UTILIZATION_TARGET_PCT = float(os.environ.get('FINOPS_SEAT_UTILIZATION_TARGET_PCT', '85.0') or 85.0)
+DEFAULT_MONTHLY_BUDGET_USD = float(os.environ.get('FINOPS_MONTHLY_BUDGET_USD', '0.0') or 0.0)
 MAX_EMAIL_RECIPIENTS = 20
 
 GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send'
@@ -363,6 +367,10 @@ class CostGovernanceService:
     self._dry_run_logged: set[tuple[str, str, str]] = set()
     # (cache key, access token, monotonic expiry) for the Gmail API credential.
     self._gmail_token_cache: tuple[str, str, float] | None = None
+    self._last_fleet_payload: Mapping[str, Any] | None = None
+    self._last_user_centric_payload: Mapping[str, Any] | None = None
+    self._last_antigravity_payload: Mapping[str, Any] | None = None
+    self._last_ge_daily_usage: Mapping[str, Any] | None = None
 
   def _base_url(self) -> str:
     if self._public_url_fn is not None:
@@ -904,6 +912,10 @@ class CostGovernanceService:
       dry_run_email: bool = False,
       lookup_bq: bool = True,
       persist_to_bq: bool = True,
+      user_centric_payload: Mapping[str, Any] | None = None,
+      antigravity_payload: Mapping[str, Any] | None = None,
+      ge_daily_usage: Mapping[str, Any] | None = None,
+      budget_status: str | None = None,
   ) -> dict[str, Any]:
     """Stage 1: flags idle, always-on and over-budget runtimes and warns their owners.
 
@@ -921,6 +933,14 @@ class CostGovernanceService:
     so nothing is cleared unless its owner was told: previews, failed sends, unconfigured delivery and
     runtimes with no deliverable owner stay PENDING_WARNING for the next run.
     """
+    if isinstance(fleet_payload, Mapping):
+      self._last_fleet_payload = fleet_payload
+    if isinstance(user_centric_payload, Mapping):
+      self._last_user_centric_payload = user_centric_payload
+    if isinstance(antigravity_payload, Mapping):
+      self._last_antigravity_payload = antigravity_payload
+    if isinstance(ge_daily_usage, Mapping):
+      self._last_ge_daily_usage = ge_daily_usage
     if lookup_bq:
       # Scheduled (persisting) runs first adopt state written by other instances, such as a snooze.
       self._load_queue_from_bq_if_needed(force=persist_to_bq)
@@ -1116,7 +1136,15 @@ class CostGovernanceService:
     if persist_to_bq and updated:
       self._persist_queue_items_to_bq(list(updated.values()))
 
-    return self.get_clearance_queue_payload(extra_warnings=warnings_sent, lookup_bq=lookup_bq)
+    return self.get_clearance_queue_payload(
+        extra_warnings=warnings_sent,
+        lookup_bq=lookup_bq,
+        fleet_payload=fleet_payload,
+        user_centric_payload=user_centric_payload,
+        antigravity_payload=antigravity_payload,
+        ge_daily_usage=ge_daily_usage,
+        budget_status=budget_status,
+    )
 
 
   def snooze_runtime(
@@ -1556,7 +1584,10 @@ class CostGovernanceService:
         'actions': actions_executed,
         'note': ' '.join(notes) or None,
         'checked_at': now_iso,
-        'cost_governance': self.get_clearance_queue_payload(lookup_bq=False),
+        'cost_governance': self.get_clearance_queue_payload(
+            lookup_bq=False,
+            fleet_payload=fleet_payload,
+        ),
     }
 
   def _public_queue_item(self, item: Mapping[str, Any]) -> dict[str, Any]:
@@ -1567,13 +1598,67 @@ class CostGovernanceService:
     out.pop('snooze_token', None)
     return out
 
+  def compute_governance_score(
+      self,
+      fleet_payload: Mapping[str, Any] | None = None,
+      user_centric_payload: Mapping[str, Any] | None = None,
+      antigravity_payload: Mapping[str, Any] | None = None,
+      *,
+      clearance_payload: Mapping[str, Any] | None = None,
+      ge_daily_usage: Mapping[str, Any] | None = None,
+      budget_status: str | None = None,
+      monthly_budget_usd: float | None = None,
+      lookup_bq: bool = False,
+  ) -> dict[str, Any]:
+    """Computes the deterministic 5-pillar Enterprise AI Governance & Tokenomics Score (0-100)."""
+    if isinstance(fleet_payload, Mapping):
+      self._last_fleet_payload = fleet_payload
+    if isinstance(user_centric_payload, Mapping):
+      self._last_user_centric_payload = user_centric_payload
+    if isinstance(antigravity_payload, Mapping):
+      self._last_antigravity_payload = antigravity_payload
+    if isinstance(ge_daily_usage, Mapping):
+      self._last_ge_daily_usage = ge_daily_usage
+    queue_data = (
+        clearance_payload
+        if isinstance(clearance_payload, Mapping)
+        else self.get_clearance_queue_payload(lookup_bq=lookup_bq, include_score=False)
+    )
+    return compute_governance_score(
+        fleet_payload=fleet_payload if fleet_payload is not None else self._last_fleet_payload,
+        user_centric_payload=(
+            user_centric_payload if user_centric_payload is not None else self._last_user_centric_payload
+        ),
+        clearance_payload=queue_data,
+        antigravity_payload=(
+            antigravity_payload if antigravity_payload is not None else self._last_antigravity_payload
+        ),
+        ge_daily_usage=ge_daily_usage if ge_daily_usage is not None else self._last_ge_daily_usage,
+        budget_status=budget_status,
+        monthly_budget_usd=monthly_budget_usd,
+    )
+
   def get_clearance_queue_payload(
       self,
       extra_warnings: list[dict[str, Any]] | None = None,
       *,
       lookup_bq: bool = True,
+      include_score: bool = True,
+      fleet_payload: Mapping[str, Any] | None = None,
+      user_centric_payload: Mapping[str, Any] | None = None,
+      antigravity_payload: Mapping[str, Any] | None = None,
+      ge_daily_usage: Mapping[str, Any] | None = None,
+      budget_status: str | None = None,
   ) -> dict[str, Any]:
     """Returns the current state of `zombie_clearance_queue` and recent notifications."""
+    if isinstance(fleet_payload, Mapping):
+      self._last_fleet_payload = fleet_payload
+    if isinstance(user_centric_payload, Mapping):
+      self._last_user_centric_payload = user_centric_payload
+    if isinstance(antigravity_payload, Mapping):
+      self._last_antigravity_payload = antigravity_payload
+    if isinstance(ge_daily_usage, Mapping):
+      self._last_ge_daily_usage = ge_daily_usage
     if lookup_bq:
       self._load_queue_from_bq_if_needed()
     with self._lock:
@@ -1594,7 +1679,7 @@ class CostGovernanceService:
         ),
         2,
     )
-    return {
+    payload: dict[str, Any] = {
         'status': 'OK',
         'project_id': self.project_id,
         'table': f'{self.project_id}.{self.analytics_dataset}.{CLEARANCE_TABLE}',
@@ -1612,6 +1697,20 @@ class CostGovernanceService:
         'recent_warnings': extra_warnings if extra_warnings is not None else notifs,
         'clearance_history': history,
     }
+    if include_score:
+      payload['governance_score'] = compute_governance_score(
+          fleet_payload=fleet_payload if fleet_payload is not None else self._last_fleet_payload,
+          user_centric_payload=(
+              user_centric_payload if user_centric_payload is not None else self._last_user_centric_payload
+          ),
+          clearance_payload=payload,
+          antigravity_payload=(
+              antigravity_payload if antigravity_payload is not None else self._last_antigravity_payload
+          ),
+          ge_daily_usage=ge_daily_usage if ge_daily_usage is not None else self._last_ge_daily_usage,
+          budget_status=budget_status,
+      )
+    return payload
 
   def build_and_send_executive_digest(
       self,
@@ -1708,12 +1807,21 @@ class CostGovernanceService:
         'input_tokens_delta_pct': tok_delta_pct,
     }
 
-    # 3. Pending Scheduled Clearance Summary
-    clearance_payload = self.get_clearance_queue_payload(lookup_bq=lookup_bq)
+    # 3. Pending Scheduled Clearance Summary & Enterprise AI Governance Score (0-100)
+    clearance_payload = self.get_clearance_queue_payload(
+        lookup_bq=lookup_bq,
+        fleet_payload=fleet,
+        user_centric_payload=uc,
+    )
     pending_clearance = [
         item for item in clearance_payload['queue']
         if item.get('status') in ('WARNED_GRACE_PERIOD', 'PENDING_WARNING')
     ]
+    gov_score = clearance_payload.get('governance_score') or compute_governance_score(
+        fleet_payload=fleet,
+        user_centric_payload=uc,
+        clearance_payload=clearance_payload,
+    )
 
     target_recipient = (
         str(recipient or '').strip()
@@ -1728,9 +1836,20 @@ class CostGovernanceService:
         "=" * 68,
         f"Generated At: {now_iso}",
         f"Current Window Spend: ${curr_cost:,.4f} (WoW Delta: {f'{cost_delta_pct:+.1f}%' if cost_delta_pct is not None else 'N/A'})",
+        f"Enterprise AI Governance Score: {gov_score['score']}/100 (Grade {gov_score['grade']} — {gov_score['tier']})",
+        "",
+        "0. GOVERNANCE & TOKENOMICS SCORECARD (5 PILLARS):",
+    ]
+    for p_item in gov_score['pillars']:
+      lines.append(
+          f"   - {p_item['label']}: {p_item['score']}/{p_item['max_score']} pts "
+          f"[{p_item['status']}] — {p_item['summary']}"
+      )
+
+    lines.extend([
         "",
         "1. TOP 5 SPENDERS / AGENTS:",
-    ]
+    ])
     if top_5_agents:
       for idx, a in enumerate(top_5_agents, 1):
         lines.append(
@@ -1787,6 +1906,7 @@ class CostGovernanceService:
         'generated_at': now_iso,
         'subject': subject,
         'recipient_masked': mask_email_for_ui(target_recipient),
+        'governance_score': gov_score,
         'wow_delta': wow_delta,
         'top_5_agents': top_5_agents,
         'top_5_users': top_5_users,
@@ -1794,3 +1914,678 @@ class CostGovernanceService:
         'pending_scheduled_clearance': pending_clearance,
         'delivery': delivery,
     }
+
+
+def _derive_budget_status_from_daily_usage(
+    ge_daily_usage: Mapping[str, Any] | None,
+    monthly_budget_usd: float | None,
+) -> str | None:
+  """Derives 'on_track', 'at_risk', or 'over' from `ge_daily_usage.days` and `monthly_budget_usd`."""
+  budget = _as_float(monthly_budget_usd)
+  if budget <= 0 or not isinstance(ge_daily_usage, Mapping):
+    return None
+  raw_days = _as_list(ge_daily_usage.get('days'))
+  billed: list[tuple[str, float]] = []
+  for d in raw_days:
+    if not isinstance(d, Mapping):
+      continue
+    day_str = str(d.get('day') or '').strip()[:10]
+    net = d.get('ai_net_usd')
+    if len(day_str) == 10 and net is not None:
+      try:
+        billed.append((day_str, float(net)))
+      except (TypeError, ValueError):
+        continue
+  if not billed:
+    return None
+  billed.sort(key=lambda x: x[0])
+  last_day = billed[-1][0]
+  month_prefix = last_day[:7]
+  mtd = sum(val for day_s, val in billed if day_s.startswith(month_prefix))
+  if mtd >= budget:
+    return 'over'
+  recent = [val for _, val in billed[-7:]]
+  if len(recent) < 3:
+    used_pct = 100.0 * mtd / budget
+    return 'over' if used_pct > 100.0 else ('at_risk' if used_pct >= 90.0 else 'on_track')
+  avg7 = sum(recent) / float(len(recent))
+  try:
+    yr = int(month_prefix[:4])
+    mo = int(month_prefix[5:7])
+    next_mo = datetime.date(yr + (1 if mo == 12 else 0), 1 if mo == 12 else mo + 1, 1)
+    days_in_month = (next_mo - datetime.date(yr, mo, 1)).days
+    last_day_num = int(last_day[8:10])
+  except ValueError:
+    days_in_month = 30
+    last_day_num = 15
+  remaining_days = max(0, days_in_month - last_day_num)
+  projection = mtd + avg7 * remaining_days
+  if projection > budget:
+    return 'at_risk'
+  return 'on_track'
+
+
+def compute_governance_score(
+    fleet_payload: Mapping[str, Any] | None = None,
+    user_centric_payload: Mapping[str, Any] | None = None,
+    clearance_payload: Mapping[str, Any] | None = None,
+    antigravity_payload: Mapping[str, Any] | None = None,
+    *,
+    ge_daily_usage: Mapping[str, Any] | None = None,
+    budget_status: str | None = None,
+    monthly_budget_usd: float | None = None,
+    cache_hit_target_pct: float | None = None,
+    thinking_tax_low_pct: float | None = None,
+    thinking_tax_high_pct: float | None = None,
+    seat_utilization_target_pct: float | None = None,
+) -> dict[str, Any]:
+  """Computes the deterministic 5-pillar Enterprise AI Governance & Tokenomics Score (0-100).
+
+  Each of the 5 pillars contributes 0 to 20 integer points, and every single point is
+  itemized in `pillar['components']` and `accountability` so `sum(components) == pillar.score`
+  and `sum(pillars) == score`:
+    1. Observability & Trace Readiness (0-20 pts)
+    2. Prompt Cache & Token Efficiency (0-20 pts)
+    3. Runtime Hygiene & Zombie Control (0-20 pts)
+    4. Budget Runway & Drift Stability (0-20 pts)
+    5. Seat & Identity Attribution (0-20 pts)
+  """
+  fleet = fleet_payload if isinstance(fleet_payload, Mapping) else {}
+  uc = user_centric_payload if isinstance(user_centric_payload, Mapping) else {}
+  clr = clearance_payload if isinstance(clearance_payload, Mapping) else {}
+  lf = fleet.get('live_finops') if isinstance(fleet.get('live_finops'), Mapping) else {}
+  agy = (
+      antigravity_payload
+      if isinstance(antigravity_payload, Mapping)
+      else (lf.get('antigravity_usage') if isinstance(lf.get('antigravity_usage'), Mapping) else {})
+  )
+
+  eff_cache_target = max(
+      1.0,
+      float(cache_hit_target_pct if cache_hit_target_pct is not None else DEFAULT_CACHE_HIT_TARGET_PCT),
+  )
+  eff_think_low = max(
+      1.0,
+      float(thinking_tax_low_pct if thinking_tax_low_pct is not None else DEFAULT_THINKING_TAX_LOW_PCT),
+  )
+  eff_think_high = max(
+      eff_think_low + 1.0,
+      float(thinking_tax_high_pct if thinking_tax_high_pct is not None else DEFAULT_THINKING_TAX_HIGH_PCT),
+  )
+  eff_seat_target = max(
+      1.0,
+      float(
+          seat_utilization_target_pct
+          if seat_utilization_target_pct is not None
+          else DEFAULT_SEAT_UTILIZATION_TARGET_PCT
+      ),
+  )
+  eff_budget_usd = (
+      float(monthly_budget_usd)
+      if monthly_budget_usd is not None
+      else DEFAULT_MONTHLY_BUDGET_USD
+  )
+
+  # ---- Pillar 1: Observability & Trace Readiness (0-20 pts) ----
+  agents = [a for a in _as_list(fleet.get('agents')) if isinstance(a, Mapping)]
+  total_agents = len(agents)
+  trace_enabled = 0
+  token_attributed = 0
+  for a in agents:
+    tl = a.get('trace_logging') if isinstance(a.get('trace_logging'), Mapping) else {}
+    if bool(tl.get('enabled')) or bool(a.get('observability_enabled')):
+      trace_enabled += 1
+    m = a.get('metrics') if isinstance(a.get('metrics'), Mapping) else {}
+    if m.get('input_tokens') is not None or m.get('token_source') or _as_int(m.get('llm_calls')) > 0:
+      token_attributed += 1
+
+  if total_agents > 0:
+    trace_pts = round(12.0 * trace_enabled / total_agents)
+    token_pts = round(8.0 * token_attributed / total_agents)
+    p1_grounding = 'MEASURED'
+    p1_summary = (
+        f'{trace_enabled}/{total_agents} agents with trace logging enabled; '
+        f'{token_attributed}/{total_agents} with token telemetry.'
+    )
+    p1_rec = (
+        'All registered agents have trace logging & token attribution enabled.'
+        if (trace_pts + token_pts) >= 20
+        else f'Enable Discovery Engine trace logging (observabilityConfig) on {total_agents - trace_enabled} agent(s).'
+    )
+  else:
+    trace_pts = 6
+    token_pts = 4
+    p1_grounding = 'UNCONFIGURED_NEUTRAL'
+    p1_summary = 'No registered Gemini Enterprise agents loaded in current scope.'
+    p1_rec = 'Register agents in Gemini Enterprise and enable observabilityConfig trace logging.'
+  p1_score = max(0, min(20, trace_pts + token_pts))
+  p1_components = [
+      {
+          'id': 'trace_logging',
+          'label': 'Discovery Engine Trace Logging',
+          'points': trace_pts,
+          'max_points': 12,
+          'measured_value': trace_enabled if total_agents > 0 else None,
+          'target_value': total_agents if total_agents > 0 else None,
+          'unit': 'agents',
+          'source': 'discoveryengine.googleapis.com/v1alpha (observabilityConfig)',
+          'grounding_status': p1_grounding,
+      },
+      {
+          'id': 'token_attribution',
+          'label': 'OTel / Cloud Logging Token Attribution',
+          'points': token_pts,
+          'max_points': 8,
+          'measured_value': token_attributed if total_agents > 0 else None,
+          'target_value': total_agents if total_agents > 0 else None,
+          'unit': 'agents',
+          'source': 'Cloud Monitoring v3 + Cloud Logging + Cloud Trace',
+          'grounding_status': p1_grounding,
+      },
+  ]
+
+  # ---- Pillar 2: Prompt Cache & Token Efficiency (0-20 pts) ----
+  mu = fleet.get('model_usage') if isinstance(fleet.get('model_usage'), Mapping) else {}
+  mu_models = [m for m in _as_list(mu.get('models')) if isinstance(m, Mapping)]
+  cache_read_tok = 0
+  prompt_tok = 0
+  out_tok = 0
+  reason_tok = 0
+  for m in mu_models:
+    cr = max(0, _as_int(m.get('cache_read_tokens')))
+    inp = max(0, _as_int(m.get('input_tokens')))
+    cache_read_tok += cr
+    prompt_tok += cr + inp
+    out_tok += max(0, _as_int(m.get('output_tokens')))
+    reason_tok += max(0, _as_int(m.get('reasoning_tokens')))
+
+  if prompt_tok == 0 and agents:
+    for a in agents:
+      am = a.get('metrics') if isinstance(a.get('metrics'), Mapping) else {}
+      inp = max(0, _as_int(am.get('input_tokens')))
+      cr = min(inp, max(0, _as_int(am.get('cached_tokens'))))
+      cache_read_tok += cr
+      prompt_tok += inp
+      out_tok += max(0, _as_int(am.get('output_tokens')))
+
+  if prompt_tok > 0:
+    cache_share_pct: float | None = 100.0 * cache_read_tok / prompt_tok
+    cache_pts = round(12.0 * min(1.0, max(0.0, cache_share_pct / eff_cache_target)))
+    cache_grounding = 'MEASURED'
+  else:
+    cache_share_pct = None
+    cache_pts = 6
+    cache_grounding = 'UNCONFIGURED_NEUTRAL'
+
+  combined_out = out_tok + reason_tok
+  if combined_out > 0 and reason_tok > 0:
+    thinking_share_pct: float | None = 100.0 * reason_tok / combined_out
+    if thinking_share_pct <= eff_think_low:
+      think_pts = 8
+    elif thinking_share_pct >= eff_think_high:
+      think_pts = 0
+    else:
+      think_pts = round(
+          8.0 * (eff_think_high - thinking_share_pct) / (eff_think_high - eff_think_low)
+      )
+    think_grounding = 'MEASURED'
+  else:
+    thinking_share_pct = 0.0 if combined_out > 0 else None
+    think_pts = 8
+    think_grounding = 'MEASURED' if combined_out > 0 else 'UNCONFIGURED_NEUTRAL'
+
+  p2_score = max(0, min(20, cache_pts + think_pts))
+  cache_txt = f'{cache_share_pct:.1f}% cache hit' if cache_share_pct is not None else 'no prompt volume yet'
+  think_txt = f'{thinking_share_pct:.1f}% thinking share' if thinking_share_pct is not None else '0% thinking overhead'
+  p2_summary = f'{cache_txt} (target >={eff_cache_target:.0f}%); {think_txt}.'
+  p2_rec = (
+      'Prompt cache reuse and reasoning token budgets meet efficiency targets.'
+      if p2_score >= 18
+      else 'Use Prompt Cache X-Ray to eliminate dynamic prefix cache-busters and cap ThinkingConfig budget.'
+  )
+  p2_components = [
+      {
+          'id': 'prompt_cache_hit',
+          'label': 'Prompt Cache Hit Share',
+          'points': cache_pts,
+          'max_points': 12,
+          'measured_value': round(cache_share_pct, 1) if cache_share_pct is not None else None,
+          'target_value': eff_cache_target,
+          'unit': 'pct',
+          'source': 'ge_fleet.model_usage (cache_read_tokens / prompt_tokens)',
+          'grounding_status': cache_grounding,
+      },
+      {
+          'id': 'thinking_tax_control',
+          'label': 'Reasoning Token Share Control',
+          'points': think_pts,
+          'max_points': 8,
+          'measured_value': round(thinking_share_pct, 1) if thinking_share_pct is not None else None,
+          'target_value': eff_think_low,
+          'unit': 'pct',
+          'source': 'ge_fleet.model_usage (reasoning_tokens / combined_output_tokens)',
+          'grounding_status': think_grounding,
+      },
+  ]
+
+  # ---- Pillar 3: Runtime Hygiene & Zombie Control (0-20 pts) ----
+  queue_items = [q for q in _as_list(clr.get('queue')) if isinstance(q, Mapping)]
+  queue_by_id = {str(q.get('runtime_id') or ''): str(q.get('status') or '') for q in queue_items if q.get('runtime_id')}
+  unreg = [u for u in _as_list(fleet.get('unregistered_runtimes')) if isinstance(u, Mapping)]
+
+  unaddressed_zombies = 0
+  warned_zombies = 0
+  seen_rids: set[str] = set()
+  for u in unreg:
+    rid = str(u.get('agent_id') or u.get('runtime_id') or '').strip()
+    fstat = str(u.get('finops_status') or '').upper()
+    if fstat in ('ZOMBIE_CANDIDATE', 'ZOMBIE_IDLE_ENGINE', 'ZOMBIE_IDLE_SERVICE', 'ALWAYS_ON_UNREGISTERED'):
+      if rid:
+        seen_rids.add(rid)
+      q_status = queue_by_id.get(rid, '')
+      if q_status in ('SNOOZED', 'RECOVERED_ACTIVE') or q_status.startswith('CLEARED_'):
+        continue
+      if q_status == 'WARNED_GRACE_PERIOD':
+        warned_zombies += 1
+      else:
+        unaddressed_zombies += 1
+
+  for q in queue_items:
+    rid = str(q.get('runtime_id') or '').strip()
+    if rid in seen_rids:
+      continue
+    q_status = str(q.get('status') or '')
+    if q_status == 'PENDING_WARNING':
+      unaddressed_zombies += 1
+    elif q_status == 'WARNED_GRACE_PERIOD':
+      warned_zombies += 1
+
+  broken_regs = 0
+  for a in agents:
+    reg_st = (
+        str(a['registration'].get('status') or '')
+        if isinstance(a.get('registration'), Mapping)
+        else ''
+    ) or (
+        str(a['backend'].get('status') or '')
+        if isinstance(a.get('backend'), Mapping)
+        else ''
+    )
+    if reg_st in ('BACKEND_NOT_FOUND', 'NO_BACKEND'):
+      broken_regs += 1
+
+  unwarned_ded = min(20, unaddressed_zombies * 5)
+  rem_after_unwarned = max(0, 20 - unwarned_ded)
+  warned_ded = min(rem_after_unwarned, warned_zombies * 2)
+  rem_after_warned = max(0, rem_after_unwarned - warned_ded)
+  broken_ded = min(rem_after_warned, broken_regs * 3)
+  p3_score = max(0, min(20, 20 - unwarned_ded - warned_ded - broken_ded))
+  p3_summary = (
+      f'{unaddressed_zombies} unwarned zombie runtime(s), '
+      f'{warned_zombies} in grace window, {broken_regs} broken registration(s).'
+  )
+  p3_rec = (
+      'Zero unaddressed zombie runtimes or broken registrations.'
+      if p3_score >= 20
+      else 'Run Stage 1/2 Scheduled Zombie Clearance or scale idle Cloud Run services to min-instances=0.'
+  )
+  p3_components = [
+      {
+          'id': 'base_hygiene_allowance',
+          'label': 'Runtime Hygiene Base Allowance',
+          'points': 20,
+          'max_points': 20,
+          'measured_value': len(agents) + len(unreg),
+          'target_value': 0,
+          'unit': 'runtimes_audited',
+          'source': 'Cloud Run v2 + Vertex AI ReasoningEngine Inventory',
+          'grounding_status': 'MEASURED',
+      },
+      {
+          'id': 'unwarned_zombie_penalty',
+          'label': 'Unwarned Zombie Runtime Penalty (-5 pts/ea)',
+          'points': -unwarned_ded,
+          'max_points': 0,
+          'measured_value': unaddressed_zombies,
+          'target_value': 0,
+          'unit': 'zombies',
+          'source': 'ge_fleet.unregistered_runtimes + zombie_clearance_queue',
+          'grounding_status': 'MEASURED',
+      },
+      {
+          'id': 'warned_grace_penalty',
+          'label': 'Grace-Period Runtime Penalty (-2 pts/ea)',
+          'points': -warned_ded,
+          'max_points': 0,
+          'measured_value': warned_zombies,
+          'target_value': 0,
+          'unit': 'runtimes',
+          'source': 'finops_analytics.zombie_clearance_queue',
+          'grounding_status': 'MEASURED',
+      },
+      {
+          'id': 'broken_registration_penalty',
+          'label': 'Broken Registration Penalty (-3 pts/ea)',
+          'points': -broken_ded,
+          'max_points': 0,
+          'measured_value': broken_regs,
+          'target_value': 0,
+          'unit': 'registrations',
+          'source': 'ge_fleet.agents[].registration.status',
+          'grounding_status': 'MEASURED',
+      },
+  ]
+
+  # ---- Pillar 4: Budget Runway & Drift Stability (0-20 pts) ----
+  eff_b_stat = str(budget_status or '').strip().lower()
+  if not eff_b_stat:
+    derived_b = _derive_budget_status_from_daily_usage(ge_daily_usage, eff_budget_usd)
+    if derived_b:
+      eff_b_stat = derived_b
+
+  if eff_b_stat in ('on_track', 'runway_clear'):
+    runway_pts = 12
+    rw_label = 'Budget on track'
+    rw_grounding = 'MEASURED'
+  elif eff_b_stat in ('at_risk',):
+    runway_pts = 6
+    rw_label = 'Budget runway at risk'
+    rw_grounding = 'MEASURED'
+  elif eff_b_stat in ('over', 'exhausted'):
+    runway_pts = 0
+    rw_label = 'Projected over budget'
+    rw_grounding = 'MEASURED'
+  else:
+    runway_pts = 8
+    rw_label = 'Monthly budget cap not set (baseline 8/12)'
+    rw_grounding = 'UNCONFIGURED_NEUTRAL'
+
+  sd = lf.get('spend_drift') if isinstance(lf.get('spend_drift'), Mapping) else {}
+  change_pct = _as_float(sd.get('change_pct')) if (sd.get('status') == 'LIVE' and sd.get('change_pct') is not None) else None
+  if change_pct is None and sd.get('change_pct') is not None and not sd.get('status'):
+    change_pct = _as_float(sd.get('change_pct'))
+  if change_pct is None:
+    prev_mu = fleet.get('model_usage_previous') if isinstance(fleet.get('model_usage_previous'), Mapping) else {}
+    curr_tot = mu.get('totals') if isinstance(mu.get('totals'), Mapping) else {}
+    prev_tot = prev_mu.get('totals') if isinstance(prev_mu.get('totals'), Mapping) else {}
+    c_usd = _as_float(curr_tot.get('estimated_cost_usd') or curr_tot.get('est_cost_usd'))
+    p_usd = _as_float(prev_tot.get('estimated_cost_usd') or prev_tot.get('est_cost_usd'))
+    if p_usd > 0:
+      change_pct = round((c_usd - p_usd) / p_usd * 100.0, 1)
+
+  if change_pct is None:
+    drift_pts = 6
+    drift_label = 'no prior-window drift baseline'
+    drift_grounding = 'UNCONFIGURED_NEUTRAL'
+  elif change_pct <= 10.0:
+    drift_pts = 8
+    drift_label = f'{change_pct:+.1f}% spend drift (stable)'
+    drift_grounding = 'MEASURED'
+  elif change_pct <= 25.0:
+    drift_pts = 5
+    drift_label = f'{change_pct:+.1f}% spend drift (moderate)'
+    drift_grounding = 'MEASURED'
+  elif change_pct <= 50.0:
+    drift_pts = 2
+    drift_label = f'{change_pct:+.1f}% spend drift (elevated)'
+    drift_grounding = 'MEASURED'
+  else:
+    drift_pts = 0
+    drift_label = f'{change_pct:+.1f}% spend spike'
+    drift_grounding = 'MEASURED'
+
+  p4_score = max(0, min(20, runway_pts + drift_pts))
+  p4_summary = f'{rw_label}; {drift_label}.'
+  p4_rec = (
+      'Spend pace and period-over-period drift are within target guardrails.'
+      if p4_score >= 18
+      else 'Set a monthly AI budget cap on the Cost tab and inspect the Spend Drift Waterfall.'
+  )
+  p4_components = [
+      {
+          'id': 'budget_runway',
+          'label': 'Monthly Budget Runway Pace',
+          'points': runway_pts,
+          'max_points': 12,
+          'measured_value': eff_b_stat if rw_grounding == 'MEASURED' else None,
+          'target_value': 'on_track',
+          'unit': 'status',
+          'source': 'ge_daily_usage + FINOPS_MONTHLY_BUDGET_USD',
+          'grounding_status': rw_grounding,
+      },
+      {
+          'id': 'spend_drift',
+          'label': 'Period-over-Period Spend Drift',
+          'points': drift_pts,
+          'max_points': 8,
+          'measured_value': change_pct,
+          'target_value': 10.0,
+          'unit': 'pct',
+          'source': 'live_finops.spend_drift / model_usage_previous',
+          'grounding_status': drift_grounding,
+      },
+  ]
+
+  # ---- Pillar 5: Seat & Identity Attribution (0-20 pts) ----
+  agy_kpis = (
+      agy.get('kpis')
+      if isinstance(agy.get('kpis'), Mapping)
+      else (agy.get('seats') if isinstance(agy.get('seats'), Mapping) else {})
+  )
+  purchased_seats = _as_int(agy_kpis.get('purchased_seats'))
+  assigned_seats = _as_int(agy_kpis.get('assigned_seats'))
+  idle_seats = _as_int(agy_kpis.get('idle_seats'))
+  active_explicit = (
+      agy_kpis.get('active_seats_7d')
+      if agy_kpis.get('active_seats_7d') is not None
+      else agy_kpis.get('active_seats')
+  )
+  seat_denom = purchased_seats or assigned_seats
+  if seat_denom > 0:
+    active_seats = (
+        max(0, _as_int(active_explicit))
+        if active_explicit is not None
+        else max(0, (assigned_seats or seat_denom) - idle_seats)
+    )
+    seat_ratio: float | None = active_seats / float(seat_denom)
+    seat_pts = round(10.0 * min(1.0, max(0.0, (seat_ratio * 100.0) / eff_seat_target)))
+    seat_txt = f'{active_seats}/{seat_denom} active seats ({seat_ratio * 100.0:.0f}%)'
+    seat_grounding = 'MEASURED'
+  else:
+    seat_ratio = None
+    seat_pts = 7
+    seat_txt = 'Seat inventory not connected (7/10 baseline)'
+    seat_grounding = 'UNCONFIGURED_NEUTRAL'
+
+  sessions = [s for s in _as_list(uc.get('ge_sessions')) if isinstance(s, Mapping)]
+  p_users = [u for u in _as_list(uc.get('power_users_ldap')) if isinstance(u, Mapping)]
+  if sessions:
+    verified = sum(
+        1
+        for s in sessions
+        if str(s.get('user_email') or '').strip().lower()
+        not in ('', 'unattributed', 'anonymous', 'unknown', '—')
+    )
+    attr_ratio: float | None = verified / float(len(sessions))
+    attr_pts = round(10.0 * attr_ratio)
+    attr_txt = f'{verified}/{len(sessions)} sessions LDAP-attributed'
+    attr_grounding = 'MEASURED'
+  elif p_users:
+    verified = sum(
+        1
+        for u in p_users
+        if str(u.get('user_ldap') or u.get('ldap') or u.get('user_email') or '').strip().lower()
+        not in ('', 'unattributed', 'anonymous', 'unknown', '—')
+    )
+    attr_ratio = verified / float(len(p_users))
+    attr_pts = round(10.0 * attr_ratio)
+    attr_txt = f'{verified}/{len(p_users)} top users LDAP-attributed'
+    attr_grounding = 'MEASURED'
+  else:
+    attr_ratio = None
+    attr_pts = 7
+    attr_txt = 'No session identity sample in current window'
+    attr_grounding = 'UNCONFIGURED_NEUTRAL'
+
+  p5_score = max(0, min(20, seat_pts + attr_pts))
+  p5_summary = f'{seat_txt}; {attr_txt}.'
+  p5_rec = (
+      'High seat utilization and verified LDAP session attribution.'
+      if p5_score >= 18
+      else 'Reclaim idle Antigravity/GE seats and enforce authenticated user identity on agent sessions.'
+  )
+  p5_components = [
+      {
+          'id': 'seat_utilization',
+          'label': 'Assigned Seat Utilization (7d)',
+          'points': seat_pts,
+          'max_points': 10,
+          'measured_value': round(seat_ratio * 100.0, 1) if seat_ratio is not None else None,
+          'target_value': eff_seat_target,
+          'unit': 'pct',
+          'source': 'antigravity_finops.kpis (active_seats_7d / purchased_seats)',
+          'grounding_status': seat_grounding,
+      },
+      {
+          'id': 'identity_attribution',
+          'label': 'Verified LDAP Session Attribution',
+          'points': attr_pts,
+          'max_points': 10,
+          'measured_value': round(attr_ratio * 100.0, 1) if attr_ratio is not None else None,
+          'target_value': 100.0,
+          'unit': 'pct',
+          'source': 'user_centric.ge_sessions / power_users_ldap',
+          'grounding_status': attr_grounding,
+      },
+  ]
+
+  pillars = [
+      {
+          'id': 'observability',
+          'label': 'Observability & Trace Readiness',
+          'short_label': 'Observability',
+          'score': p1_score,
+          'max_score': 20,
+          'pct': round(p1_score / 20.0 * 100.0),
+          'status': 'OPTIMAL' if p1_score >= 16 else ('MODERATE' if p1_score >= 10 else 'ACTION_NEEDED'),
+          'summary': p1_summary,
+          'recommendation': p1_rec,
+          'components': p1_components,
+      },
+      {
+          'id': 'token_efficiency',
+          'label': 'Prompt Cache & Token Efficiency',
+          'short_label': 'Token Efficiency',
+          'score': p2_score,
+          'max_score': 20,
+          'pct': round(p2_score / 20.0 * 100.0),
+          'status': 'OPTIMAL' if p2_score >= 16 else ('MODERATE' if p2_score >= 10 else 'ACTION_NEEDED'),
+          'summary': p2_summary,
+          'recommendation': p2_rec,
+          'components': p2_components,
+      },
+      {
+          'id': 'runtime_hygiene',
+          'label': 'Runtime Hygiene & Zombie Control',
+          'short_label': 'Runtime Hygiene',
+          'score': p3_score,
+          'max_score': 20,
+          'pct': round(p3_score / 20.0 * 100.0),
+          'status': 'OPTIMAL' if p3_score >= 16 else ('MODERATE' if p3_score >= 10 else 'ACTION_NEEDED'),
+          'summary': p3_summary,
+          'recommendation': p3_rec,
+          'components': p3_components,
+      },
+      {
+          'id': 'budget_stability',
+          'label': 'Budget Runway & Drift Stability',
+          'short_label': 'Budget & Drift',
+          'score': p4_score,
+          'max_score': 20,
+          'pct': round(p4_score / 20.0 * 100.0),
+          'status': 'OPTIMAL' if p4_score >= 16 else ('MODERATE' if p4_score >= 10 else 'ACTION_NEEDED'),
+          'summary': p4_summary,
+          'recommendation': p4_rec,
+          'components': p4_components,
+      },
+      {
+          'id': 'seat_attribution',
+          'label': 'Seat & Identity Attribution',
+          'short_label': 'Seats & Identity',
+          'score': p5_score,
+          'max_score': 20,
+          'pct': round(p5_score / 20.0 * 100.0),
+          'status': 'OPTIMAL' if p5_score >= 16 else ('MODERATE' if p5_score >= 10 else 'ACTION_NEEDED'),
+          'summary': p5_summary,
+          'recommendation': p5_rec,
+          'components': p5_components,
+      },
+  ]
+
+  total_score = sum(int(p['score']) for p in pillars)
+  if total_score >= 85:
+    grade, tier, status, status_label = 'A', 'EXEMPLARY', 'OPTIMAL', 'Exemplary Governance'
+  elif total_score >= 70:
+    grade, tier, status, status_label = 'B', 'GOVERNED', 'GOVERNED', 'Governed'
+  elif total_score >= 55:
+    grade, tier, status, status_label = 'C', 'NEEDS_TUNING', 'NEEDS_TUNING', 'Needs Tuning'
+  elif total_score >= 40:
+    grade, tier, status, status_label = 'D', 'AT_RISK', 'NEEDS_TUNING', 'Action Required'
+  else:
+    grade, tier, status, status_label = 'F', 'AT_RISK', 'CRITICAL', 'Action Required'
+
+  all_components = [c for p in pillars for c in p['components']]
+  measured_earned = sum(int(c['points']) for c in all_components if c['grounding_status'] == 'MEASURED')
+  measured_possible = sum(int(c['max_points']) for c in all_components if c['grounding_status'] == 'MEASURED')
+  unconf_earned = sum(int(c['points']) for c in all_components if c['grounding_status'] != 'MEASURED')
+  unconf_possible = sum(int(c['max_points']) for c in all_components if c['grounding_status'] != 'MEASURED')
+  unconf_ids = [str(c['id']) for c in all_components if c['grounding_status'] != 'MEASURED']
+  sum_check_ok = (
+      total_score == sum(int(p['score']) for p in pillars)
+      and 100 == sum(int(p['max_score']) for p in pillars)
+      and all(sum(int(c['points']) for c in p['components']) == int(p['score']) for p in pillars)
+      and all(sum(int(c['max_points']) for c in p['components']) == int(p['max_score']) for p in pillars)
+  )
+
+  recs = sorted(
+      [p for p in pillars if int(p['score']) < 20],
+      key=lambda x: int(x['score']),
+  )
+
+  return {
+      'score': total_score,
+      'max_score': 100,
+      'grade': grade,
+      'tier': tier,
+      'status': status,
+      'status_label': status_label,
+      'pillars': pillars,
+      'accountability': {
+          'total_points_earned': total_score,
+          'total_points_possible': 100,
+          'measured_points_earned': measured_earned,
+          'measured_points_possible': measured_possible,
+          'unconfigured_neutral_points': unconf_earned,
+          'unconfigured_points_possible': unconf_possible,
+          'unconfigured_components': unconf_ids,
+          'sum_check_ok': sum_check_ok,
+          'thresholds': {
+              'cache_hit_target_pct': eff_cache_target,
+              'thinking_tax_low_pct': eff_think_low,
+              'thinking_tax_high_pct': eff_think_high,
+              'seat_utilization_target_pct': eff_seat_target,
+              'monthly_budget_usd': eff_budget_usd,
+          },
+      },
+      'top_recommendations': [
+          {
+              'pillar_id': r['id'],
+              'label': r['label'],
+              'potential_gain_pts': 20 - int(r['score']),
+              'recommendation': r['recommendation'],
+          }
+          for r in recs[:3]
+      ],
+  }
+
+

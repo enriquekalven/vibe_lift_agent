@@ -332,6 +332,43 @@ def validate_dashboard_state(
       evidence=f'Verified {len(services)} Cloud Run agent services with active revision telemetry.',
   )
 
+  cost_gov = as_mapping(state.get('cost_governance'))
+  gov_score = as_mapping(cost_gov.get('governance_score'))
+  if gov_score:
+    gov_pillars = [p for p in as_list(gov_score.get('pillars')) if isinstance(p, Mapping)]
+    gov_acct = as_mapping(gov_score.get('accountability'))
+    pillar_sum = sum(int(p.get('score') or 0) for p in gov_pillars)
+    max_sum = sum(int(p.get('max_score') or 0) for p in gov_pillars)
+    comps_reconcile = all(
+        sum(int(c.get('points') or 0) for c in as_list(p.get('components')) if isinstance(c, Mapping))
+        == int(p.get('score') or 0)
+        and sum(int(c.get('max_points') or 0) for c in as_list(p.get('components')) if isinstance(c, Mapping))
+        == int(p.get('max_score') or 0)
+        for p in gov_pillars
+    )
+    gov_ok = (
+        len(gov_pillars) == 5
+        and max_sum == 100
+        and int(gov_score.get('score') or 0) == pillar_sum
+        and comps_reconcile
+        and bool(gov_acct.get('sum_check_ok'))
+    )
+    _add_check(
+        check_id='GOV-SCORE-5PILLAR-RECONCILIATION',
+        tab='Tab 7: Overview & Executive Digest',
+        metric_or_panel='cost_governance.governance_score (5-Pillar Ledger & Accountability)',
+        passed=gov_ok,
+        provenance='DERIVED_FROM_LIVE_TELEMETRY',
+        source_dataset='cost_governance.compute_governance_score',
+        evidence=(
+            f"Verified 5 pillars ({pillar_sum}/100 pts, grade {gov_score.get('grade')}); "
+            f"measured={gov_acct.get('measured_points_earned')}/{gov_acct.get('measured_points_possible')} pts, "
+            f"baseline={gov_acct.get('unconfigured_neutral_points')}/{gov_acct.get('unconfigured_points_possible')} pts."
+            if gov_ok
+            else f'FLAGGED: governance_score ledger mismatch (score={gov_score.get("score")}, pillar_sum={pillar_sum}, comps_ok={comps_reconcile}).'
+        ),
+    )
+
   passed_count = sum(1 for c in checks if c['status'] == 'PASS')
   total_checks = max(1, len(checks))
   deterministic_score = round((passed_count / total_checks) * 100.0)
