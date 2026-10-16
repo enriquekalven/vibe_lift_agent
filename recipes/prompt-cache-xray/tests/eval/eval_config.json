@@ -1,0 +1,38 @@
+{
+  "criteria": {
+    "tool_trajectory_avg_score": {
+      "threshold": 1.0,
+      "matchType": "IN_ORDER",
+      "ignoreArgs": true
+    },
+    "rubric_based_final_response_quality_v1": {
+      "threshold": 0.8,
+      "judgeModelOptions": {
+        "judgeModel": "gemini-3.8-flash",
+        "numSamples": 1
+      },
+      "rubrics": [
+        {
+          "rubricId": "leads_with_the_verdict",
+          "rubricContent": { "textProperty": "When a tool returned a status (IDENTICAL, APPEND_ONLY, SHORTER_PREFIX or PREFIX_BUSTED), the response states that verdict plainly near the start." }
+        },
+        {
+          "rubricId": "names_line_and_cause_when_busted",
+          "rubricContent": { "textProperty": "When the status was PREFIX_BUSTED, the response names the breaking line number and the cause the tool reported (for example a timestamp, request id or JSON key order) and gives the concrete fix of moving that value to the end of the prompt or stabilizing its serialization." }
+        },
+        {
+          "rubricId": "numbers_come_from_tools",
+          "rubricContent": { "textProperty": "Every token count, percentage and dollar figure in the response appears in a tool result from this conversation. The response does not round up, extrapolate, or add figures the tools did not return." }
+        },
+        {
+          "rubricId": "unpriced_means_unavailable",
+          "rubricContent": { "textProperty": "When a tool result has priced=false or null dollar fields, the response says the cost is unavailable for that model and does not supply a dollar amount." }
+        },
+        {
+          "rubricId": "estimates_are_labelled",
+          "rubricContent": { "textProperty": "When token figures are estimates (token_basis heuristic_4_chars_per_token), the response says they are estimates; it does not present them as measured counts." }
+        }
+      ]
+    }
+  }
+}

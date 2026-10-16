@@ -267,6 +267,9 @@ class FinOpsRuntimeController:
         project_id=self.gcp_telemetry.project_id,
         bq_query_fn=lambda *a, **kw: self.gcp_telemetry.run_bigquery_query(*a, **kw),
         token_fn=lambda: self.gcp_telemetry._get_access_token(),  # pylint: disable=protected-access
+        api_call_fn=cost_governance.google_api_caller(
+            lambda: self.gcp_telemetry._get_access_token()  # pylint: disable=protected-access
+        ),
     )
 
   def _is_live_gcp(self) -> bool:
@@ -596,12 +599,18 @@ class FinOpsRuntimeController:
     window_hours = ge_fleet.parse_window_hours(raw.get('window_hours'))
     send_warnings = ge_fleet.parse_bool(raw.get('send_warnings', True))
     dry_run_email = ge_fleet.parse_bool(raw.get('dry_run_email', False))
+    grace_hours, grace_ok = _parse_finite_int(
+        raw.get('grace_period_hours'), cost_governance.DEFAULT_GRACE_PERIOD_HOURS
+    )
     persist_to_bq = ge_fleet.parse_bool(raw.get('persist_to_bq', True)) and self._is_live_gcp()
     lookup_bq = ge_fleet.parse_bool(raw.get('lookup_bq', True)) and self._is_live_gcp()
     fleet = self.get_fleet_payload(window_hours=window_hours, allow_stale=True, max_wait_s=5.0)
     self.cost_governance.project_id = self.gcp_telemetry.project_id
     return self.cost_governance.evaluate_and_warn_idle_runtimes(
         fleet,
+        grace_period_hours=(
+            grace_hours if grace_ok and grace_hours else cost_governance.DEFAULT_GRACE_PERIOD_HOURS
+        ),
         send_warnings=send_warnings,
         dry_run_email=dry_run_email,
         lookup_bq=lookup_bq,
@@ -656,6 +665,12 @@ class FinOpsRuntimeController:
   ) -> dict[str, Any]:
     """Builds and optionally dispatches the daily/weekly FinOps executive digest."""
     raw = body if isinstance(body, Mapping) else {}
+    try:
+      recipient = cost_governance.normalize_recipient_list(
+          raw.get('recipient', raw.get('recipients'))
+      ) or None
+    except ValueError as exc:
+      return {'status': 'INVALID_REQUEST', 'error': str(exc)}
     window_hours = ge_fleet.parse_window_hours(raw.get('window_hours')) or 168
     cadence = str(raw.get('cadence') or 'weekly').strip().lower()
     dry_run_flag = ge_fleet.parse_bool(raw.get('dry_run', not send_email))
@@ -672,6 +687,7 @@ class FinOpsRuntimeController:
         fleet,
         user_centric_payload=user_centric,
         cadence=cadence,
+        recipient=recipient,
         dry_run=dry_run_flag,
         lookup_bq=self._is_live_gcp(),
     )
@@ -1654,7 +1670,8 @@ class FinOpsRequestHandler(http.server.BaseHTTPRequestHandler):
       return
     if self.path in ('/api/governance/executive_digest', '/api/cron/send_executive_digest'):
       send_flag = ge_fleet.parse_bool(body.get('send_email', True))
-      self._send_json(srv.controller.executive_digest_payload(body, send_email=send_flag))
+      res = srv.controller.executive_digest_payload(body, send_email=send_flag)
+      self._send_json(res, status=400 if res.get('status') == 'INVALID_REQUEST' else 200)
       return
     self.send_error(404, 'Not Found')
 
@@ -1941,7 +1958,10 @@ def register_api_routes(app: Any, controller: FinOpsRuntimeController) -> None:
   def post_governance_executive_digest(payload: Any = fastapi.Body(default=None)):
     body = _as_body(payload)
     send_flag = ge_fleet.parse_bool(body.get('send_email', True))
-    return controller.executive_digest_payload(body, send_email=send_flag)
+    res = controller.executive_digest_payload(body, send_email=send_flag)
+    if res.get('status') == 'INVALID_REQUEST':
+      return JSONResponse(status_code=400, content=res)
+    return res
 
   @app.get('/api/dead_letters')
   @app.get('/api/dead-letters')

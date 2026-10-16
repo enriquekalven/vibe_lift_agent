@@ -484,6 +484,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .api-notice { position: fixed; right: 16px; bottom: 16px; max-width: 440px; z-index: 9999; background: #fff;
       border: 1px solid #fca5a5; color: #991b1b; padding: 10px 12px; border-radius: 8px; font-size: 12.5px;
       line-height: 1.5; box-shadow: 0 4px 14px rgba(0,0,0,.12); }
+    .api-notice[data-error-kind="NOTICE"] { background: #eff6ff; border-color: #93c5fd; color: #1e40af; }
     .sim-notice { font-size: 12px; line-height: 1.55; color: #854d0e; background: #fefce8; border: 1px solid #fef08a;
       border-radius: 8px; padding: 8px 10px; }
     body.simple-mode .adv-only { display: none !important; }
@@ -7478,7 +7479,8 @@ __FINOPS_ENHANCEMENTS_JS__
       const modeBadge = document.getElementById('govModeBadge');
       if (modeBadge) {
         const tblName = String(gov.table || 'finops_analytics.zombie_clearance_queue');
-        modeBadge.textContent = 'Queue: ' + tblName;
+        const modeLabel = gov.automated_clearance_enabled ? 'Auto-Cleanup Ready' : 'Dry-Run Safe';
+        modeBadge.textContent = modeLabel + ' · Queue: ' + tblName;
       }
       const rows = Array.isArray(gov.queue) ? gov.queue : (Array.isArray(gov.items) ? gov.items : []);
       body.replaceChildren();
@@ -7490,7 +7492,11 @@ __FINOPS_ENHANCEMENTS_JS__
       }
       rows.forEach(function(r) {
         const st = String(r.status || 'WARNED_GRACE_PERIOD');
-        const badgeCls = st === 'SNOOZED' ? 'badge badge-green' : (st.indexOf('CLEARED') === 0 ? 'badge badge-blue' : 'badge badge-amber');
+        const badgeCls = (st === 'SNOOZED' || st === 'RECOVERED_ACTIVE')
+          ? 'badge badge-green'
+          : (st === 'CLEARANCE_FAILED'
+            ? 'badge badge-red'
+            : ((st.indexOf('CLEARED') === 0 || st === 'CLEARANCE_SKIPPED') ? 'badge badge-blue' : 'badge badge-amber'));
         const rid = String(r.runtime_id || r.resource_id || '');
         const actionCell = el('td', null, []);
         if (rid) {
@@ -7551,7 +7557,14 @@ __FINOPS_ENHANCEMENTS_JS__
         const data = await res.json();
         if (data && data.cost_governance) renderCostGovernance(data.cost_governance);
         if (note) {
-          note.textContent = 'Stage 2 (' + String((data && data.mode_executed) || mode || 'dry_run') + ') complete: ' + String((data && data.cleared_count) || 0) + ' expired runtime(s) processed.';
+          const execMode = String((data && data.mode_executed) || mode || 'dry_run');
+          if (execMode === 'dry_run') {
+            const wouldClear = Number((data && data.would_clear_count) || 0);
+            const totalActions = Array.isArray(data && data.actions) ? data.actions.length : wouldClear;
+            note.textContent = 'Stage 2 (dry_run) complete: ' + String(wouldClear) + ' runtime(s) would be cleared (' + String(totalActions) + ' evaluated, left pending in queue).' + (data && data.note ? ' ' + String(data.note) : '');
+          } else {
+            note.textContent = 'Stage 2 (enforced) complete: ' + String((data && data.cleared_count) || 0) + ' runtime(s) cleared, ' + String((data && data.failed_count) || 0) + ' failed.';
+          }
         }
       } catch (err) {
         if (note) note.textContent = 'Stage 2 clearance failed: ' + err;

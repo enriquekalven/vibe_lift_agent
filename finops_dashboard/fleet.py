@@ -3460,11 +3460,25 @@ class GeminiEnterpriseFleetService:
             errors.append({'source': source_names.get(key[0], key[0]), 'detail': str(exc)[:300]})
 
       unreg_results: dict[tuple[str, ...], Any] = {}
+      unreg_failed: set[str] = set()
+      unreg_activity_sources = {
+          'unreg_re_requests': 'Unregistered Agent Engine request metrics',
+          'unreg_run_requests': 'Unregistered Cloud Run request metrics',
+      }
       for key, future in unreg_jobs.items():
         try:
           unreg_results[key] = future.result()
-        except Exception:
+        except Exception as exc:
           unreg_results[key] = None
+          unreg_failed.add(key[0])
+          if key[0] in unreg_activity_sources:
+            # Without request counts every runtime would read as 0 requests, i.e. idle.
+            errors.append({'source': unreg_activity_sources[key[0]], 'detail': str(exc)[:300]})
+
+    # Cost governance only treats an unregistered runtime as idle when its request metrics loaded.
+    for name, prefix in (('unregistered_engine_metrics', 'unreg_re_requests'),
+                         ('unregistered_cloud_run_metrics', 'unreg_run_requests')):
+      status[name] = 'error' if prefix in unreg_failed else 'ok'
 
     def source_state(prefix: str) -> str:
       keys = [k for k in results if k[0] == prefix]
