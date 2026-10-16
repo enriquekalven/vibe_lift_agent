@@ -191,17 +191,27 @@ for ROLE in "${ROLES[@]}"; do
   fi
 done
 
-# The dashboard's "Refresh Mart" button (POST /api/ge_mart/refresh) runs CREATE OR REPLACE TABLE
-# finops_mart.fct_turns, so the runtime SA needs write access on that dataset only (not project-wide).
-MART_DATASET="${FINOPS_GE_MART_DATASET:-finops_mart}"
-if bq --project_id="${PROJECT_ID}" show --format=none "${PROJECT_ID}:${MART_DATASET}" &>/dev/null; then
-  echo "Granting WRITER (BigQuery Data Editor) on dataset ${MART_DATASET} to ${SA_EMAIL}..."
+# The runtime SA writes to two datasets, so it gets WRITER on each of them (not project-wide):
+#   - finops_mart: the dashboard's "Refresh Mart" button (POST /api/ge_mart/refresh) runs
+#     CREATE OR REPLACE TABLE finops_mart.fct_turns.
+#   - finops_analytics: INSERTs into agent_registry_snapshots (fleet snapshots) and
+#     zombie_clearance_queue (warning history and Keep-Alive snoozes shared by every instance).
+grant_dataset_writer() {
+  local dataset="$1"
+  local purpose="$2"
+  local acl_file
+  if ! bq --project_id="${PROJECT_ID}" show --format=none "${PROJECT_ID}:${dataset}" &>/dev/null; then
+    echo "Dataset ${dataset} not found; run deploy/setup_bigquery_sink.sh, then re-run this script"
+    echo "so the runtime SA can write it (${purpose})."
+    return 0
+  fi
+  echo "Granting WRITER (BigQuery Data Editor) on dataset ${dataset} to ${SA_EMAIL}..."
   # Dataset-level IAM (bq add-iam-policy-binding --dataset) needs allowlisting, so edit the dataset's
   # access list instead: WRITER on a dataset is equivalent to roles/bigquery.dataEditor on it.
-  ACL_FILE="$(mktemp)"
-  if bq --project_id="${PROJECT_ID}" show --format=prettyjson "${PROJECT_ID}:${MART_DATASET}" > "${ACL_FILE}" \
-      && python3 - "${ACL_FILE}" "${SA_EMAIL}" <<'PY' \
-      && bq --project_id="${PROJECT_ID}" update --source "${ACL_FILE}" "${PROJECT_ID}:${MART_DATASET}" > /dev/null; then
+  acl_file="$(mktemp)"
+  if bq --project_id="${PROJECT_ID}" show --format=prettyjson "${PROJECT_ID}:${dataset}" > "${acl_file}" \
+      && python3 - "${acl_file}" "${SA_EMAIL}" <<'PY' \
+      && bq --project_id="${PROJECT_ID}" update --source "${acl_file}" "${PROJECT_ID}:${dataset}" > /dev/null; then
 import json, sys
 path, email = sys.argv[1], sys.argv[2]
 ds = json.load(open(path))
@@ -212,14 +222,15 @@ json.dump({'access': access}, open(path, 'w'))
 PY
     :
   else
-    warn "could not grant WRITER on ${MART_DATASET}; the dashboard's Refresh Mart button will fail."
+    warn "could not grant WRITER on ${dataset}; ${purpose} will fail."
     IAM_FAILURES=$((IAM_FAILURES + 1))
   fi
-  rm -f "${ACL_FILE}"
-else
-  echo "Dataset ${MART_DATASET} not found; run deploy/setup_bigquery_sink.sh, then re-run this script"
-  echo "so the runtime SA can refresh the mart from the dashboard."
-fi
+  rm -f "${acl_file}"
+}
+
+grant_dataset_writer "${FINOPS_GE_MART_DATASET:-finops_mart}" "the dashboard's Refresh Mart button"
+grant_dataset_writer "${FINOPS_ANALYTICS_DATASET:-finops_analytics}" \
+  "fleet snapshots and the scheduled clearance queue (warning history, Keep-Alive snoozes)"
 
 # Deploy container directly from source to Cloud Run. Sizing matches the verified production service.
 # "auto" discovers every Gemini Enterprise app in global/us/eu; set an explicit list to pin apps.
@@ -258,6 +269,45 @@ if [[ -n "${FINOPS_PROMPT_LOG_BUCKET:-}" ]]; then
     IAM_FAILURES=$((IAM_FAILURES + 1))
   fi
 fi
+# Optional: Stage 2 automated cost governance cleanup (scale idle Cloud Run min-instances=0 and delete
+# idle Vertex AI Reasoning Engines after the grace period expires without a Keep-Alive snooze).
+if [[ "${FINOPS_ALLOW_AUTOMATED_CLEARANCE:-0}" =~ ^(1|true|yes|on)$ ]]; then
+  CLEARANCE_ROLE_ID="finopsIdleRuntimeCleaner"
+  CLEARANCE_ROLE_PERMISSIONS="run.services.get,run.services.update,aiplatform.reasoningEngines.get,aiplatform.reasoningEngines.delete"
+  CLEARANCE_ROLE_DESCRIPTION="Least-privilege Stage 2 cost-governance cleanup role for FinOps Dashboard runtime SA (scale Cloud Run min-instances=0 and delete idle Reasoning Engines)."
+  CLEARANCE_ROLE_STATE="$(gcloud iam roles describe "${CLEARANCE_ROLE_ID}" --project="${PROJECT_ID}" --format='value(deleted)' 2>/dev/null || echo missing)"
+  if [[ "${CLEARANCE_ROLE_STATE}" == "missing" ]]; then
+    echo "Creating custom role ${CLEARANCE_ROLE_ID}..."
+    gcloud iam roles create "${CLEARANCE_ROLE_ID}" \
+        --project="${PROJECT_ID}" \
+        --title="FinOps Idle Runtime Cleaner" \
+        --description="${CLEARANCE_ROLE_DESCRIPTION}" \
+        --permissions="${CLEARANCE_ROLE_PERMISSIONS}" \
+        --stage=GA \
+        --quiet > /dev/null
+  else
+    if [[ "${CLEARANCE_ROLE_STATE}" == "True" ]]; then
+      gcloud iam roles undelete "${CLEARANCE_ROLE_ID}" --project="${PROJECT_ID}" --quiet > /dev/null
+    fi
+    gcloud iam roles update "${CLEARANCE_ROLE_ID}" \
+        --project="${PROJECT_ID}" \
+        --description="${CLEARANCE_ROLE_DESCRIPTION}" \
+        --permissions="${CLEARANCE_ROLE_PERMISSIONS}" \
+        --quiet > /dev/null
+  fi
+  echo "Granting projects/${PROJECT_ID}/roles/${CLEARANCE_ROLE_ID} to ${SA_EMAIL}..."
+  if grant_sa_project_role "projects/${PROJECT_ID}/roles/${CLEARANCE_ROLE_ID}"; then
+    EXTRA_ENV="${EXTRA_ENV};FINOPS_ALLOW_AUTOMATED_CLEARANCE=1"
+  else
+    warn "could not grant ${CLEARANCE_ROLE_ID} to ${SA_EMAIL}; Stage 2 clearance stays in dry-run mode."
+    IAM_FAILURES=$((IAM_FAILURES + 1))
+  fi
+fi
+for GOV_VAR in FINOPS_CLEARANCE_FORCE_DELETE FINOPS_CLEARANCE_EXCLUDE FINOPS_DEFAULT_OWNER_EMAIL FINOPS_SNOOZE_BASE_URL; do
+  if [[ -n "${!GOV_VAR:-}" ]]; then
+    EXTRA_ENV="${EXTRA_ENV};${GOV_VAR}=${!GOV_VAR}"
+  fi
+done
 # `gcloud run deploy --source` builds with Cloud Build, which runs as the Compute Engine default service
 # account. Orgs that enforce iam.automaticIamGrantsForDefaultServiceAccounts (Argolis, and every org
 # created after May 3, 2024) give that account no roles, so the build fails unless it holds

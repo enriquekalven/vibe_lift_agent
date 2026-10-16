@@ -1,0 +1,32 @@
+type: standalone
+status: active
+language: python
+deployable: true
+description: >-
+  Finds where an ADK agent's prompt prefix stops being cacheable. Two model
+  callbacks record every request and its usage_metadata in session state;
+  tools then pinpoint the line that broke Gemini's prefix cache, price the
+  stranded tokens at list price, and re-measure a cache-friendly rewrite.
+license: Apache-2.0
+tags:
+  - prompt-caching
+  - context-caching
+  - finops
+  - token-cost
+  - callbacks
+  - session-state
+  - observability
+  - gemini
+architecture:
+  agent: single
+  stateful: false
+  datasources:
+    - hardcoded
+dependencies:
+  libraries:
+    - ADK
+  services:
+    - vertex-ai
+ownership:
+  team: "TODO: Replace with your team name"
+  poc: enriquekalven

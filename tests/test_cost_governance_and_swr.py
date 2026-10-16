@@ -2,14 +2,27 @@
 
 from __future__ import annotations
 
+import base64
+import email
+import email.policy
+import io
 import json
+import os
+import subprocess
+import sys
+import tempfile
+import threading
 import unittest
+import urllib.error
+import urllib.parse
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import patch
 
 from finops_dashboard.cost_governance import (
     CostGovernanceService,
     mask_email_for_ui,
+    normalize_recipient_list,
     sign_snooze_token,
     verify_snooze_token,
 )
@@ -107,9 +120,11 @@ class CostGovernanceAndSwrTest(unittest.TestCase):
 
         with patch.object(gov, "_persist_queue_items_to_bq"):
             stage2_ready = gov.execute_scheduled_clearance(mode="dry_run")
-        self.assertEqual(stage2_ready["cleared_count"], 1)
+        self.assertEqual(stage2_ready["cleared_count"], 0)
+        self.assertEqual(len(stage2_ready["actions"]), 1)
         self.assertEqual(stage2_ready["actions"][0]["runtime_id"], other_rid)
-        self.assertEqual(stage2_ready["actions"][0]["status"], "CLEARED_DRY_RUN")
+        self.assertEqual(stage2_ready["actions"][0]["status"], "DRY_RUN")
+        self.assertEqual(gov._queue[other_rid]["status"], "WARNED_GRACE_PERIOD")
 
     def test_executive_digest_payload_structure(self) -> None:
         gov = CostGovernanceService(project_id="test-proj")
@@ -292,50 +307,613 @@ class CostGovernanceAndSwrTest(unittest.TestCase):
             self.assertEqual(r_digest.status_code, 200)
             self.assertEqual(r_digest.json()["status"], "OK")
 
-    def test_gmail_api_delivery_channel(self) -> None:
-        gov = CostGovernanceService(
-            project_id="test-proj",
-            token_fn=lambda: "ya29.fake-oauth-token",
-        )
-        captured_req = {}
 
-        class _FakeResp:
-            status = 200
+_EMAIL_ENV_KEYS = (
+    "FINOPS_GMAIL_ACCESS_TOKEN",
+    "FINOPS_GMAIL_REFRESH_TOKEN",
+    "FINOPS_GMAIL_CLIENT_ID",
+    "FINOPS_GMAIL_CLIENT_SECRET",
+    "FINOPS_GMAIL_DWD_SERVICE_ACCOUNT",
+    "FINOPS_GMAIL_SENDER",
+    "FINOPS_ALERT_FROM_EMAIL",
+    "FINOPS_SMTP_HOST",
+    "FINOPS_ALERT_WEBHOOK_URL",
+    "FINOPS_ALLOW_AUTOMATED_CLEARANCE",
+    "FINOPS_SNOOZE_BASE_URL",
+)
 
-            def __enter__(self):
-                return self
+# Stand-in for gcloud: records every call and, like the real CLI, rejects --headers on `jobs update http`.
+_FAKE_GCLOUD = '''#!{python}
+import json
+import os
+import sys
 
-            def __exit__(self, *args):
-                return False
+args = sys.argv[1:]
+with open(os.environ["FAKE_GCLOUD_LOG"], "a", encoding="utf-8") as log:
+    log.write(json.dumps(args) + "\\n")
+state = os.environ["FAKE_GCLOUD_STATE"]
+if args[:3] == ["run", "services", "describe"]:
+    print("https://finops-dashboard-mcp-app-123.us-central1.run.app")
+elif args[:3] == ["scheduler", "jobs", "describe"]:
+    sys.exit(0 if os.path.exists(os.path.join(state, args[3])) else 1)
+elif args[:4] == ["scheduler", "jobs", "create", "http"]:
+    with open(os.path.join(state, args[4]), "w", encoding="utf-8"):
+        pass
+elif args[:4] == ["scheduler", "jobs", "update", "http"]:
+    if any(a.startswith("--headers") for a in args):
+        sys.stderr.write("ERROR: (gcloud.scheduler.jobs.update.http) unrecognized arguments: --headers\\n")
+        sys.exit(2)
+'''
 
-            def read(self) -> bytes:
-                return json.dumps({"id": "msg-12345", "threadId": "thr-12345"}).encode("utf-8")
 
-        def _fake_urlopen(req, timeout=10.0):
-            captured_req["url"] = req.full_url
-            captured_req["auth"] = req.headers.get("Authorization")
-            captured_req["body"] = json.loads(req.data.decode("utf-8"))
-            return _FakeResp()
+def _email_env(**overrides: str):
+    """patch.dict for os.environ with every email/clearance variable blanked, then `overrides` applied."""
+    env = dict.fromkeys(_EMAIL_ENV_KEYS, "")
+    env.update(overrides)
+    return patch.dict("os.environ", env)
 
+
+class _FakeHttpResponse:
+    """What urllib.request.urlopen returns: a context manager with a JSON body."""
+
+    status = 200
+
+    def __init__(self, payload: dict) -> None:
+        self._body = json.dumps(payload).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args) -> bool:
+        return False
+
+    def read(self) -> bytes:
+        return self._body
+
+
+def _send(gov: CostGovernanceService, recipient: str = "owner@example.com") -> dict:
+    return gov._deliver_email_notification(
+        recipient=recipient,
+        subject="[FinOps] Idle runtime",
+        text_body="Runtime idle",
+        html_body="<p>Runtime idle</p>",
+        metadata={"runtime_id": "re-123"},
+        dry_run=False,
+    )
+
+
+def _idle_engine(rid: str) -> dict:
+    return {
+        "agent_id": rid,
+        "resource_name": f"projects/acme-prod/locations/us-central1/reasoningEngines/{rid[3:]}",
+        "display_name": "Idle Engine",
+        "location": "us-central1",
+        "finops_status": "ZOMBIE_IDLE_ENGINE",
+        "backend": {"kind": "agent_engine", "project": "acme-prod", "location": "us-central1"},
+        "metrics": {"requests": 0, "llm_calls": 0, "billable_instance_hours": 24.0},
+    }
+
+
+def _due_item(rid: str) -> dict:
+    past = (datetime.now(UTC) - timedelta(hours=1)).replace(microsecond=0).isoformat()
+    return {
+        "runtime_id": rid,
+        "runtime_kind": "agent_engine",
+        "resource_name": f"projects/test-proj/locations/us-central1/reasoningEngines/{rid[3:]}",
+        "display_name": "Idle Engine",
+        "project_id": "test-proj",
+        "location": "us-central1",
+        "status": "WARNED_GRACE_PERIOD",
+        "warning_sent_at": past,
+        "scheduled_clearance_at": past,
+        "recommended_action": "delete_reasoning_engine",
+        "updated_at": past,
+    }
+
+
+def _parse_ts(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+class GovernanceEmailAndSchedulingTest(unittest.TestCase):
+    """Gmail delivery, scheduled-clearance safety, and the Cloud Scheduler setup script."""
+
+    def test_gmail_domain_wide_delegation_signs_a_jwt_and_caches_the_token(self) -> None:
+        calls: dict[str, list] = {"sign": [], "token": [], "send": []}
+
+        def fake_urlopen(req, timeout=None):
+            url = req.full_url
+            if url.startswith("https://iamcredentials.googleapis.com/"):
+                calls["sign"].append(req)
+                return _FakeHttpResponse({"keyId": "k1", "signedJwt": "signed.jwt.value"})
+            if url == "https://oauth2.googleapis.com/token":
+                calls["token"].append(req)
+                return _FakeHttpResponse({"access_token": "ya29.gmail-send", "expires_in": 3599})
+            if url.startswith("https://gmail.googleapis.com/"):
+                calls["send"].append(req)
+                return _FakeHttpResponse({"id": f"msg-{len(calls['send'])}", "threadId": "thr-1"})
+            raise AssertionError(f"unexpected request to {url}")
+
+        gov = CostGovernanceService(project_id="test-proj", token_fn=lambda: "ya29.runtime-adc")
         with (
-            patch.dict("os.environ", {"FINOPS_GMAIL_ENABLED": "true"}, clear=False),
-            patch("urllib.request.urlopen", side_effect=_fake_urlopen),
+            _email_env(
+                FINOPS_GMAIL_DWD_SERVICE_ACCOUNT="finops-mailer@test-proj.iam.gserviceaccount.com",
+                FINOPS_GMAIL_SENDER="finops-alerts@example.com",
+            ),
+            patch("urllib.request.urlopen", side_effect=fake_urlopen),
         ):
-            res = gov._deliver_email_notification(
-                recipient="owner@google.com",
-                subject="[FinOps Alert] Idle Runtime",
-                html_body="<p>Runtime idle</p>",
-                text_body="Runtime idle",
-                dry_run=False,
-                metadata={"runtime_id": "re-123"},
+            first = _send(gov, "owner@example.com")
+            second = _send(gov, "cfo@example.com")
+
+        self.assertEqual((len(calls["sign"]), len(calls["token"]), len(calls["send"])), (1, 1, 2))
+        sign_req = calls["sign"][0]
+        self.assertTrue(sign_req.full_url.endswith(
+            "/v1/projects/-/serviceAccounts/finops-mailer@test-proj.iam.gserviceaccount.com:signJwt"
+        ))
+        self.assertEqual(sign_req.get_header("Authorization"), "Bearer ya29.runtime-adc")
+        claims = json.loads(json.loads(sign_req.data.decode("utf-8"))["payload"])
+        self.assertEqual(claims["iss"], "finops-mailer@test-proj.iam.gserviceaccount.com")
+        self.assertEqual(claims["sub"], "finops-alerts@example.com")
+        self.assertEqual(claims["scope"], "https://www.googleapis.com/auth/gmail.send")
+        self.assertEqual(claims["aud"], "https://oauth2.googleapis.com/token")
+        self.assertEqual(claims["exp"] - claims["iat"], 3600)
+
+        form = urllib.parse.parse_qs(calls["token"][0].data.decode("utf-8"))
+        self.assertEqual(form["grant_type"], ["urn:ietf:params:oauth:grant-type:jwt-bearer"])
+        self.assertEqual(form["assertion"], ["signed.jwt.value"])
+
+        for send_req, recipient in zip(calls["send"], ("owner@example.com", "cfo@example.com"), strict=True):
+            self.assertEqual(send_req.full_url, "https://gmail.googleapis.com/gmail/v1/users/me/messages/send")
+            # Gmail only ever sees the gmail.send token, never the runtime's cloud-platform token.
+            self.assertEqual(send_req.get_header("Authorization"), "Bearer ya29.gmail-send")
+            raw = json.loads(send_req.data.decode("utf-8"))["raw"]
+            msg = email.message_from_bytes(base64.urlsafe_b64decode(raw), policy=email.policy.default)
+            self.assertEqual(msg["To"], recipient)
+            self.assertEqual(msg["From"], "finops-alerts@example.com")
+
+        for res, msg_id in ((first, "msg-1"), (second, "msg-2")):
+            self.assertTrue(res["delivered"], res["error"])
+            self.assertEqual(res["delivery_channel"], "GMAIL_API")
+            self.assertEqual(res["gmail_auth_mode"], "domain_wide_delegation")
+            self.assertEqual(res["gmail_message_id"], msg_id)
+
+    def test_gmail_refresh_token_flow_never_uses_the_runtime_token(self) -> None:
+        token_forms: list[dict] = []
+        send_auth: list[str | None] = []
+
+        def fake_urlopen(req, timeout=None):
+            if req.full_url == "https://oauth2.googleapis.com/token":
+                token_forms.append(urllib.parse.parse_qs(req.data.decode("utf-8")))
+                return _FakeHttpResponse({"access_token": "ya29.user-grant", "expires_in": 3599})
+            if req.full_url.startswith("https://gmail.googleapis.com/"):
+                send_auth.append(req.get_header("Authorization"))
+                return _FakeHttpResponse({"id": "msg-1"})
+            raise AssertionError(f"unexpected request to {req.full_url}")
+
+        def runtime_token() -> str:
+            raise AssertionError("the runtime ADC token must not be used by the refresh-token flow")
+
+        gov = CostGovernanceService(project_id="test-proj", token_fn=runtime_token)
+        with (
+            _email_env(
+                FINOPS_GMAIL_REFRESH_TOKEN="1//refresh",
+                FINOPS_GMAIL_CLIENT_ID="cid.apps.googleusercontent.com",
+                FINOPS_GMAIL_CLIENT_SECRET="client-secret",
+            ),
+            patch("urllib.request.urlopen", side_effect=fake_urlopen),
+        ):
+            results = [_send(gov), _send(gov)]
+
+        self.assertEqual(len(token_forms), 1, "the access token is cached between sends")
+        self.assertEqual(token_forms[0]["grant_type"], ["refresh_token"])
+        self.assertEqual(token_forms[0]["refresh_token"], ["1//refresh"])
+        self.assertEqual(token_forms[0]["client_id"], ["cid.apps.googleusercontent.com"])
+        self.assertEqual(send_auth, ["Bearer ya29.user-grant", "Bearer ya29.user-grant"])
+        for res in results:
+            self.assertTrue(res["delivered"], res["error"])
+            self.assertEqual(res["gmail_auth_mode"], "refresh_token")
+
+    def test_gmail_error_keeps_the_api_reason_and_drops_the_cached_token(self) -> None:
+        def fake_urlopen(req, timeout=None):
+            if req.full_url.startswith("https://iamcredentials.googleapis.com/"):
+                return _FakeHttpResponse({"signedJwt": "signed.jwt.value"})
+            raise urllib.error.HTTPError(
+                req.full_url, 401, "Unauthorized", hdrs=None,
+                fp=io.BytesIO(b'{"error": "unauthorized_client", "error_description": "Client is unauthorized"}'),
             )
 
-        self.assertTrue(res["delivered"])
+        gov = CostGovernanceService(project_id="test-proj", token_fn=lambda: "ya29.runtime-adc")
+        gov._gmail_token_cache = ("other-mailbox", "ya29.other", float("inf"))
+        with (
+            _email_env(
+                FINOPS_GMAIL_DWD_SERVICE_ACCOUNT="finops-mailer@test-proj.iam.gserviceaccount.com",
+                FINOPS_GMAIL_SENDER="finops-alerts@example.com",
+            ),
+            patch("urllib.request.urlopen", side_effect=fake_urlopen),
+        ):
+            res = _send(gov)
+
+        self.assertFalse(res["delivered"])
         self.assertEqual(res["delivery_channel"], "GMAIL_API")
-        self.assertEqual(res["gmail_message_id"], "msg-12345")
-        self.assertIn("gmail.googleapis.com/gmail/v1/users/me/messages/send", captured_req["url"])
-        self.assertEqual(captured_req["auth"], "Bearer ya29.fake-oauth-token")
-        self.assertIn("raw", captured_req["body"])
+        self.assertIn("HTTP 401 from oauth2.googleapis.com", res["error"])
+        self.assertIn("unauthorized_client", res["error"])
+        self.assertIsNone(gov._gmail_token_cache)
+
+    def test_runtime_adc_token_alone_never_reaches_gmail(self) -> None:
+        gov = CostGovernanceService(project_id="test-proj", token_fn=lambda: "ya29.runtime-adc")
+        with _email_env(), patch("urllib.request.urlopen") as urlopen:
+            res = _send(gov)
+        urlopen.assert_not_called()
+        self.assertEqual(res["delivery_channel"], "DRY_RUN_PREVIEW")
+        self.assertFalse(res["delivered"])
+
+    def test_incomplete_gmail_config_says_what_is_missing(self) -> None:
+        gov = CostGovernanceService(project_id="test-proj", token_fn=lambda: "ya29.runtime-adc")
+        cases = (
+            ({"FINOPS_GMAIL_REFRESH_TOKEN": "1//refresh"}, "FINOPS_GMAIL_CLIENT_ID"),
+            ({"FINOPS_GMAIL_DWD_SERVICE_ACCOUNT": "finops-mailer@test-proj.iam.gserviceaccount.com"},
+             "FINOPS_GMAIL_SENDER"),
+        )
+        for env, missing in cases:
+            with self.subTest(missing=missing), _email_env(**env), patch("urllib.request.urlopen") as urlopen:
+                res = _send(gov)
+                urlopen.assert_not_called()
+                self.assertEqual(res["delivery_channel"], "GMAIL_API")
+                self.assertFalse(res["delivered"])
+                self.assertIn(missing, res["error"])
+
+    def test_recipient_lists_are_masked_and_validated(self) -> None:
+        self.assertEqual(
+            mask_email_for_ui("alice@google.com, bob@example.org"), "a***e@google.com, b***b@example.org"
+        )
+        self.assertEqual(
+            normalize_recipient_list(" cfo@example.com,cto@example.com, cfo@example.com "),
+            "cfo@example.com, cto@example.com",
+        )
+        self.assertEqual(normalize_recipient_list(["cfo@example.com"]), "cfo@example.com")
+        self.assertEqual(normalize_recipient_list(None), "")
+        too_many = ",".join(f"user{i}@example.com" for i in range(21))
+        for bad in ("not-an-email", "cfo@example.com\r\nBcc: x@evil.example", "CFO <cfo@example.com>", too_many):
+            with self.subTest(bad=bad[:40]), self.assertRaises(ValueError):
+                normalize_recipient_list(bad)
+
+    def test_cron_endpoints_honor_the_scheduler_job_bodies(self) -> None:
+        import fastapi
+        from fastapi.testclient import TestClient
+
+        from finops_dashboard.server import register_api_routes
+
+        ctrl = FinOpsRuntimeController()
+        app = fastapi.FastAPI()
+        register_api_routes(app, ctrl)
+        client = TestClient(app)
+        fleet = {"status": "OK", "project_id": "test-project", "agents": [],
+                 "unregistered_runtimes": [_idle_engine("re-77")]}
+        with _email_env(), patch.object(ctrl, "get_fleet_payload", return_value=fleet):
+            warn = client.post(
+                "/api/cron/warn_idle_runtimes",
+                json={"grace_period_hours": 72, "send_warnings": True, "dry_run_email": True},
+            )
+            digest = client.post(
+                "/api/cron/send_executive_digest",
+                json={"cadence": "daily", "dry_run": True, "recipient": "cfo@example.com, cto@example.com"},
+            )
+            bad = client.post(
+                "/api/cron/send_executive_digest",
+                json={"cadence": "daily", "dry_run": True, "recipient": "cfo@example.com\nBcc: x@evil.example"},
+            )
+
+        self.assertEqual(warn.status_code, 200)
+        deadline = _parse_ts(warn.json()["queue"][0]["scheduled_clearance_at"])
+        self.assertGreater(deadline, datetime.now(UTC) + timedelta(hours=71))
+        self.assertEqual(digest.status_code, 200)
+        self.assertEqual(digest.json()["recipient_masked"], "c***o@example.com, c***o@example.com")
+        self.assertEqual(digest.json()["delivery"]["delivery_channel"], "DRY_RUN_PREVIEW")
+        self.assertEqual(bad.status_code, 400)
+        self.assertEqual(bad.json()["status"], "INVALID_REQUEST")
+
+    def test_enforced_clearance_reports_what_actually_happened(self) -> None:
+        # Production default: no clearance client is wired, so an enforced request runs as a dry run
+        # and leaves the runtime pending in WARNED_GRACE_PERIOD so a later enforced run can act.
+        gov = CostGovernanceService(project_id="test-proj")
+        gov._queue["re-111"] = _due_item("re-111")
+        with _email_env(FINOPS_ALLOW_AUTOMATED_CLEARANCE="1"):
+            res = gov.execute_scheduled_clearance(mode="enforced", lookup_bq=False, persist_to_bq=False)
+        self.assertEqual(res["mode_executed"], "dry_run")
+        self.assertEqual(res["would_clear_count"], 1)
+        self.assertEqual(res["cleared_count"], 0)
+        self.assertEqual(res["actions"][0]["status"], "DRY_RUN")
+        self.assertEqual(gov._queue["re-111"]["status"], "WARNED_GRACE_PERIOD")
+        self.assertIn("No resources were changed", res["note"])
+
+        # With a wired client, success is CLEARED_ENFORCED and an API error is CLEARANCE_FAILED, not "cleared".
+        calls: list[tuple] = []
+
+        def client_ok(method, url, body):
+            calls.append((method, url, body))
+            return {}
+
+        def client_fails(method, url, body):
+            raise RuntimeError("HTTP 400 FAILED_PRECONDITION: engine has sessions")
+
+        for api_call_fn, expected in ((client_ok, "CLEARED_ENFORCED"), (client_fails, "CLEARANCE_FAILED")):
+            gov = CostGovernanceService(project_id="test-proj", api_call_fn=api_call_fn)
+            gov._queue["re-111"] = _due_item("re-111")
+            with self.subTest(expected=expected), _email_env(FINOPS_ALLOW_AUTOMATED_CLEARANCE="1"):
+                res = gov.execute_scheduled_clearance(mode="enforced", lookup_bq=False, persist_to_bq=False)
+                self.assertEqual(res["mode_executed"], "enforced")
+                self.assertIsNone(res["note"])
+                self.assertEqual(res["actions"][0]["status"], expected)
+                self.assertEqual(res["cleared_count"], int(expected == "CLEARED_ENFORCED"))
+                self.assertEqual(res["failed_count"], int(expected == "CLEARANCE_FAILED"))
+        self.assertEqual(calls, [(
+            "DELETE",
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/test-proj/locations/us-central1/"
+            "reasoningEngines/111",
+            None,
+        )])
+
+    def test_cloud_run_scale_to_zero_and_mint_refresh_token_helper(self) -> None:
+        from scripts import mint_gmail_refresh_token as mint_helper
+
+        calls: list[tuple] = []
+
+        def fake_api(method, url, body):
+            calls.append((method, url, body))
+            if method == "GET":
+                return {
+                    "scaling": {"minInstanceCount": 2},
+                    "template": {"scaling": {"minInstanceCount": 1}},
+                    "traffic": [{"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", "percent": 100}],
+                }
+            return {}
+
+        gov = CostGovernanceService(project_id="test-proj", api_call_fn=fake_api)
+        past = (datetime.now(UTC) - timedelta(hours=1)).replace(microsecond=0).isoformat()
+        gov._queue["run-idle-worker"] = {
+            "runtime_id": "run-idle-worker",
+            "runtime_kind": "cloud_run",
+            "resource_name": "projects/test-proj/locations/us-central1/services/idle-worker",
+            "display_name": "idle-worker",
+            "project_id": "test-proj",
+            "location": "us-central1",
+            "status": "WARNED_GRACE_PERIOD",
+            "warning_sent_at": past,
+            "scheduled_clearance_at": past,
+            "recommended_action": "scale_to_zero",
+            "updated_at": past,
+        }
+        # First a dry run: leaves item pending in WARNED_GRACE_PERIOD
+        with _email_env(FINOPS_ALLOW_AUTOMATED_CLEARANCE="1"):
+            dry_res = gov.execute_scheduled_clearance(mode="dry_run", lookup_bq=False, persist_to_bq=False)
+            self.assertEqual(dry_res["would_clear_count"], 1)
+            self.assertEqual(gov._queue["run-idle-worker"]["status"], "WARNED_GRACE_PERIOD")
+            # Now enforced run clears the still-pending item
+            enf_res = gov.execute_scheduled_clearance(mode="enforced", lookup_bq=False, persist_to_bq=False)
+        self.assertEqual(enf_res["cleared_count"], 1)
+        self.assertEqual(gov._queue["run-idle-worker"]["status"], "CLEARED_ENFORCED")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1][0], "PATCH")
+        self.assertIn("scaling.minInstanceCount", calls[1][1])
+        self.assertIn("template.scaling.minInstanceCount", calls[1][1])
+
+        verifier, challenge = mint_helper.make_pkce_pair()
+        self.assertGreaterEqual(len(verifier), 43)
+        auth_url = mint_helper.build_authorization_url(
+            "cid.apps.googleusercontent.com",
+            "http://127.0.0.1:54321/",
+            "state-123",
+            challenge,
+            login_hint="finops@example.com",
+        )
+        self.assertIn("scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fgmail.send", auth_url)
+        self.assertIn("access_type=offline", auth_url)
+
+    def test_clearance_job_honors_a_snooze_recorded_by_another_instance(self) -> None:
+        bq_rows: list[dict] = []
+
+        def fake_bq(sql, timeout_s=8.0, query_parameters=None):
+            if sql.lstrip().upper().startswith("SELECT RUNTIME_ID"):
+                return [dict(r) for r in bq_rows], {}
+            return [], {}
+
+        def bq_ts(dt: datetime) -> str:  # how BigQuery renders CAST(timestamp AS STRING)
+            return dt.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S+00")
+
+        fleet = {"agents": [], "unregistered_runtimes": [_idle_engine("re-77")]}
+        for snooze_is_newer, expected_would_clear in ((True, 0), (False, 1)):
+            with self.subTest(snooze_is_newer=snooze_is_newer), _email_env():
+                bq_rows.clear()
+                instance_a = CostGovernanceService(project_id="acme-prod", bq_query_fn=fake_bq)
+                instance_a.evaluate_and_warn_idle_runtimes(fleet, send_warnings=True, dry_run_email=True)
+                local = instance_a._queue["re-77"]
+                self.assertEqual(local["status"], "WARNED_GRACE_PERIOD")
+                # On instance A's copy the grace period has passed...
+                local["scheduled_clearance_at"] = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
+                # ...but another instance recorded a snooze in BigQuery (newer, or older in the control case).
+                snooze_until = datetime.now(UTC) + timedelta(days=7)
+                shift = timedelta(minutes=1 if snooze_is_newer else -1)
+                bq_rows.append({
+                    "runtime_id": "re-77",
+                    "status": "SNOOZED",
+                    "snoozed_until": bq_ts(snooze_until),
+                    "scheduled_clearance_at": bq_ts(snooze_until),
+                    "warning_sent_at": local["warning_sent_at"],
+                    "updated_at": bq_ts(_parse_ts(local["updated_at"]) + shift),
+                })
+                res = instance_a.execute_scheduled_clearance(mode="dry_run", persist_to_bq=False)
+                self.assertEqual(res["would_clear_count"], expected_would_clear)
+                expected_status = "SNOOZED" if snooze_is_newer else "WARNED_GRACE_PERIOD"
+                self.assertEqual(instance_a._queue["re-77"]["status"], expected_status)
+
+    def test_read_only_evaluation_does_not_hide_a_newer_snooze(self) -> None:
+        t0 = datetime(2026, 10, 1, 8, 0, tzinfo=UTC)
+        bq_rows: list[dict] = []
+
+        def fake_bq(sql, timeout_s=8.0, query_parameters=None):
+            if sql.lstrip().upper().startswith("SELECT RUNTIME_ID"):
+                return [dict(r) for r in bq_rows], {}
+            return [], {}
+
+        def at(hours: float):
+            return patch("finops_dashboard.cost_governance._utcnow", return_value=t0 + timedelta(hours=hours))
+
+        fleet = {"agents": [], "unregistered_runtimes": [_idle_engine("re-77")]}
+        instance_a = CostGovernanceService(project_id="acme-prod", bq_query_fn=fake_bq)
+        with _email_env():
+            with at(0):  # the scheduled warn run on instance A
+                instance_a.evaluate_and_warn_idle_runtimes(fleet, send_warnings=True, dry_run_email=True)
+            bq_rows.append({  # T0+1h: the owner's Keep-Alive click lands on another instance
+                "runtime_id": "re-77",
+                "status": "SNOOZED",
+                "snoozed_until": "2026-10-08 09:00:00+00",
+                "scheduled_clearance_at": "2026-10-08 09:00:00+00",
+                "warning_sent_at": "2026-10-01 08:00:00+00",
+                "updated_at": "2026-10-01 09:00:00+00",
+            })
+            with at(2):  # a dashboard refresh on instance A (read-only, no BigQuery refresh)
+                instance_a.evaluate_and_warn_idle_runtimes(fleet, send_warnings=False, persist_to_bq=False)
+            with at(50):  # the clearance job after the 48h grace period, inside the 7-day snooze
+                res = instance_a.execute_scheduled_clearance(mode="dry_run", persist_to_bq=False)
+        self.assertEqual(res["cleared_count"], 0)
+        self.assertEqual(instance_a._queue["re-77"]["status"], "SNOOZED")
+
+    def test_recovered_runtime_gets_a_fresh_warning_when_it_goes_idle_again(self) -> None:
+        gov = CostGovernanceService(project_id="test-proj")
+        idle = {"agents": [], "unregistered_runtimes": [_idle_engine("re-77")]}
+        busy = {"agents": [], "unregistered_runtimes": [{
+            "agent_id": "re-77",
+            "finops_status": "HEALTHY",
+            "backend": {"kind": "agent_engine"},
+            "metrics": {"requests": 12, "llm_calls": 4},
+        }]}
+        kwargs = {"send_warnings": True, "dry_run_email": True, "lookup_bq": False, "persist_to_bq": False}
+
+        first = gov.evaluate_and_warn_idle_runtimes(idle, **kwargs)
+        self.assertEqual(len(first["recent_warnings"]), 1)
+        gov.evaluate_and_warn_idle_runtimes(busy, **kwargs)
+        self.assertEqual(gov._queue["re-77"]["status"], "RECOVERED_ACTIVE")
+        # Weeks later the old warning's clearance time is long past, and the runtime is idle again.
+        gov._queue["re-77"]["scheduled_clearance_at"] = (datetime.now(UTC) - timedelta(days=20)).isoformat()
+
+        again = gov.evaluate_and_warn_idle_runtimes(idle, **kwargs)
+        self.assertEqual(len(again["recent_warnings"]), 1, "a new idle period sends a new warning")
+        new_deadline = _parse_ts(gov._queue["re-77"]["scheduled_clearance_at"])
+        self.assertGreater(new_deadline, datetime.now(UTC) + timedelta(hours=47))
+        res = gov.execute_scheduled_clearance(mode="dry_run", lookup_bq=False, persist_to_bq=False)
+        self.assertEqual(res["cleared_count"], 0, "nothing is cleared before the new grace period ends")
+
+    def test_snooze_links_use_the_browser_reachable_base_url(self) -> None:
+        idle = {"agents": [], "unregistered_runtimes": [_idle_engine("re-77")]}
+        public = "https://finops-dashboard-mcp-app-123.us-central1.run.app"
+        dashboard = "https://finops-tokenomics-dashboard-123.us-central1.run.app"
+        for override, expected in ((f"{dashboard}/", dashboard), ("http://attacker.example.com", public)):
+            with (
+                self.subTest(override=override),
+                _email_env(FINOPS_SNOOZE_BASE_URL=override, FINOPS_PUBLIC_URL=public),
+            ):
+                gov = CostGovernanceService(project_id="test-proj")
+                payload = gov.evaluate_and_warn_idle_runtimes(
+                    idle, send_warnings=False, lookup_bq=False, persist_to_bq=False
+                )
+                self.assertTrue(payload["queue"][0]["snooze_7d_url"].startswith(
+                    f"{expected}/api/governance/snooze?runtime_id=re-77&days=7&token="
+                ))
+
+    def test_warning_emails_are_sent_without_holding_the_governance_lock(self) -> None:
+        gov = CostGovernanceService(project_id="test-proj")
+        lock_free_during_send: list[bool] = []
+
+        def fake_urlopen(req, timeout=None):
+            # /api/state takes the same lock from another request thread while a send is in flight.
+            probe_result: list[bool] = []
+
+            def probe() -> None:
+                acquired = gov._lock.acquire(timeout=2)
+                if acquired:
+                    gov._lock.release()
+                probe_result.append(acquired)
+
+            worker = threading.Thread(target=probe)
+            worker.start()
+            worker.join()
+            lock_free_during_send.append(probe_result[0])
+            return _FakeHttpResponse({"id": "msg-1"})
+
+        idle = {"agents": [], "unregistered_runtimes": [_idle_engine("re-77")]}
+        with (
+            _email_env(FINOPS_GMAIL_ACCESS_TOKEN="ya29.manual-test-token"),
+            patch("urllib.request.urlopen", side_effect=fake_urlopen),
+        ):
+            payload = gov.evaluate_and_warn_idle_runtimes(
+                idle, send_warnings=True, dry_run_email=False, lookup_bq=False, persist_to_bq=False
+            )
+        self.assertEqual(lock_free_during_send, [True])
+        self.assertTrue(payload["recent_warnings"][0]["delivered"], payload["recent_warnings"][0]["error"])
+
+    def test_cloud_scheduler_script_creates_then_updates_jobs(self) -> None:
+        script = Path(__file__).resolve().parent.parent / "deploy" / "setup_cloud_scheduler.sh"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            log = tmp_path / "gcloud_calls.jsonl"
+            state = tmp_path / "jobs"
+            state.mkdir()
+            fake_gcloud = tmp_path / "gcloud"
+            fake_gcloud.write_text(_FAKE_GCLOUD.replace("{python}", sys.executable), encoding="utf-8")
+            fake_gcloud.chmod(0o755)
+            env = {
+                key: value for key, value in os.environ.items()
+                if key not in ("SERVICE_URL", "SCHEDULER_SA_EMAIL", "CLEARANCE_MODE", "DIGEST_CADENCE")
+            }
+            env.update({
+                "PATH": f"{tmp}{os.pathsep}{os.environ.get('PATH', '')}",
+                "PROJECT_ID": "acme-prod",
+                "REGION": "us-central1",
+                "DIGEST_RECIPIENTS": "cfo@example.com,cto@example.com",
+                "FAKE_GCLOUD_LOG": str(log),
+                "FAKE_GCLOUD_STATE": str(state),
+            })
+
+            def run(**extra: str) -> subprocess.CompletedProcess:
+                return subprocess.run(
+                    ["bash", str(script)], env={**env, **extra},
+                    capture_output=True, text=True, timeout=60, check=False,
+                )
+
+            def scheduler_calls(verb: str) -> list[list[str]]:
+                rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+                return [r for r in rows if r[:4] == ["scheduler", "jobs", verb, "http"]]
+
+            created_run = run()
+            self.assertEqual(created_run.returncode, 0, created_run.stderr)
+            created = scheduler_calls("create")
+            self.assertEqual(len(created), 3)
+            bodies = {}
+            for args in created:
+                self.assertIn("--headers=Content-Type=application/json", args)
+                body = next(a.split("=", 1)[1] for a in args if a.startswith("--message-body="))
+                bodies[args[4]] = json.loads(body)
+            self.assertEqual(bodies["finops-warn-idle-runtimes"]["grace_period_hours"], 48)
+            self.assertEqual(bodies["finops-execute-scheduled-clearance"], {"mode": "dry_run"})
+            self.assertEqual(bodies["finops-send-executive-digest"]["recipient"], "cfo@example.com,cto@example.com")
+
+            # Re-running is idempotent: existing jobs are updated with the flags `jobs update http` accepts.
+            updated_run = run(CLEARANCE_MODE="enforced", DIGEST_CADENCE="weekly")
+            self.assertEqual(updated_run.returncode, 0, updated_run.stderr)
+            updated = scheduler_calls("update")
+            self.assertEqual(len(updated), 3)
+            for args in updated:
+                self.assertIn("--update-headers=Content-Type=application/json", args)
+            digest_job = next(a for a in updated if a[4] == "finops-send-executive-digest")
+            self.assertIn("--schedule=30 8 * * 1", digest_job)
+            clearance_job = next(a for a in updated if a[4] == "finops-execute-scheduled-clearance")
+            self.assertIn('--message-body={"mode":"enforced"}', clearance_job)
+
+            for bad_env in ({"CLEARANCE_MODE": "execute"}, {"DIGEST_RECIPIENTS": 'cfo@example.com","x":"y'}):
+                with self.subTest(bad_env=bad_env):
+                    bad = run(**bad_env)
+                    self.assertNotEqual(bad.returncode, 0)
+                    self.assertIn("ERROR", bad.stderr)
 
 
 if __name__ == "__main__":

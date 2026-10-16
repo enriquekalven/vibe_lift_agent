@@ -1,0 +1,105 @@
+{
+  "eval_set_id": "prompt_cache_xray_eval",
+  "name": "Prompt Cache X-Ray conversations",
+  "description": "Checks that the agent reaches for the right tool and reports only measured numbers: the built-in example, a pasted prompt pair, pricing a token count, and X-raying its own session (which needs two model calls, hence the two-turn case).",
+  "eval_cases": [
+    {
+      "eval_id": "builtin_example_names_the_breaking_line",
+      "conversation": [
+        {
+          "user_content": {
+            "parts": [{"text": "Run the built-in prompt cache example and tell me where caching breaks and why."}]
+          },
+          "intermediate_data": {
+            "tool_uses": [{"name": "xray_prompt_cache", "args": {}}]
+          }
+        }
+      ],
+      "session_input": {
+        "app_name": "app",
+        "user_id": "eval_user",
+        "state": {}
+      }
+    },
+    {
+      "eval_id": "pasted_prompts_with_a_request_id",
+      "conversation": [
+        {
+          "user_content": {
+            "parts": [{"text": "Compare these two prompts for me.\n\nPrevious prompt:\nSystem role: FinOps analyst\nRequest ID: req-101\nAlways answer in bullet points.\nNever invent numbers.\n\nCurrent prompt:\nSystem role: FinOps analyst\nRequest ID: req-102\nAlways answer in bullet points.\nNever invent numbers."}]
+          },
+          "intermediate_data": {
+            "tool_uses": [{"name": "xray_prompt_cache", "args": {}}]
+          }
+        }
+      ],
+      "session_input": {
+        "app_name": "app",
+        "user_id": "eval_user",
+        "state": {}
+      }
+    },
+    {
+      "eval_id": "pricing_a_token_count",
+      "conversation": [
+        {
+          "user_content": {
+            "parts": [{"text": "What does a call with 100,000 prompt tokens cost if 80,000 of them come from the cache, and what does caching save?"}]
+          },
+          "intermediate_data": {
+            "tool_uses": [{"name": "calculate_cache_economics", "args": {}}]
+          }
+        }
+      ],
+      "session_input": {
+        "app_name": "app",
+        "user_id": "eval_user",
+        "state": {}
+      }
+    },
+    {
+      "eval_id": "unpriced_model_is_not_guessed",
+      "conversation": [
+        {
+          "user_content": {
+            "parts": [{"text": "Price 50,000 prompt tokens with 25,000 cached on the model gemini-99-experimental."}]
+          },
+          "intermediate_data": {
+            "tool_uses": [{"name": "calculate_cache_economics", "args": {}}]
+          }
+        }
+      ],
+      "session_input": {
+        "app_name": "app",
+        "user_id": "eval_user",
+        "state": {}
+      }
+    },
+    {
+      "eval_id": "xray_my_session_needs_two_calls",
+      "conversation": [
+        {
+          "user_content": {
+            "parts": [{"text": "Hi! In one sentence, what can you do?"}]
+          },
+          "intermediate_data": {
+            "tool_uses": []
+          }
+        },
+        {
+          "user_content": {
+            "parts": [{"text": "Now x-ray this conversation: was your previous request's prefix reusable for this one, and how many cached tokens did the model report?"}]
+          },
+          "intermediate_data": {
+            "tool_uses": [{"name": "xray_my_session", "args": {}}]
+          }
+        }
+      ],
+      "session_input": {
+        "app_name": "app",
+        "user_id": "eval_user",
+        "state": {}
+      }
+    }
+  ]
+}

@@ -232,7 +232,9 @@ tr.vl-agent-detail-row .vl-agent-detail { position: sticky; left: 0; max-width: 
   html[data-theme="dark"] .trace-confirm { color: #93c5fd; }
   html[data-theme="dark"] .trace-msg-ok { color: var(--g-green); }
   html[data-theme="dark"] .trace-msg-err { color: var(--g-red); }
+  .api-notice[data-error-kind="NOTICE"] { background: #eff6ff; border-color: #93c5fd; color: #1e3a8a; }
   html[data-theme="dark"] .api-notice { background: var(--surface); border-color: rgba(239, 68, 68, .5); color: var(--g-red); }
+  html[data-theme="dark"] .api-notice[data-error-kind="NOTICE"] { background: var(--surface); border-color: rgba(59, 130, 246, .45); color: var(--g-blue); }
   html[data-theme="dark"] .token-na { color: #fbbf24; }
   html[data-theme="dark"] .time-ranges { color: var(--text-secondary); }
 

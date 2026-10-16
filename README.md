@@ -186,6 +186,7 @@ finops-dashboard-mcp-app/
 │   ├── set_log_retention.sh     # Raw log retention (partition expiration, default 90 days)
 │   ├── fix_customer_sinks_and_retention.sh # Audits & remediates customer sinks, retention, and mart views
 │   ├── setup_mart_refresh.sh    # Hourly BigQuery scheduled query that rebuilds fct_turns
+│   ├── setup_cloud_scheduler.sh # Cloud Scheduler jobs: idle warnings, scheduled clearance, executive digest
 │   ├── register_ge_agent.sh     # Deploys Custom MCP Data Store (BYO_MCP) & registers it to a GE App instance (A2A opt-in)
 │   ├── setup_mcp_connector.py   # Deploys Custom MCP Data Store (NOT Agent Registry) & links dataStoreIds to GE App instance
 │   ├── terraform/               # Reusable Terraform module for Project/Folder/Org-level log sinks + BigQuery mart
@@ -197,6 +198,7 @@ finops-dashboard-mcp-app/
 ├── docs/
 │   ├── ARCHITECTURE.md          # Diagram as code, legend (live / simulated / not configured), known gaps
 │   ├── PERMISSIONS.md           # Every IAM role, API and org policy FinOps Dashboard needs
+│   ├── COST_GOVERNANCE.md       # Idle-runtime clearance, Gmail alerts and Cloud Scheduler setup
 │   ├── spec.md                  # Architecture and data-source specification
 │   ├── GE_MART.md               # Gemini Enterprise curated views and reporting mart
 │   ├── LOOKER_STUDIO_GUIDE.md   # 4-page Looker Studio L1/L2 IT Support Dashboard guide
@@ -268,6 +270,24 @@ Runtime variables are read by the service (set on Cloud Run by `deploy/deploy_cl
 | `FINOPS_JUDGE_LOCATION` | `us-central1` | Vertex AI location for the judge model. |
 | `FINOPS_JUDGE_TIMEOUT_S` | `25` | Judge call timeout in seconds. |
 
+**Scheduled clearance and email alerts** (setup guide: [docs/COST_GOVERNANCE.md](docs/COST_GOVERNANCE.md))
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `FINOPS_GMAIL_REFRESH_TOKEN`, `FINOPS_GMAIL_CLIENT_ID`, `FINOPS_GMAIL_CLIENT_SECRET` | *(empty)* | Gmail API with an OAuth grant (`gmail.send` scope) from the sending mailbox. Store the token and secret in Secret Manager. |
+| `FINOPS_GMAIL_DWD_SERVICE_ACCOUNT` | *(empty)* | Gmail API through keyless Workspace domain-wide delegation: the service signs a JWT as this service account with IAM Credentials `signJwt` and sends as `FINOPS_GMAIL_SENDER`. |
+| `FINOPS_GMAIL_SENDER` | *(empty)* | Mailbox to send as (required for domain-wide delegation) and the default `From` address. |
+| `FINOPS_GMAIL_ACCESS_TOKEN` | *(empty)* | Pre-minted Gmail token for manual tests only; it expires within an hour. |
+| `FINOPS_SMTP_HOST`, `FINOPS_SMTP_PORT`, `FINOPS_SMTP_USER`, `FINOPS_SMTP_PASSWORD`, `FINOPS_SMTP_STARTTLS` | *(empty)*, `587`, *(empty)*, *(empty)*, `1` | SMTP delivery, used when no Gmail credential is set. |
+| `FINOPS_ALERT_WEBHOOK_URL` | *(empty)* | `https://` endpoint that receives each message as JSON, used when neither Gmail nor SMTP is set. With no channel configured, runs record a dry-run preview and send nothing. |
+| `FINOPS_ALERT_FROM_EMAIL` | `FINOPS_GMAIL_SENDER` | `From` header override. |
+| `FINOPS_DIGEST_RECIPIENTS` | `FINOPS_DEFAULT_OWNER_EMAIL` | Comma-separated digest recipients when the request has no `recipient`. |
+| `FINOPS_DEFAULT_OWNER_EMAIL` | *(placeholder address)* | Owner to warn when the Cloud Audit Logs name no creator for a runtime. |
+| `FINOPS_SNOOZE_BASE_URL` | `FINOPS_PUBLIC_URL` | Browser-reachable base URL for Keep-Alive links (for example the IAP-protected `finops-tokenomics-dashboard`). The MCP service itself is private, so a link to it gets HTTP 403 in a browser. |
+| `FINOPS_GOVERNANCE_SECRET` / `FINOPS_GOVERNANCE_SECRET_FILE` | random per instance | HMAC secret for Keep-Alive links. Set the same value on every service that sends or serves links, or links fail on other instances and after restarts. |
+| `FINOPS_ALLOW_AUTOMATED_CLEARANCE` | `0` | `1` permits `mode=enforced` clearance. This build has no live clearance client wired in, so enforced requests still run as a dry run and say so in `note`. |
+| `FINOPS_ANALYTICS_DATASET` / `FINOPS_AUDIT_DATASET` | `finops_analytics` / `ds_ge_audit_raw` | Datasets holding `zombie_clearance_queue` and the Cloud Audit Logs used to find each runtime's creator. |
+
 **Deploy-script variables** (read by the scripts in `deploy/`, not by the service)
 
 | Variable | Used by | Default | Description |
@@ -281,6 +301,10 @@ Runtime variables are read by the service (set on Cloud Run by `deploy/deploy_cl
 | `FINOPS_RETENTION_DAYS` | `setup_bigquery_sink.sh`, `set_log_retention.sh` | `90` | Days of raw log history kept in BigQuery (partition expiration on the raw sink datasets). The mart reads the same window (`provision_ge_mart.py --lookback-days`, default 90). |
 | `FINOPS_REFRESH_SCHEDULE` | `setup_mart_refresh.sh` | `every 1 hours` | How often the scheduled query rebuilds `fct_turns` (Data Transfer schedule syntax). |
 | `FINOPS_REFRESH_SA` | `setup_mart_refresh.sh` | `finops-dashboard-runtime-sa@PROJECT.iam.gserviceaccount.com` | Service account the scheduled query runs as. |
+| `CLEARANCE_MODE` | `setup_cloud_scheduler.sh` | `dry_run` | Mode the clearance job requests: `dry_run` or `enforced` (see [docs/COST_GOVERNANCE.md](docs/COST_GOVERNANCE.md#5-clearance-modes)). Any other value is rejected. |
+| `DIGEST_CADENCE` | `setup_cloud_scheduler.sh` | `daily` | Executive digest at 08:30 daily, or `weekly` on Mondays, in `TIME_ZONE` (default `America/Los_Angeles`). |
+| `DIGEST_RECIPIENTS` | `setup_cloud_scheduler.sh` | the service's `FINOPS_DIGEST_RECIPIENTS` | Comma-separated digest recipients sent in the job body. |
+| `SCHEDULER_SA_EMAIL` | `setup_cloud_scheduler.sh` | runtime service account | Identity the jobs call the service as; granted `roles/run.invoker` on it. |
 | `GE_ENGINE_ID` | `register_ge_agent.sh`, `setup_mcp_connector.py`, `deploy_cloud_run.sh` | *(required for step 4)* | Gemini Enterprise app instance ID to register the GE Data Store to (or pass it as the first argument to `register_ge_agent.sh`). |
 | `GE_LOCATION` | `register_ge_agent.sh`, `setup_mcp_connector.py` | `global` | Location of that Gemini Enterprise app instance (`global`, `us`, `eu`). |
 | `FINOPS_PUBLISH_A2A` | `register_ge_agent.sh` | `0` | `1` also publishes the A2A agent card with `agents-cli`. Off by default because the A2A endpoint is not served. |
@@ -736,6 +760,12 @@ Routes marked **Simulator** act only on the built-in demo profiles. `tests/test_
 | `/api/user_centric_finops` | `GET` | Per-user FinOps plus `session_drilldown`: per-user session token rollups and a per-session turn-by-turn token dictionary from `finops_mart.fct_sessions` / `fct_turns` (`?window_hours=168`). Token counts only, no prompt text |
 | `/api/ge_mart/refresh` | `POST` | Refreshes `finops_mart.fct_turns` from `v_fct_turns` via full rebuild or partition-pruned incremental `MERGE INTO` (`{"incremental": true, "lookback_days": 3}`) |
 | `/api/agent_observability`, `/api/enable_agent_observability` | `POST` | Turns trace logging (`observabilityConfig`) on or off for one or all Gemini Enterprise agents. Changes live agent settings |
+| `/api/governance/clearance_queue` | `GET` | Scheduled clearance queue (`finops_analytics.zombie_clearance_queue`): idle runtimes, warning and clearance times, snoozes and recent email attempts. Read only |
+| `/api/governance/evaluate_idle`, `/api/cron/warn_idle_runtimes` | `POST` | Stage 1: flags idle runtimes and emails each owner a warning with a Keep-Alive link (`grace_period_hours`, default 48; `dry_run_email`). Cloud Scheduler job `finops-warn-idle-runtimes` |
+| `/api/governance/execute_clearance`, `/api/cron/execute_scheduled_clearance` | `POST` | Stage 2: clears runtimes whose grace period ended without a snooze. `mode` is `dry_run` (default) or `enforced`; `note` explains any fallback to a dry run. Cloud Scheduler job `finops-execute-scheduled-clearance` |
+| `/api/governance/snooze` | `GET`, `POST` | Keep-Alive: snoozes clearance of one runtime (`runtime_id`, `days`, HMAC `token`). A bad token gets HTTP 403 |
+| `/api/governance/executive_digest` | `GET` | Executive digest preview; never sends |
+| `/api/governance/executive_digest`, `/api/cron/send_executive_digest` | `POST` | Builds and sends the executive digest (`cadence`, `recipient`, `dry_run`). An invalid `recipient` gets HTTP 400. Cloud Scheduler job `finops-send-executive-digest` |
 | `/api/decorator_ingest` | `POST` | Validated `@finops_telemetry` event. Invalid body: HTTP 422 and a Pub/Sub dead-letter record |
 | `/api/aive_log` | `POST` | Validated usage event, kept in memory with prompt text reduced to a digest. Invalid body: HTTP 422 |
 | `/api/csat_rating` | `POST` | Validated CSAT rating, kept in memory and in the audit log. Invalid body: HTTP 422 |

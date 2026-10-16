@@ -1336,7 +1336,7 @@ var VL = (function() {
     // Add footers to all pages
     var totalPages = pages.length;
     pages.forEach(function(cmds, idx) {
-      cmds.push('0.80 0.84 0.88 RG 0.5 w', M + ' 36 ' + (W - M) + ' 36 m S');
+      cmds.push('0.80 0.84 0.88 RG 0.5 w', M + ' 36 m ' + (W - M) + ' 36 l S');
       cmds.push('0.39 0.45 0.55 rg', 'BT /F1 7.5 Tf ' + M + ' 24 Td (FinOps Analytics Platform for Agent Optimization | Grounded Telemetry Report) Tj ET');
       var pgTxt = 'Page ' + (idx + 1) + ' of ' + totalPages;
       cmds.push('0.39 0.45 0.55 rg', 'BT /F2 7.5 Tf ' + (W - M - 58) + ' 24 Td (' + pdfEsc(pgTxt) + ') Tj ET');
@@ -1534,6 +1534,9 @@ var VL = (function() {
         .catch(function() {
           if (triggerBlobDownload(filename, 'application/pdf', pdfBytes || pdfStr)) {
             flash(btn, 'Downloaded PDF');
+          } else if (typeof window.print === 'function') {
+            try { window.print(); } catch (e) {}
+            flash(btn, 'Print opened');
           }
         });
       return;
@@ -1541,9 +1544,6 @@ var VL = (function() {
     var ok = triggerBlobDownload(filename, 'application/pdf', pdfBytes || pdfStr);
     if (ok) {
       flash(btn, 'Downloaded PDF');
-      if (typeof showApiNotice === 'function') {
-        showApiNotice('Downloaded executive PDF report (' + filename + '). Tip: Hold Shift while clicking Export PDF to open the browser print dialog.');
-      }
     } else if (typeof window.print === 'function') {
       try { window.print(); } catch (e) {}
       flash(btn, 'Print opened');

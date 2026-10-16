@@ -1,6 +1,6 @@
 # Testing
 
-454 tests across 22 files. They run offline: `GOOGLE_APPLICATION_CREDENTIALS` points at a file that does not
+468 tests across 22 files. They run offline: `GOOGLE_APPLICATION_CREDENTIALS` points at a file that does not
 exist, and every Google Cloud API is replaced by an in-process fake (`FakeGoogleApi` in
 [`tests/test_fleet.py`](../tests/test_fleet.py)), so no live project is touched.
 
@@ -68,7 +68,7 @@ is shown as unknown, never as an invented value. These tests enforce it.
 | **CSAT & Ingest validation.** Every ingested payload is validated and invalid payloads produce values-free dead-letter records | `test_ingest_validation.py`; chaos loop bucket 3 |
 | **ADK & `agents-cli eval` trajectory and grounding suite.** All 10 ADK tools on `root_agent` have evaluation cases in [`tests/eval/datasets/basic-dataset.json`](../tests/eval/datasets/basic-dataset.json), graded by deterministic tool-trajectory (`finops_tool_trajectory`), honesty/grounding (`finops_grounding_contract`) and LLM-as-judge (`custom_response_quality`) metrics | `test_remediation_workstreams.py` |
 | **Google Antigravity FinOps (`businessaicode.googleapis.com/inference_response`).** Strict allowlist stripping (prompt/response text never reaches memory), exact WTU & PAYG metering (50-WTU minimum pre-check, 0.5 list share, long-context `>200k` shares, `NOOP_QUOTA` zero-charge, Anthropic Claude 1.25x cache write & 100% PAYG), floating 7-day Gemini Enterprise seat pool replay, Fair Share vs When-Used chargeback reconciliation | `test_agy_finops.py` |
-| **Stale-While-Revalidate (SWR), Lite Boot, BigQuery Fleet Snapshots & Scheduled Cost Governance.** Embedded initial state on `/ui`, bounded SWR on `/api/state`, materialized `agent_registry_snapshots` persistence, Stage 1 idle runtime warnings with HMAC-signed 7-day Keep-Alive snooze links, Stage 2 scheduled clearance (`dry_run` / `enforced`), and Executive FinOps Digest | `test_cost_governance_and_swr.py` |
+| **Stale-While-Revalidate (SWR), Lite Boot, BigQuery Fleet Snapshots & Scheduled Cost Governance.** Embedded initial state on `/ui`, bounded SWR on `/api/state`, materialized `agent_registry_snapshots` persistence, Stage 1 idle runtime warnings with HMAC-signed 7-day Keep-Alive snooze links, Stage 2 scheduled clearance (`dry_run` / `enforced`, reported as executed), and Executive FinOps Digest. Gmail delivery (keyless domain-wide delegation via `signJwt` with exact claims, OAuth refresh token, token caching, API errors surfaced, the runtime token never sent to Gmail), snoozes recorded by another instance honored, a fresh warning after recovery, validated digest recipients, and `deploy/setup_cloud_scheduler.sh` run against a fake `gcloud` (create, then idempotent update) | `test_cost_governance_and_swr.py` |
 
 
 ## Adding a test
