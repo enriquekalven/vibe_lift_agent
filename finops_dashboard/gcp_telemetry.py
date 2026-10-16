@@ -243,6 +243,7 @@ class GoogleCloudTelemetryService:
       sql: str,
       timeout_s: float = 8.0,
       max_bytes_billed: int | None = None,
+      query_parameters: list[dict[str, Any]] | None = None,
   ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Runs one query through the BigQuery REST ``jobs.query`` API using ADC.
 
@@ -253,6 +254,8 @@ class GoogleCloudTelemetryService:
         not positive) the ``FINOPS_BQ_MAX_BYTES_BILLED`` default (10 GB) is
         used. BigQuery fails the job, and bills nothing, when the query would
         scan more than the cap.
+      query_parameters: Optional list of BigQuery REST ``QueryParameter`` dicts
+        for parameterized SQL execution.
 
     Returns:
       ``(rows, info)``. ``info`` holds ``error`` (None on success),
@@ -280,7 +283,10 @@ class GoogleCloudTelemetryService:
         'timeoutMs': int(timeout_s * 1000),
         'labels': {'datacloud': 'jetski'},
     }
-    if not sql.lstrip().upper().startswith(('CREATE ', 'DROP ', 'ALTER ')):
+    if query_parameters:
+      payload['parameterMode'] = 'NAMED'
+      payload['queryParameters'] = list(query_parameters)
+    if not sql.lstrip().upper().startswith(('CREATE ', 'DROP ', 'ALTER ', 'INSERT ')):
       if max_bytes_billed is not None and max_bytes_billed > 0:
         payload['maximumBytesBilled'] = str(int(max_bytes_billed))
       else:

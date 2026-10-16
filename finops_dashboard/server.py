@@ -30,6 +30,7 @@ except ImportError:
 from finops_dashboard import (
   agy_finops,
   billing_export,
+  cost_governance,
   gcp_telemetry,
   mcp_server,
   prompt_xray,
@@ -249,6 +250,27 @@ class FinOpsRuntimeController:
         self.gcp_telemetry.project_id, self.gcp_telemetry._get_access_token  # pylint: disable=protected-access
     )
     self.ge_fleet = fleet_service or ge_fleet.get_ge_fleet_service()
+    if (
+        getattr(self.ge_fleet, '_bq_query_fn', None) is None
+        and (
+            os.environ.get('FINOPS_BQ_TOKEN_PUSHDOWN')
+            or os.environ.get('FINOPS_BQ_SNAPSHOT_ENABLED')
+        )
+    ):
+      try:
+        self.ge_fleet._bq_query_fn = (  # pylint: disable=protected-access
+            lambda *a, **kw: self.gcp_telemetry.run_bigquery_query(*a, **kw)
+        )
+      except Exception:
+        pass
+    self.cost_governance = cost_governance.CostGovernanceService(
+        project_id=self.gcp_telemetry.project_id,
+        bq_query_fn=lambda *a, **kw: self.gcp_telemetry.run_bigquery_query(*a, **kw),
+        token_fn=lambda: self.gcp_telemetry._get_access_token(),  # pylint: disable=protected-access
+        api_call_fn=cost_governance.google_api_caller(
+            lambda: self.gcp_telemetry._get_access_token()  # pylint: disable=protected-access
+        ),
+    )
 
   def _is_live_gcp(self) -> bool:
     """Returns True when connected to a real GCP project (not the offline unit-test fake)."""
@@ -351,20 +373,26 @@ class FinOpsRuntimeController:
       include_fleet: bool = True,
       window_hours: int | None = None,
       fast_mcp: bool = False,
+      *,
+      allow_stale: bool | None = None,
+      max_wait_s: float | None = None,
+      lite_boot: bool = False,
   ) -> dict[str, Any]:
     """Builds the JSON payload for the dashboard (optimization tabs plus, optionally, the live GE fleet)."""
+    effective_allow_stale = bool(fast_mcp) if allow_stale is None else bool(allow_stale)
+    effective_max_wait = (0.35 if fast_mcp else (0.4 if effective_allow_stale else None)) if max_wait_s is None else max_wait_s
     fleet_payload = None
     if include_fleet:
       fleet_payload = self.get_fleet_payload(
           window_hours=window_hours,
-          allow_stale=fast_mcp,
-          max_wait_s=0.35 if fast_mcp else None,
+          allow_stale=effective_allow_stale,
+          max_wait_s=effective_max_wait,
       )
 
     bq_insights = None
     if self._is_live_gcp():
       bq_insights = self.gcp_telemetry.fetch_live_bigquery_project_insights(
-          non_blocking=fast_mcp, window_hours=window_hours
+          non_blocking=effective_allow_stale, window_hours=window_hours
       )
       if isinstance(bq_insights, dict) and bq_insights:
         usage_rows = bq_insights.get('aive_usage_logs')
@@ -404,9 +432,9 @@ class FinOpsRuntimeController:
       nl2sql_default = _nl2sql_not_run(nl2sql_default) if live_gcp else _label_nl2sql_simulated(nl2sql_default)
       steps = [d for d in self.agent.step_descriptions if not (live_gcp and d.get('simulated'))]
 
-    services = self.gcp_telemetry.list_cloud_run_agent_services(non_blocking=fast_mcp)
+    services = self.gcp_telemetry.list_cloud_run_agent_services(non_blocking=effective_allow_stale)
     support_events = self.gcp_telemetry.fetch_gemini_enterprise_support_telemetry(
-        limit=6, non_blocking=fast_mcp
+        limit=6, non_blocking=effective_allow_stale
     )
     live_finops_payload = None
     ge_daily_usage = None
@@ -427,8 +455,13 @@ class FinOpsRuntimeController:
       user_centric = dict(user_centric)
       if isinstance(live_bq, dict):
         user_centric['ge_sessions'] = list(live_bq.get('ge_sessions') or [])
-        user_centric['ge_session_turns'] = dict(live_bq.get('ge_session_turns') or {})
-        user_centric['ge_sessionless_token_turns'] = list(live_bq.get('ge_sessionless_token_turns') or [])
+        if lite_boot:
+          user_centric['ge_session_turns'] = {}
+          user_centric['ge_sessionless_token_turns'] = []
+          user_centric['lazy_turns_deferred'] = True
+        else:
+          user_centric['ge_session_turns'] = dict(live_bq.get('ge_session_turns') or {})
+          user_centric['ge_sessionless_token_turns'] = list(live_bq.get('ge_sessionless_token_turns') or [])
         user_centric['ge_mart_refreshed_at'] = live_bq.get('ge_mart_refreshed_at')
         user_centric['ge_mart_dataset'] = live_bq.get('ge_mart_dataset')
       if not (isinstance(live_bq, dict) and live_bq.get('power_users_ldap')):
@@ -478,10 +511,39 @@ class FinOpsRuntimeController:
       ]
 
     turn_summary_dict = dict(telemetry.summarize_log_stream(turns))
-    antigravity_finops_payload = self.get_antigravity_finops_payload(
-        window_hours=window_hours,
-        fleet_payload=fleet_payload or self._last_fleet_payload,
+    antigravity_finops_payload = (
+        None
+        if lite_boot
+        else self.get_antigravity_finops_payload(
+            window_hours=window_hours,
+            fleet_payload=fleet_payload or self._last_fleet_payload,
+            allow_live_fetch=False,
+        )
     )
+    effective_fleet = (
+        fleet_payload
+        or self._last_fleet_payload
+        or (self.optimizer._live_fleet_payload if self._is_live_gcp() else None)
+    )
+    if effective_fleet is None and not self._is_live_gcp():
+      effective_fleet = self.get_fleet_payload(allow_stale=False)
+    self.cost_governance.project_id = self.gcp_telemetry.project_id
+    cost_gov_summary = self.cost_governance.evaluate_and_warn_idle_runtimes(
+        effective_fleet,
+        send_warnings=False,
+        lookup_bq=False,
+        persist_to_bq=False,
+    )
+    fleet_stale = bool(
+        isinstance(fleet_payload, Mapping)
+        and (
+            fleet_payload.get('stale_revalidating')
+            or fleet_payload.get('warming')
+            or as_mapping(fleet_payload.get('source_status')).get('inventory') == 'warming'
+        )
+    )
+    bq_stale = bool(live_gcp and not (isinstance(bq_insights, dict) and bq_insights))
+    stale_revalidating = bool(fleet_stale or bq_stale)
     payload: dict[str, Any] = {
         'agent_name': self.agent.agent_name,
         'model': self.agent.model,
@@ -502,6 +564,14 @@ class FinOpsRuntimeController:
         'what_if_default': what_if_default,
         'live_finops': live_finops_payload,
         'antigravity_finops': antigravity_finops_payload,
+        'cost_governance': cost_gov_summary,
+        'lite_boot': bool(lite_boot),
+        'swr': {
+            'stale_revalidating': stale_revalidating,
+            'fleet_stale': fleet_stale,
+            'bq_stale': bq_stale,
+            'lite_boot': bool(lite_boot),
+        },
         'ge_daily_usage': ge_daily_usage,
         'live_data': live_gcp,
         'aive_logs': telemetry.get_recent_aive_logs(live_only=live_gcp),
@@ -515,13 +585,6 @@ class FinOpsRuntimeController:
     }
     if include_fleet and fleet_payload is not None:
       payload['ge_fleet'] = fleet_payload
-    effective_fleet = (
-        fleet_payload
-        or self._last_fleet_payload
-        or (self.optimizer._live_fleet_payload if self._is_live_gcp() else None)
-    )
-    if effective_fleet is None and not self._is_live_gcp():
-      effective_fleet = self.get_fleet_payload(allow_stale=False)
     payload['telemetry_validation'] = telemetry_validator.validate_dashboard_state(
         payload,
         ge_fleet_payload=effective_fleet,
@@ -529,6 +592,105 @@ class FinOpsRuntimeController:
         run_llm_judge=False,
     )
     return payload
+
+  def evaluate_idle_governance(self, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Evaluates idle/zombie runtimes and optionally dispatches Stage 1 warning notifications."""
+    raw = body if isinstance(body, Mapping) else {}
+    window_hours = ge_fleet.parse_window_hours(raw.get('window_hours'))
+    send_warnings = ge_fleet.parse_bool(raw.get('send_warnings', True))
+    dry_run_email = ge_fleet.parse_bool(raw.get('dry_run_email', False))
+    grace_hours, grace_ok = _parse_finite_int(
+        raw.get('grace_period_hours'), cost_governance.DEFAULT_GRACE_PERIOD_HOURS
+    )
+    persist_to_bq = ge_fleet.parse_bool(raw.get('persist_to_bq', True)) and self._is_live_gcp()
+    lookup_bq = ge_fleet.parse_bool(raw.get('lookup_bq', True)) and self._is_live_gcp()
+    fleet = self.get_fleet_payload(window_hours=window_hours, allow_stale=True, max_wait_s=5.0)
+    self.cost_governance.project_id = self.gcp_telemetry.project_id
+    return self.cost_governance.evaluate_and_warn_idle_runtimes(
+        fleet,
+        grace_period_hours=(
+            grace_hours if grace_ok and grace_hours else cost_governance.DEFAULT_GRACE_PERIOD_HOURS
+        ),
+        send_warnings=send_warnings,
+        dry_run_email=dry_run_email,
+        lookup_bq=lookup_bq,
+        persist_to_bq=persist_to_bq,
+    )
+
+  def execute_scheduled_clearance(self, body: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Executes Stage 2 scheduled clearance after the grace period expires (dry_run by default)."""
+    raw = body if isinstance(body, Mapping) else {}
+    window_hours = ge_fleet.parse_window_hours(raw.get('window_hours'))
+    raw_dry_run = raw.get('dry_run')
+    if raw_dry_run is None:
+      mode_str = str(raw.get('mode') or '').strip().lower()
+      dry_run = mode_str != 'enforced' if mode_str else True
+    elif isinstance(raw_dry_run, bool):
+      dry_run = raw_dry_run
+    else:
+      dry_run = ge_fleet.parse_bool(raw_dry_run)
+    fleet = self.get_fleet_payload(window_hours=window_hours, allow_stale=True, max_wait_s=5.0)
+    self.cost_governance.project_id = self.gcp_telemetry.project_id
+    return self.cost_governance.execute_scheduled_clearance(
+        fleet,
+        mode='dry_run' if dry_run else 'enforced',
+        dry_run=dry_run,
+        lookup_bq=self._is_live_gcp(),
+        persist_to_bq=self._is_live_gcp(),
+    )
+
+  def snooze_governance_runtime(
+      self,
+      runtime_key: str,
+      token: str,
+      snooze_days: int | None = None,
+      actor: str = 'owner_link',
+  ) -> dict[str, Any]:
+    """Verifies an HMAC snooze token (if provided) and snoozes scheduled clearance for a runtime."""
+    self.cost_governance.project_id = self.gcp_telemetry.project_id
+    return self.cost_governance.snooze_runtime(
+        runtime_id=runtime_key,
+        days=snooze_days or 7,
+        token=token,
+        verify_token=bool(token),
+        lookup_bq=self._is_live_gcp(),
+        persist_to_bq=self._is_live_gcp(),
+        actor=actor,
+    )
+
+  def executive_digest_payload(
+      self,
+      body: Mapping[str, Any] | None = None,
+      send_email: bool = False,
+  ) -> dict[str, Any]:
+    """Builds and optionally dispatches the daily/weekly FinOps executive digest."""
+    raw = body if isinstance(body, Mapping) else {}
+    try:
+      recipient = cost_governance.normalize_recipient_list(
+          raw.get('recipient', raw.get('recipients'))
+      ) or None
+    except ValueError as exc:
+      return {'status': 'INVALID_REQUEST', 'error': str(exc)}
+    window_hours = ge_fleet.parse_window_hours(raw.get('window_hours')) or 168
+    cadence = str(raw.get('cadence') or 'weekly').strip().lower()
+    dry_run_flag = ge_fleet.parse_bool(raw.get('dry_run', not send_email))
+    fleet = self.get_fleet_payload(window_hours=window_hours, allow_stale=True, max_wait_s=5.0)
+    self.cost_governance.project_id = self.gcp_telemetry.project_id
+    self.cost_governance.evaluate_and_warn_idle_runtimes(
+        fleet,
+        send_warnings=False,
+        lookup_bq=self._is_live_gcp(),
+        persist_to_bq=False,
+    )
+    user_centric = as_mapping(self.optimizer.get_user_centric_payload())
+    return self.cost_governance.build_and_send_executive_digest(
+        fleet,
+        user_centric_payload=user_centric,
+        cadence=cadence,
+        recipient=recipient,
+        dry_run=dry_run_flag,
+        lookup_bq=self._is_live_gcp(),
+    )
 
   def validate_telemetry(self, run_llm_judge: bool = True) -> dict[str, Any]:
     """Runs the deterministic + optional Vertex AI LLM-as-a-Judge telemetry grounding validator."""
@@ -1298,7 +1460,10 @@ class FinOpsRequestHandler(http.server.BaseHTTPRequestHandler):
       self.send_error(404, 'Not Found')
       return
     if path in ('/', '/ui', '/app'):
-      html_bytes = ui_template.render_dashboard_html().encode('utf-8')
+      initial_state = srv.controller.get_state_payload(
+          fast_mcp=True, allow_stale=True, max_wait_s=0.35, lite_boot=True
+      )
+      html_bytes = ui_template.render_dashboard_html(initial_state=initial_state).encode('utf-8')
       self.send_response(200)
       self.send_header('Content-Type', 'text/html; charset=utf-8')
       self.send_header('Content-Length', str(len(html_bytes)))
@@ -1314,9 +1479,46 @@ class FinOpsRequestHandler(http.server.BaseHTTPRequestHandler):
       ))
       return
     if path == '/api/state':
+      raw_stale = _first_query_value(query, 'allow_stale')
+      allow_stale_val = True if raw_stale is None or raw_stale == '' else ge_fleet.parse_bool(raw_stale)
+      raw_wait = _first_query_value(query, 'max_wait_s')
+      wait_val, wait_ok = _parse_finite_float(raw_wait, 0.4 if allow_stale_val else None)
+      lite_val = ge_fleet.parse_bool(_first_query_value(query, 'lite') or '')
       self._send_json(srv.controller.get_state_payload(
           window_hours=ge_fleet.parse_window_hours(_first_query_value(query, 'window_hours')),
+          allow_stale=allow_stale_val,
+          max_wait_s=wait_val if wait_ok else (0.4 if allow_stale_val else None),
+          lite_boot=lite_val,
       ))
+      return
+    if path == '/api/governance/clearance_queue':
+      self._send_json(srv.controller.evaluate_idle_governance({
+          'window_hours': _first_query_value(query, 'window_hours'),
+          'send_warnings': False,
+          'persist_to_bq': False,
+      }))
+      return
+    if path == '/api/governance/executive_digest':
+      self._send_json(srv.controller.executive_digest_payload(
+          {'window_hours': _first_query_value(query, 'window_hours')},
+          send_email=False,
+      ))
+      return
+    if path == '/api/governance/snooze':
+      r_key = str(
+          _first_query_value(query, 'runtime_id')
+          or _first_query_value(query, 'resource_id')
+          or _first_query_value(query, 'runtime_key')
+          or ''
+      ).strip()
+      token = str(_first_query_value(query, 'token') or '').strip()
+      days_val, days_ok = _parse_finite_int(_first_query_value(query, 'days'), 7)
+      res = srv.controller.snooze_governance_runtime(
+          runtime_key=r_key,
+          token=token,
+          snooze_days=days_val if days_ok else 7,
+      )
+      self._send_json(res, status=403 if res.get('status') == 'FORBIDDEN' else 200)
       return
     if path == '/api/gcp_telemetry':
       self._send_json(srv.controller.gcp_telemetry.get_telemetry_summary_payload())
@@ -1443,6 +1645,33 @@ class FinOpsRequestHandler(http.server.BaseHTTPRequestHandler):
       return
     if self.path in ('/api/enable_agent_observability', '/api/agent_observability'):
       self._send_json(srv.controller.enable_agent_observability(body))
+      return
+    if self.path in ('/api/governance/evaluate_idle', '/api/cron/warn_idle_runtimes'):
+      self._send_json(srv.controller.evaluate_idle_governance(body))
+      return
+    if self.path in ('/api/governance/execute_clearance', '/api/cron/execute_scheduled_clearance'):
+      self._send_json(srv.controller.execute_scheduled_clearance(body))
+      return
+    if self.path == '/api/governance/snooze':
+      r_key = str(
+          body.get('runtime_id')
+          or body.get('resource_id')
+          or body.get('runtime_key')
+          or ''
+      ).strip()
+      token = str(body.get('token') or '').strip()
+      days_val, days_ok = _parse_finite_int(body.get('days'), 7)
+      res = srv.controller.snooze_governance_runtime(
+          runtime_key=r_key,
+          token=token,
+          snooze_days=days_val if days_ok else 7,
+      )
+      self._send_json(res, status=403 if res.get('status') == 'FORBIDDEN' else 200)
+      return
+    if self.path in ('/api/governance/executive_digest', '/api/cron/send_executive_digest'):
+      send_flag = ge_fleet.parse_bool(body.get('send_email', True))
+      res = srv.controller.executive_digest_payload(body, send_email=send_flag)
+      self._send_json(res, status=400 if res.get('status') == 'INVALID_REQUEST' else 200)
       return
     self.send_error(404, 'Not Found')
 
@@ -1638,12 +1867,101 @@ def register_api_routes(app: Any, controller: FinOpsRuntimeController) -> None:
   @app.get('/ui', response_class=HTMLResponse)
   @app.get('/app', response_class=HTMLResponse)
   def get_dashboard():
-    return HTMLResponse(content=ui_template.render_dashboard_html(), status_code=200,
-                        headers=dict(DASHBOARD_SECURITY_HEADERS))
+    initial_state = controller.get_state_payload(
+        fast_mcp=True, allow_stale=True, max_wait_s=0.35, lite_boot=True
+    )
+    return HTMLResponse(
+        content=ui_template.render_dashboard_html(initial_state=initial_state),
+        status_code=200,
+        headers=dict(DASHBOARD_SECURITY_HEADERS),
+    )
 
   @app.get('/api/state')
-  def get_state(window_hours: str | None = None):
-    return controller.get_state_payload(window_hours=ge_fleet.parse_window_hours(window_hours))
+  def get_state(
+      window_hours: str | None = None,
+      allow_stale: str | None = None,
+      max_wait_s: str | None = None,
+      lite: str | None = None,
+  ):
+    allow_stale_val = True if allow_stale is None or allow_stale == '' else ge_fleet.parse_bool(allow_stale)
+    wait_val, wait_ok = _parse_finite_float(max_wait_s, 0.4 if allow_stale_val else None)
+    lite_val = ge_fleet.parse_bool(lite or '')
+    return controller.get_state_payload(
+        window_hours=ge_fleet.parse_window_hours(window_hours),
+        allow_stale=allow_stale_val,
+        max_wait_s=wait_val if wait_ok else (0.4 if allow_stale_val else None),
+        lite_boot=lite_val,
+    )
+
+  @app.get('/api/governance/clearance_queue')
+  def get_governance_clearance_queue(window_hours: str | None = None):
+    return controller.evaluate_idle_governance({
+        'window_hours': window_hours,
+        'send_warnings': False,
+        'persist_to_bq': False,
+    })
+
+  @app.post('/api/governance/evaluate_idle')
+  @app.post('/api/cron/warn_idle_runtimes')
+  def post_governance_evaluate_idle(payload: Any = fastapi.Body(default=None)):
+    return controller.evaluate_idle_governance(_as_body(payload))
+
+  @app.post('/api/governance/execute_clearance')
+  @app.post('/api/cron/execute_scheduled_clearance')
+  def post_governance_execute_clearance(payload: Any = fastapi.Body(default=None)):
+    return controller.execute_scheduled_clearance(_as_body(payload))
+
+  @app.get('/api/governance/snooze')
+  def get_governance_snooze(
+      runtime_id: str | None = None,
+      resource_id: str | None = None,
+      runtime_key: str | None = None,
+      token: str | None = None,
+      days: str | None = None,
+  ):
+    days_val, days_ok = _parse_finite_int(days, 7)
+    r_key = str(runtime_id or resource_id or runtime_key or '').strip()
+    res = controller.snooze_governance_runtime(
+        runtime_key=r_key,
+        token=str(token or '').strip(),
+        snooze_days=days_val if days_ok else 7,
+    )
+    if res.get('status') == 'FORBIDDEN':
+      return JSONResponse(status_code=403, content=res)
+    return res
+
+  @app.post('/api/governance/snooze')
+  def post_governance_snooze(payload: Any = fastapi.Body(default=None)):
+    body = _as_body(payload)
+    days_val, days_ok = _parse_finite_int(body.get('days'), 7)
+    r_key = str(
+        body.get('runtime_id')
+        or body.get('resource_id')
+        or body.get('runtime_key')
+        or ''
+    ).strip()
+    res = controller.snooze_governance_runtime(
+        runtime_key=r_key,
+        token=str(body.get('token') or '').strip(),
+        snooze_days=days_val if days_ok else 7,
+    )
+    if res.get('status') == 'FORBIDDEN':
+      return JSONResponse(status_code=403, content=res)
+    return res
+
+  @app.get('/api/governance/executive_digest')
+  def get_governance_executive_digest(window_hours: str | None = None):
+    return controller.executive_digest_payload({'window_hours': window_hours}, send_email=False)
+
+  @app.post('/api/governance/executive_digest')
+  @app.post('/api/cron/send_executive_digest')
+  def post_governance_executive_digest(payload: Any = fastapi.Body(default=None)):
+    body = _as_body(payload)
+    send_flag = ge_fleet.parse_bool(body.get('send_email', True))
+    res = controller.executive_digest_payload(body, send_email=send_flag)
+    if res.get('status') == 'INVALID_REQUEST':
+      return JSONResponse(status_code=400, content=res)
+    return res
 
   @app.get('/api/dead_letters')
   @app.get('/api/dead-letters')

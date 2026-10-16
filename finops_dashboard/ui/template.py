@@ -484,6 +484,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     .api-notice { position: fixed; right: 16px; bottom: 16px; max-width: 440px; z-index: 9999; background: #fff;
       border: 1px solid #fca5a5; color: #991b1b; padding: 10px 12px; border-radius: 8px; font-size: 12.5px;
       line-height: 1.5; box-shadow: 0 4px 14px rgba(0,0,0,.12); }
+    .api-notice[data-error-kind="NOTICE"] { background: #eff6ff; border-color: #93c5fd; color: #1e40af; }
     .sim-notice { font-size: 12px; line-height: 1.55; color: #854d0e; background: #fefce8; border: 1px solid #fef08a;
       border-radius: 8px; padding: 8px 10px; }
     body.simple-mode .adv-only { display: none !important; }
@@ -566,7 +567,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         font-size: 11px !important;
       }
       .action-bar, .tab-bar, .tabs-bar, .fleet-controls, .verify-chip, #exportPdfBtn, #syncGcpBtn,
-      #telemetryValidatorDrawer, #anomalyBanner, #chatDock, #chatDrawer, #apiNotice,
+      #telemetryValidatorDrawer, #anomalyBanner, #chatDock, #chatDrawer, #apiNotice, #swrRefreshBadge,
       .vl-toolbar, .vl-drawer, .vl-backdrop, .vl-palette,
       .scope-select, button {
         display: none !important;
@@ -694,6 +695,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         <option value="8760">Last 1 year</option>
       </select>
       <span id="fleetWindowStatus" class="mono" style="font-size:11px;font-weight:600;color:#0284c7;display:none;">&#x23F3; Loading&hellip;</span>
+      <span id="swrRefreshBadge" class="badge badge-blue hidden" role="status" aria-live="polite" style="font-size:11px;font-weight:600;">&#x21BB; Refreshing live telemetry&hellip;</span>
     </div>
     <div class="action-bar">
       <button id="btnModeFullscreen" class="btn btn-fullscreen-toggle" onclick="toggleDisplayMode()" title="Toggle between Right Side Panel and Fullscreen">
@@ -1721,6 +1723,43 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
 
+      <div class="panel" id="scheduledClearancePanel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>Scheduled Zombie Clearance Lifecycle &amp; Automated FinOps Executive Digest</span>
+            <span id="govLifecycleBadge" class="badge badge-yellow">Warn &rarr; Grace Period &rarr; Auto-Reclaim</span>
+            <span id="govModeBadge" class="badge badge-blue">DRY-RUN</span>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+            <button type="button" class="btn" id="govWarnBtn" onclick="triggerGovernanceWarn(false)">Evaluate Idle Queue</button>
+            <button type="button" class="btn" id="govSendWarnBtn" onclick="triggerGovernanceWarn(true)">Send Stage 1 Warnings</button>
+            <button type="button" class="btn" id="govClearDryRunBtn" onclick="triggerScheduledClearance(true)">Run Stage 2 Clearance (Dry-Run)</button>
+            <button type="button" class="btn" id="govDigestPreviewBtn" onclick="previewExecutiveDigest(false)">Preview Executive Digest</button>
+          </div>
+        </div>
+        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px;">
+          Two-stage closed-loop governance (<span class="mono">finops_analytics.zombie_clearance_queue</span>): looks up resource creators from Cloud Audit Logs (<span class="mono">protoPayload.authenticationInfo.principalEmail</span>), sends Stage 1 warnings with an HMAC-signed 7-day Keep-Alive / Snooze link, and reclaims unapproved idle Reasoning Engines or scales Cloud Run <span class="mono">min-instances=0</span> after the grace window expires.
+        </div>
+        <div class="kpi-grid" id="govClearanceKpis" style="margin-bottom:12px;"></div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Runtime &amp; Kind</th>
+                <th>Creator (Cloud Audit Log)</th>
+                <th>First Flagged Idle</th>
+                <th>Grace Window &amp; Scheduled Action</th>
+                <th>Lifecycle Status</th>
+                <th>Keep Alive / Snooze</th>
+              </tr>
+            </thead>
+            <tbody id="govClearanceBody"></tbody>
+          </table>
+        </div>
+        <div id="govDigestPreview" class="action-box hidden" style="margin-top:12px;"></div>
+        <div class="live-note" id="govStatusNote"></div>
+      </div>
+
       <div class="live-note" id="agyTabPointer" style="margin:0 0 16px;">
         Google Antigravity IDE spend (seats, weekly WTU allowance &amp; PAYG chargeback) now has its own tab.
         <button class="btn" style="padding:2px 8px;font-size:11.5px;margin-left:6px;" onclick="switchTab(7)">Open Antigravity &rarr;</button>
@@ -2605,6 +2644,41 @@ __FINOPS_ENHANCEMENTS_JS__
       switchTab(t);
     });
 
+    const hydratedLazyTabs = {};
+    async function ensureTabHydrated(tab) {
+      if (isEmbedded() || hydratedLazyTabs[tab]) return;
+      try {
+        if (tab === 4 && currentState && currentState.lite_boot && !currentState.user_centric_finops) {
+          hydratedLazyTabs[tab] = true;
+          const res = await fetch('/api/user_centric_finops?window_hours=' + encodeURIComponent(fleetWindowHours), {cache: 'no-store', credentials: 'same-origin'});
+          if (res.ok) {
+            const payload = await res.json();
+            if (currentState) {
+              currentState.user_centric_finops = payload;
+              if (payload && payload.user_centric) {
+                currentState.user_centric = payload.user_centric;
+              }
+              if (typeof renderUserCentricAndDecorator === 'function') {
+                renderUserCentricAndDecorator(scopeUserCentric(currentState.user_centric), currentState.decorator_events);
+              }
+            }
+          }
+        } else if (tab === 7 && currentState && currentState.lite_boot && !currentState.antigravity_finops) {
+          hydratedLazyTabs[tab] = true;
+          const res = await fetch('/api/antigravity_finops?window_days=30', {cache: 'no-store', credentials: 'same-origin'});
+          if (res.ok) {
+            const payload = await res.json();
+            if (currentState) {
+              currentState.antigravity_finops = payload;
+              if (typeof renderAntigravityFinops === 'function') renderAntigravityFinops(payload);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Lazy tab hydration notice:', err);
+      }
+    }
+
     function switchTab(tabIndex) {
       const validTabs = [0, 1, 2, 3, 4, 5, 6, 7];
       let tab = validTabs.indexOf(Number(tabIndex)) >= 0 ? Number(tabIndex) : 6;
@@ -2619,6 +2693,7 @@ __FINOPS_ENHANCEMENTS_JS__
       const banner = document.getElementById('demoSelectorBanner');
       if (banner) banner.classList.toggle('hidden', tab === 0 || tab === 6 || tab === 3 || tab === 4 || tab === 7);
       if (tab === 2) initPromptXray();
+      ensureTabHydrated(tab);
       VL.onTab(tab);
       notifyHostSizeChanged();
     }
@@ -2765,6 +2840,9 @@ __FINOPS_ENHANCEMENTS_JS__
 
     function renderStateUnsafe(state) {
       currentState = state;
+      if (typeof setSwrRevalidating === 'function') {
+        setSwrRevalidating(Boolean(state.swr && state.swr.stale_revalidating));
+      }
       if (typeof state.live_data === 'boolean') {
         document.body.classList.toggle('live-data', state.live_data === true);
       }
@@ -2778,6 +2856,9 @@ __FINOPS_ENHANCEMENTS_JS__
         if (state.live_finops && !liveFinopsFromFleet) renderLiveFinops(state.live_finops);
       }
       if (state.antigravity_finops) renderAntigravityFinops(state.antigravity_finops);
+      if (state.cost_governance && typeof renderCostGovernance === 'function') {
+        renderCostGovernance(state.cost_governance);
+      }
       if (state.ge_daily_usage) renderGeMartDaily(state.ge_daily_usage);
       if (state.all_agents && typeof state.all_agents === 'object') {
         Object.keys(state.all_agents).forEach(function(k) {
@@ -7337,9 +7418,24 @@ __FINOPS_ENHANCEMENTS_JS__
       }, FLEET_REFRESH_MS);
     }
 
-    async function fetchState(expectedHours, expectedSeq) {
+    let swrBackgroundInFlight = false;
+    function setSwrRevalidating(active, customLabel) {
+      const badge = document.getElementById('swrRefreshBadge');
+      if (!badge) return;
+      if (active) {
+        badge.textContent = customLabel || 'Refreshing live telemetry…';
+        badge.classList.remove('hidden');
+      } else {
+        badge.classList.add('hidden');
+      }
+    }
+
+    async function fetchState(expectedHours, expectedSeq, opts) {
+      const options = opts || {};
       const targetHours = expectedHours || fleetWindowHours;
-      const url = '/api/state?window_hours=' + encodeURIComponent(targetHours);
+      const allowStaleParam = options.allowStale === false ? '&allow_stale=false' : '';
+      const liteParam = options.lite ? '&lite=true' : '';
+      const url = '/api/state?window_hours=' + encodeURIComponent(targetHours) + allowStaleParam + liteParam;
       const res = await fetch(url, {cache: 'no-store', credentials: 'same-origin'});
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
@@ -7348,6 +7444,187 @@ __FINOPS_ENHANCEMENTS_JS__
       }
       fleetRefreshMode = 'http';
       renderState(data);
+      if (data && data.swr && data.swr.stale_revalidating && options.allowStale !== false && !swrBackgroundInFlight) {
+        swrBackgroundInFlight = true;
+        setSwrRevalidating(true, 'Refreshing live telemetry…');
+        fetchState(targetHours, expectedSeq, {allowStale: false, lite: Boolean(options.lite)}).catch(function() {}).finally(function() {
+          swrBackgroundInFlight = false;
+          setSwrRevalidating(false);
+        });
+      }
+    }
+
+    function renderCostGovernance(gov) {
+      const body = document.getElementById('govClearanceBody');
+      if (!body || !gov || typeof gov !== 'object') return;
+      const sum = gov.summary || {};
+      const kpisEl = document.getElementById('govClearanceKpis');
+      if (kpisEl) {
+        kpisEl.replaceChildren();
+        const kpiItems = [
+          {label: 'Total Tracked Runtimes', val: String(sum.total_tracked || 0), sub: 'Monitored across Reasoning Engines & Cloud Run'},
+          {label: 'Warned / Pending Clearance', val: String(sum.pending_clearance_count || 0), sub: 'Owner notified via email / webhook'},
+          {label: 'Cleared / Reclaimed', val: String(sum.cleared_count || 0), sub: 'Scaled to zero or deleted after grace window'},
+          {label: 'Snoozed / Keep-Alive', val: String(sum.snoozed_count || 0), sub: '7-day HMAC Keep-Alive active'},
+          {label: 'Est. Monthly Reclaimable', val: '$' + Number(sum.est_reclaimable_monthly_usd || 0).toFixed(2), sub: 'Projected idle compute savings'},
+        ];
+        kpiItems.forEach(function(item) {
+          kpisEl.appendChild(el('div', 'kpi-card', [
+            el('div', 'kpi-title', [item.label]),
+            el('div', 'kpi-val', [item.val]),
+            el('div', 'kpi-sub', [item.sub]),
+          ]));
+        });
+      }
+      const modeBadge = document.getElementById('govModeBadge');
+      if (modeBadge) {
+        const tblName = String(gov.table || 'finops_analytics.zombie_clearance_queue');
+        const modeLabel = gov.automated_clearance_enabled ? 'Auto-Cleanup Ready' : 'Dry-Run Safe';
+        modeBadge.textContent = modeLabel + ' · Queue: ' + tblName;
+      }
+      const rows = Array.isArray(gov.queue) ? gov.queue : (Array.isArray(gov.items) ? gov.items : []);
+      body.replaceChildren();
+      if (!rows.length) {
+        const td = el('td', null, ['No idle runtimes currently queued for scheduled clearance. Click "Run Stage 1: Warn Idle Runtimes" to evaluate fleet telemetry.']);
+        td.colSpan = 8;
+        body.appendChild(el('tr', null, [td]));
+        return;
+      }
+      rows.forEach(function(r) {
+        const st = String(r.status || 'WARNED_GRACE_PERIOD');
+        const badgeCls = (st === 'SNOOZED' || st === 'RECOVERED_ACTIVE')
+          ? 'badge badge-green'
+          : (st === 'CLEARANCE_FAILED'
+            ? 'badge badge-red'
+            : ((st.indexOf('CLEARED') === 0 || st === 'CLEARANCE_SKIPPED') ? 'badge badge-blue' : 'badge badge-amber'));
+        const rid = String(r.runtime_id || r.resource_id || '');
+        const actionCell = el('td', null, []);
+        if (rid) {
+          const snoozeBtn = el('button', 'btn btn-outline', ['Keep Alive 7d']);
+          snoozeBtn.style.padding = '3px 8px';
+          snoozeBtn.style.fontSize = '10px';
+          snoozeBtn.onclick = function() {
+            snoozeGovernanceRuntime(rid);
+          };
+          actionCell.appendChild(snoozeBtn);
+        }
+        body.appendChild(el('tr', null, [
+          el('td', null, [
+            el('div', null, [el('strong', null, [String(r.display_name || rid || '—')])]),
+            el('div', 'mono', [String(r.runtime_kind || r.kind || 'runtime') + ' · ' + String(r.location || r.region || '—')]),
+          ]),
+          el('td', 'mono', [String(r.creator_email_masked || '—')]),
+          el('td', null, [String(r.finops_status || r.idle_reason || '0 requests in window')]),
+          el('td', 'mono', [String(r.first_flagged_idle_at || '—')]),
+          el('td', 'mono', [String(r.scheduled_clearance_at || '—')]),
+          el('td', null, [el('span', badgeCls, [st])]),
+          el('td', 'mono', ['$' + Number(r.est_monthly_waste_usd || 0).toFixed(2) + '/mo']),
+          actionCell,
+        ]));
+      });
+    }
+
+    async function triggerGovernanceWarn() {
+      const note = document.getElementById('govStatusNote');
+      if (note) note.textContent = 'Evaluating fleet idle telemetry & dispatching Stage 1 warnings…';
+      try {
+        const res = await fetch('/api/governance/evaluate_idle', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({send_warnings: true, dry_run_email: true}),
+        });
+        const data = await res.json();
+        const govPayload = (data && data.cost_governance) ? data.cost_governance : data;
+        if (govPayload) renderCostGovernance(govPayload);
+        if (note) {
+          const cnt = (govPayload && govPayload.summary) ? (govPayload.summary.pending_clearance_count || 0) : 0;
+          note.textContent = 'Stage 1 evaluation complete: ' + String(cnt) + ' runtime(s) flagged in clearance queue.';
+        }
+      } catch (err) {
+        if (note) note.textContent = 'Stage 1 evaluation failed: ' + err;
+      }
+    }
+
+    async function triggerScheduledClearance(mode) {
+      const note = document.getElementById('govStatusNote');
+      if (note) note.textContent = 'Executing Stage 2 scheduled clearance (' + mode + ')…';
+      try {
+        const res = await fetch('/api/governance/execute_clearance', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({mode: mode || 'dry_run'}),
+        });
+        const data = await res.json();
+        if (data && data.cost_governance) renderCostGovernance(data.cost_governance);
+        if (note) {
+          const execMode = String((data && data.mode_executed) || mode || 'dry_run');
+          if (execMode === 'dry_run') {
+            const wouldClear = Number((data && data.would_clear_count) || 0);
+            const totalActions = Array.isArray(data && data.actions) ? data.actions.length : wouldClear;
+            note.textContent = 'Stage 2 (dry_run) complete: ' + String(wouldClear) + ' runtime(s) would be cleared (' + String(totalActions) + ' evaluated, left pending in queue).' + (data && data.note ? ' ' + String(data.note) : '');
+          } else {
+            note.textContent = 'Stage 2 (enforced) complete: ' + String((data && data.cleared_count) || 0) + ' runtime(s) cleared, ' + String((data && data.failed_count) || 0) + ' failed.';
+          }
+        }
+      } catch (err) {
+        if (note) note.textContent = 'Stage 2 clearance failed: ' + err;
+      }
+    }
+
+    async function snoozeGovernanceRuntime(runtimeId) {
+      const note = document.getElementById('govStatusNote');
+      if (note) note.textContent = 'Applying 7-day Keep-Alive snooze for ' + runtimeId + '…';
+      try {
+        const res = await fetch('/api/governance/snooze', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({runtime_id: runtimeId, days: 7}),
+        });
+        const data = await res.json();
+        if (data && data.cost_governance) renderCostGovernance(data.cost_governance);
+        if (note) {
+          note.textContent = data && data.status === 'OK'
+            ? ('Snoozed ' + String(data.runtime_id || runtimeId) + ' until ' + String(data.snoozed_until || '+7d') + '.')
+            : ('Snooze rejected: ' + String((data && data.error) || 'error'));
+        }
+      } catch (err) {
+        if (note) note.textContent = 'Snooze request failed: ' + err;
+      }
+    }
+
+    async function previewExecutiveDigest(sendNotifications) {
+      const box = document.getElementById('govDigestPreview');
+      const note = document.getElementById('govStatusNote');
+      if (note) note.textContent = sendNotifications ? 'Generating & dispatching FinOps Executive Digest…' : 'Generating FinOps Executive Digest preview…';
+      try {
+        const res = await fetch('/api/cron/send_executive_digest', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({cadence: 'daily', dry_run: !sendNotifications}),
+        });
+        const data = await res.json();
+        if (box && data) {
+          box.replaceChildren();
+          box.classList.remove('hidden');
+          const wowPct = (data.wow_delta && data.wow_delta.spend_delta_pct != null) ? (String(data.wow_delta.spend_delta_pct) + '%') : 'N/A';
+          const header = el('div', null, [
+            el('strong', null, [String(data.subject || 'FinOps Executive Digest')]),
+            el('span', 'mono', [' · WoW Spend Delta: ' + wowPct + ' · Recipient: ' + String(data.recipient_masked || '—')]),
+          ]);
+          const bodyPreview = (data.delivery && data.delivery.text_preview) ? data.delivery.text_preview : '';
+          const pre = el('pre', 'mono', [String(bodyPreview)]);
+          pre.style.whiteSpace = 'pre-wrap';
+          pre.style.margin = '8px 0 0 0';
+          pre.style.fontSize = '11px';
+          box.appendChild(header);
+          box.appendChild(pre);
+        }
+        if (note) {
+          note.textContent = 'Executive Digest ready (channel: ' + String((data && data.delivery && data.delivery.delivery_channel) || 'DRY_RUN_PREVIEW') + ').';
+        }
+      } catch (err) {
+        if (note) note.textContent = 'Executive Digest preview failed: ' + err;
+      }
     }
 
     async function syncGcpTelemetry() {
@@ -7736,7 +8013,7 @@ __FINOPS_ENHANCEMENTS_JS__
       post({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} });
     }
 
-    // 0. If initial state was embedded in the MCP resource HTML, render immediately.
+    // 0. If initial state was embedded in the HTML (/ui or MCP resource), render immediately (<300ms).
     if (INITIAL_EMBEDDED_STATE && typeof INITIAL_EMBEDDED_STATE === 'object') {
       try {
         renderState(INITIAL_EMBEDDED_STATE);
@@ -7790,12 +8067,25 @@ __FINOPS_ENHANCEMENTS_JS__
       }
     }, 45000);
 
-    // Standalone (direct Cloud Run URL): load over the same-origin API. Embedded in Gemini
-    // Enterprise: data arrives in the open_dashboard tool result; refreshes use the host bridge.
+    // Standalone (direct Cloud Run URL): if INITIAL_EMBEDDED_STATE was already rendered,
+    // revalidate in the background if stale/warming; secondary tabs remain lazy-hydrated on click.
     if (!isEmbedded()) {
-      fetchState().catch(function() {
-        setFleetNotice('Could not load dashboard data from the FinOps Dashboard API.', true);
-      });
+      if (INITIAL_EMBEDDED_STATE && typeof INITIAL_EMBEDDED_STATE === 'object') {
+        const needsRevalidate = Boolean(
+          (INITIAL_EMBEDDED_STATE.swr && INITIAL_EMBEDDED_STATE.swr.stale_revalidating) ||
+          (INITIAL_EMBEDDED_STATE.ge_fleet && INITIAL_EMBEDDED_STATE.ge_fleet.warming)
+        );
+        if (needsRevalidate) {
+          setSwrRevalidating(true, 'Refreshing live telemetry…');
+          fetchState(fleetWindowHours, null, {allowStale: false, lite: true}).catch(function() {}).finally(function() {
+            setSwrRevalidating(false);
+          });
+        }
+      } else {
+        fetchState().catch(function() {
+          setFleetNotice('Could not load dashboard data from the FinOps Dashboard API.', true);
+        });
+      }
     }
     window.exportDashboardPdf = function(ev) {
       const geSel = document.getElementById('geScopeSelect');

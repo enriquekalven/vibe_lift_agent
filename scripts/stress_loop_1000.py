@@ -98,6 +98,13 @@ LIVE_MODE_POLICY: dict[str, str] = {
     '/api/sync_ge_fleet': 'allowed',
     '/api/agent_observability': 'allowed',
     '/api/enable_agent_observability': 'allowed',
+    '/api/cron/execute_scheduled_clearance': 'allowed',
+    '/api/cron/send_executive_digest': 'allowed',
+    '/api/cron/warn_idle_runtimes': 'allowed',
+    '/api/governance/evaluate_idle': 'allowed',
+    '/api/governance/execute_clearance': 'allowed',
+    '/api/governance/executive_digest': 'allowed',
+    '/api/governance/snooze': 'allowed',
     '/a2a/app': 'allowed',
     '/mcp': 'allowed',
 }
@@ -109,6 +116,7 @@ LIVE_POLICY_BODIES: dict[str, Any] = {
     '/api/select_optimizer': {'platform_id': 'alpha_evolve'},
     '/api/validate_telemetry': {'run_llm_judge': False},
     '/api/nl2sql': {'question': 'Show cost by agent'},
+    '/api/governance/snooze': {'runtime_id': 're-12345', 'days': 7},
     '/a2a/app': {'jsonrpc': '2.0', 'id': 'live-1', 'method': 'message/send', 'params': {'message': {'parts': [{'text': 'hi'}]}}},
     '/mcp': {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'},
 }

@@ -1605,6 +1605,8 @@ class GeminiEnterpriseFleetService:
       bq_query_fn: Any | None = None,
       bq_token_pushdown: bool | None = None,
       mart_dataset: str | None = None,
+      bq_snapshot_enabled: bool | None = None,
+      analytics_dataset: str | None = None,
   ):
     self.project_id = project_id or gcp_telemetry.get_current_gcp_project()
     self.engine_ids = engine_ids or _env_list('FINOPS_GE_ENGINES', ('auto',))
@@ -1613,6 +1615,7 @@ class GeminiEnterpriseFleetService:
     self.location = location or os.environ.get('FINOPS_GE_LOCATION', 'global')
     self.collection = collection or os.environ.get('FINOPS_GE_COLLECTION', 'default_collection')
     self.mart_dataset = mart_dataset or os.environ.get('FINOPS_GE_MART_DATASET', 'finops_mart')
+    self.analytics_dataset = analytics_dataset or os.environ.get('FINOPS_BQ_DATASET', 'finops_analytics')
     self._bq_query_fn = bq_query_fn
     if bq_token_pushdown is None:
       default_pushdown = 'true' if bq_query_fn is not None else 'false'
@@ -1621,6 +1624,19 @@ class GeminiEnterpriseFleetService:
       )
     else:
       self.bq_token_pushdown = bool(bq_token_pushdown)
+    if bq_snapshot_enabled is None:
+      default_snap = (
+          'true'
+          if (bq_query_fn is not None and self.project_id not in ('test-project', gcp_telemetry.UNCONFIGURED_PROJECT_ID))
+          else 'false'
+      )
+      self.bq_snapshot_enabled = parse_bool(
+          os.environ.get('FINOPS_BQ_SNAPSHOT_ENABLED', default_snap)
+      )
+    else:
+      self.bq_snapshot_enabled = bool(bq_snapshot_enabled)
+    self.bq_snapshot_max_age_s = float(os.environ.get('FINOPS_BQ_SNAPSHOT_MAX_AGE_SECONDS', '1800'))
+    self.bq_snapshot_write_interval_s = float(os.environ.get('FINOPS_BQ_SNAPSHOT_WRITE_INTERVAL_SECONDS', '60'))
     if discover_unregistered is None:
       default_unreg = self.project_id not in ('test-project', gcp_telemetry.UNCONFIGURED_PROJECT_ID)
       self.discover_unregistered = parse_bool(
@@ -1641,6 +1657,7 @@ class GeminiEnterpriseFleetService:
         locations=self.discovery_locations,
     )
     self._cache: dict[int, tuple[float, dict[str, Any]]] = {}
+    self._last_snapshot_write_ts: dict[int, float] = {}
     self._project_aliases: set[str] = {self.project_id}
     self._trace_cache: dict[tuple[str, str, int], tuple[float, list[dict[str, Any]], bool]] = {}
     self._log_cache: dict[tuple[str, tuple[str, ...], int], tuple[float, dict[str, Any]]] = {}
@@ -1698,16 +1715,20 @@ class GeminiEnterpriseFleetService:
       stale = self._any_cache(hours)
       if stale is not None:
         self._trigger_async_refresh(hours)
-        return stale
+        return dict(stale, stale_revalidating=True)
       if max_wait_s is not None and max_wait_s > 0:
+        # Cold in-memory cache with bounded wait: start async live collection and check materialized BigQuery snapshot.
         evt = self._trigger_async_refresh(hours)
+        bq_snap = self._read_bq_fleet_snapshot(hours)
+        if bq_snap is not None:
+          return dict(bq_snap, stale_revalidating=True)
         evt.wait(timeout=max_wait_s)
         after_wait = self._any_cache(hours)
         if after_wait is not None:
           return after_wait
         fallback = self._fallback_cache(hours)
         if fallback is not None:
-          return fallback
+          return dict(fallback, stale_revalidating=True)
         return self._warming_placeholder(hours)
 
     return self._refresh_sync(hours, force_refresh=force_refresh)
@@ -1717,14 +1738,29 @@ class GeminiEnterpriseFleetService:
     errors: list[dict[str, str]] = []
     engines: list[dict[str, Any]] = []
     agents: list[dict[str, Any]] = []
-    for spec in self._resolve_engine_specs(errors):
-      try:
-        meta, engine_agents = self._list_engine_agents(spec)
-      except FleetSourceError as exc:
-        errors.append({'source': f'Discovery Engine agents ({spec})', 'detail': str(exc)})
-        continue
-      engines.append(meta)
-      agents.extend(engine_agents)
+    specs = self._resolve_engine_specs(errors)
+    if len(specs) <= 1:
+      for spec in specs:
+        try:
+          meta, engine_agents = self._list_engine_agents(spec)
+        except FleetSourceError as exc:
+          errors.append({'source': f'Discovery Engine agents ({spec})', 'detail': str(exc)})
+          continue
+        engines.append(meta)
+        agents.extend(engine_agents)
+    else:
+      with concurrent.futures.ThreadPoolExecutor(
+          max_workers=min(8, len(specs)), thread_name_prefix='finops-ge-inv'
+      ) as pool:
+        futs = {spec: pool.submit(self._list_engine_agents, spec) for spec in specs}
+        for spec in specs:
+          try:
+            meta, engine_agents = futs[spec].result()
+          except FleetSourceError as exc:
+            errors.append({'source': f'Discovery Engine agents ({spec})', 'detail': str(exc)})
+            continue
+          engines.append(meta)
+          agents.extend(engine_agents)
     return engines, agents, [str(e.get('detail') or e.get('source')) for e in errors]
 
   def enable_agent_observability(
@@ -1934,7 +1970,187 @@ class GeminiEnterpriseFleetService:
       payload = self._collect_uncached(hours)
       with self._cache_lock:
         self._cache[hours] = (time.monotonic(), payload)
+      self._persist_bq_fleet_snapshot_async(hours, payload)
       return dict(payload, cache_age_seconds=0.0)
+
+  def _persist_bq_fleet_snapshot_async(self, hours: int, payload: dict[str, Any]) -> None:
+    """Writes the collected fleet snapshot to finops_analytics.agent_registry_snapshots in the background."""
+    if not getattr(self, 'bq_snapshot_enabled', False):
+      return
+    if (payload.get('source_status') or {}).get('inventory') == 'warming':
+      return
+    now_mono = time.monotonic()
+    min_interval = float(getattr(self, 'bq_snapshot_write_interval_s', 60.0))
+    with self._cache_lock:
+      last_map = getattr(self, '_last_snapshot_write_ts', None)
+      if last_map is None:
+        last_map = {}
+        self._last_snapshot_write_ts = last_map
+      last_ts = last_map.get(hours, 0.0)
+      if last_ts > 0.0 and (now_mono - last_ts) < min_interval:
+        return
+      last_map[hours] = now_mono
+
+    def _writer() -> None:
+      try:
+        self._write_bq_fleet_snapshot(payload)
+      except Exception:
+        logger.debug('Background BigQuery fleet snapshot write failed', exc_info=True)
+
+    threading.Thread(target=_writer, daemon=True, name=f'finops-bq-snap-{hours}h').start()
+
+  def _write_bq_fleet_snapshot(self, payload: dict[str, Any]) -> bool:
+    """Persists a fleet telemetry snapshot row into finops_analytics.agent_registry_snapshots."""
+    if not getattr(self, 'bq_snapshot_enabled', False):
+      return False
+    project = self.project_id
+    dataset = getattr(self, 'analytics_dataset', 'finops_analytics') or 'finops_analytics'
+    if not _PROJECT_ID_RE.match(project) or not _RESOURCE_ID_RE.match(dataset):
+      return False
+    totals = payload.get('totals') or {}
+    unreg = payload.get('unregistered_summary') or {}
+    model_totals = ((payload.get('model_usage') or {}).get('totals') or {})
+    total_agents = _to_int(totals.get('agents'))
+    total_mcp = _to_int(unreg.get('mcp_cloud_run_services')) + _to_int(
+        (totals.get('by_type') or {}).get('MCP_CONNECTOR')
+    )
+    total_skills = len(payload.get('skills_and_mcp') or [])
+    prompt_tokens = _to_int(model_totals.get('input_tokens')) or _to_int(totals.get('input_tokens'))
+    cached_tokens = _to_int(model_totals.get('cache_read_tokens')) or _to_int(totals.get('cached_tokens'))
+    cache_ratio = round(cached_tokens / max(1, prompt_tokens) * 100.0, 2) if prompt_tokens > 0 else 0.0
+    actual_spend = round(float(model_totals.get('est_cost_usd') or 0.0), 4)
+    # Naive spend without context caching (~90% discount on cached tokens -> cached cost * 10)
+    naive_spend = round(actual_spend + (cached_tokens / 1e6 * 0.27), 4)
+    net_savings = round(max(0.0, naive_spend - actual_spend), 4)
+    snapshot_json = json.dumps(payload, default=str)
+    mcp_json = json.dumps(
+        {
+            'window_hours': payload.get('window_hours'),
+            'skills_and_mcp': payload.get('skills_and_mcp') or [],
+            'unregistered_summary': unreg,
+        },
+        default=str,
+    )
+    sql = (
+        f'INSERT INTO `{project}.{dataset}.agent_registry_snapshots` ('
+        'snapshot_timestamp, project_id, total_registered_agents, total_mcp_servers, total_skills, '
+        'fleet_prompt_tokens, fleet_cached_tokens, fleet_cache_hit_ratio, '
+        'total_naive_spend_usd, total_actual_spend_usd, total_net_savings_usd, '
+        'agent_breakdown_json, mcp_breakdown_json'
+        ') VALUES ('
+        'CURRENT_TIMESTAMP(), @project_id, @total_registered_agents, @total_mcp_servers, @total_skills, '
+        '@fleet_prompt_tokens, @fleet_cached_tokens, @fleet_cache_hit_ratio, '
+        '@total_naive_spend_usd, @total_actual_spend_usd, @total_net_savings_usd, '
+        '@agent_breakdown_json, @mcp_breakdown_json'
+        ')'
+    )
+    params = [
+        {'name': 'project_id', 'parameterType': {'type': 'STRING'}, 'parameterValue': {'value': project}},
+        {'name': 'total_registered_agents', 'parameterType': {'type': 'INT64'}, 'parameterValue': {'value': str(total_agents)}},
+        {'name': 'total_mcp_servers', 'parameterType': {'type': 'INT64'}, 'parameterValue': {'value': str(total_mcp)}},
+        {'name': 'total_skills', 'parameterType': {'type': 'INT64'}, 'parameterValue': {'value': str(total_skills)}},
+        {'name': 'fleet_prompt_tokens', 'parameterType': {'type': 'INT64'}, 'parameterValue': {'value': str(prompt_tokens)}},
+        {'name': 'fleet_cached_tokens', 'parameterType': {'type': 'INT64'}, 'parameterValue': {'value': str(cached_tokens)}},
+        {'name': 'fleet_cache_hit_ratio', 'parameterType': {'type': 'FLOAT64'}, 'parameterValue': {'value': str(cache_ratio)}},
+        {'name': 'total_naive_spend_usd', 'parameterType': {'type': 'FLOAT64'}, 'parameterValue': {'value': str(naive_spend)}},
+        {'name': 'total_actual_spend_usd', 'parameterType': {'type': 'FLOAT64'}, 'parameterValue': {'value': str(actual_spend)}},
+        {'name': 'total_net_savings_usd', 'parameterType': {'type': 'FLOAT64'}, 'parameterValue': {'value': str(net_savings)}},
+        {'name': 'agent_breakdown_json', 'parameterType': {'type': 'STRING'}, 'parameterValue': {'value': snapshot_json}},
+        {'name': 'mcp_breakdown_json', 'parameterType': {'type': 'STRING'}, 'parameterValue': {'value': mcp_json}},
+    ]
+    fn = getattr(self, '_bq_query_fn', None)
+    try:
+      if callable(fn):
+        try:
+          res = fn(sql, query_parameters=params)
+        except TypeError:
+          res = fn(sql)
+      else:
+        svc = gcp_telemetry.GoogleCloudTelemetryService(project_id=project)
+        res = svc.run_bigquery_query(sql, query_parameters=params)
+      if isinstance(res, tuple) and len(res) == 2:
+        _, meta = res
+        return not bool(isinstance(meta, Mapping) and meta.get('error'))
+      return True
+    except Exception:
+      return False
+
+  def _read_bq_fleet_snapshot(self, hours: int) -> dict[str, Any] | None:
+    """Reads the latest materialized fleet snapshot from finops_analytics.agent_registry_snapshots on cold start."""
+    if not getattr(self, 'bq_snapshot_enabled', False):
+      return None
+    project = self.project_id
+    dataset = getattr(self, 'analytics_dataset', 'finops_analytics') or 'finops_analytics'
+    if not _PROJECT_ID_RE.match(project) or not _RESOURCE_ID_RE.match(dataset):
+      return None
+    max_age = int(max(60, float(getattr(self, 'bq_snapshot_max_age_s', 1800.0))))
+    sql = (
+        'SELECT '
+        "FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', snapshot_timestamp) AS snapshot_timestamp, "
+        'TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), snapshot_timestamp, SECOND) AS age_seconds, '
+        'agent_breakdown_json '
+        f'FROM `{project}.{dataset}.agent_registry_snapshots` '
+        'WHERE project_id = @project_id '
+        'AND snapshot_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @max_age_s SECOND) '
+        'AND agent_breakdown_json IS NOT NULL '
+        'ORDER BY snapshot_timestamp DESC '
+        'LIMIT 5'
+    )
+    params = [
+        {'name': 'project_id', 'parameterType': {'type': 'STRING'}, 'parameterValue': {'value': project}},
+        {'name': 'max_age_s', 'parameterType': {'type': 'INT64'}, 'parameterValue': {'value': str(max_age)}},
+    ]
+    fn = getattr(self, '_bq_query_fn', None)
+    try:
+      if callable(fn):
+        try:
+          res = fn(sql, query_parameters=params)
+        except TypeError:
+          res = fn(sql)
+      else:
+        svc = gcp_telemetry.GoogleCloudTelemetryService(project_id=project)
+        res = svc.run_bigquery_query(sql, query_parameters=params, maximum_bytes_billed=50 * 1024 * 1024)
+      rows = res[0] if (isinstance(res, tuple) and len(res) == 2) else res
+      if not isinstance(rows, list) or not rows:
+        return None
+      chosen: dict[str, Any] | None = None
+      chosen_age = 0.0
+      for r in rows:
+        if not isinstance(r, Mapping):
+          continue
+        raw_json = r.get('agent_breakdown_json')
+        if not raw_json:
+          continue
+        parsed = json.loads(str(raw_json)) if isinstance(raw_json, str) else raw_json
+        if not isinstance(parsed, dict) or 'agents' not in parsed:
+          continue
+        age_s = max(0.0, float(r.get('age_seconds') or 0.0))
+        if int(parsed.get('window_hours') or 0) == int(hours):
+          chosen = parsed
+          chosen_age = age_s
+          break
+        if chosen is None:
+          chosen = parsed
+          chosen_age = age_s
+      if chosen is None:
+        return None
+      snap_hours = int(chosen.get('window_hours') or hours)
+      out = dict(
+          chosen,
+          window_hours=hours,
+          cache_age_seconds=round(chosen_age, 1),
+          snapshot_source='bigquery_agent_registry_snapshots',
+      )
+      if snap_hours != int(hours):
+        out['warming'] = True
+        out['fallback_from_window_hours'] = snap_hours
+      # Seed in-memory cache as a stale entry so subsequent requests inside the refresh window are instant.
+      with self._cache_lock:
+        if snap_hours not in self._cache:
+          self._cache[snap_hours] = (time.monotonic() - max(chosen_age, self.ttl_seconds + 1.0), dict(chosen))
+      return out
+    except Exception:
+      return None
 
   def _trigger_async_refresh(self, hours: int) -> threading.Event:
     with self._cache_lock:
@@ -2003,6 +2219,8 @@ class GeminiEnterpriseFleetService:
         'collection_ms': 0,
         'cache_ttl_seconds': self.ttl_seconds,
         'cache_age_seconds': 0.0,
+        'warming': True,
+        'stale_revalidating': True,
         'agents': [],
         'totals': {'agents': 0, 'enabled': 0, 'by_type': {}, 'with_runtime_telemetry': 0},
         'unregistered_runtimes': [],
@@ -2076,17 +2294,34 @@ class GeminiEnterpriseFleetService:
     return items
 
   def _discover_engine_specs(self, errors: list[dict[str, str]]) -> list[str]:
-    """Lists every Gemini Enterprise app (APP_TYPE_INTRANET engine) across the discovery locations."""
+    """Lists every Gemini Enterprise app (APP_TYPE_INTRANET engine) across the discovery locations in parallel."""
     specs: list[str] = []
-    for loc in self.discovery_locations:
-      try:
-        engines = self._paged(f'{self._de_base(loc)}?pageSize=100', 'engines')
-      except FleetSourceError as exc:
-        errors.append({'source': f'Discovery Engine app discovery ({loc})', 'detail': str(exc)})
-        continue
-      for eng in engines:
-        if eng.get('appType') == 'APP_TYPE_INTRANET':
-          specs.append(f"{loc}/{str(eng.get('name', '')).rsplit('/', 1)[-1]}")
+    locs = list(self.discovery_locations)
+    if len(locs) <= 1:
+      for loc in locs:
+        try:
+          engines = self._paged(f'{self._de_base(loc)}?pageSize=100', 'engines')
+        except FleetSourceError as exc:
+          errors.append({'source': f'Discovery Engine app discovery ({loc})', 'detail': str(exc)})
+          continue
+        for eng in engines:
+          if eng.get('appType') == 'APP_TYPE_INTRANET':
+            specs.append(f"{loc}/{str(eng.get('name', '')).rsplit('/', 1)[-1]}")
+      return specs
+
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=min(8, len(locs)), thread_name_prefix='finops-ge-disc'
+    ) as pool:
+      futs = {loc: pool.submit(self._paged, f'{self._de_base(loc)}?pageSize=100', 'engines') for loc in locs}
+      for loc in locs:
+        try:
+          engines = futs[loc].result()
+        except FleetSourceError as exc:
+          errors.append({'source': f'Discovery Engine app discovery ({loc})', 'detail': str(exc)})
+          continue
+        for eng in engines:
+          if eng.get('appType') == 'APP_TYPE_INTRANET':
+            specs.append(f"{loc}/{str(eng.get('name', '')).rsplit('/', 1)[-1]}")
     return specs
 
   def _resolve_engine_specs(self, errors: list[dict[str, str]]) -> list[str]:
@@ -2121,33 +2356,72 @@ class GeminiEnterpriseFleetService:
       assistants = []
     agents = []
     display = engine.get('displayName') or engine_id
-    for assistant_id in assistants or ['default_assistant']:
-      for raw in self._paged(f'{base}/assistants/{assistant_id}/agents?pageSize=100', 'agents'):
-        self._record_project_alias(raw.get('name'))
-        agent = classify_agent(engine_id, assistant_id, raw)
-        agent['location'] = loc
-        agent['engine_key'] = f'{loc}/{engine_id}'
-        agent['engine_display_name'] = display
-        agents.append(agent)
+    assistant_list = assistants or ['default_assistant']
+    mcp_cids: list[str] = []
     for ds_id in engine.get('dataStoreIds') or []:
       ds_str = str(ds_id or '').strip()
       if not ds_str.endswith('_mcp_data'):
         continue
       cid = ds_str[:-len('_mcp_data')]
-      if not cid or not _RESOURCE_ID_RE.match(cid):
-        continue
-      try:
-        raw_conn = self._api.call('GET', f'{self._de_collection_base(loc, cid)}/dataConnector')
-      except FleetSourceError:
-        continue
-      if not isinstance(raw_conn, dict) or not raw_conn:
-        continue
-      self._record_project_alias(raw_conn.get('name'))
-      conn_agent = classify_mcp_connector(engine_id, cid, raw_conn)
-      conn_agent['location'] = loc
-      conn_agent['engine_key'] = f'{loc}/{engine_id}'
-      conn_agent['engine_display_name'] = display
-      agents.append(conn_agent)
+      if cid and _RESOURCE_ID_RE.match(cid):
+        mcp_cids.append(cid)
+
+    if len(assistant_list) + len(mcp_cids) <= 1:
+      for assistant_id in assistant_list:
+        for raw in self._paged(f'{base}/assistants/{assistant_id}/agents?pageSize=100', 'agents'):
+          self._record_project_alias(raw.get('name'))
+          agent = classify_agent(engine_id, assistant_id, raw)
+          agent['location'] = loc
+          agent['engine_key'] = f'{loc}/{engine_id}'
+          agent['engine_display_name'] = display
+          agents.append(agent)
+      for cid in mcp_cids:
+        try:
+          raw_conn = self._api.call('GET', f'{self._de_collection_base(loc, cid)}/dataConnector')
+        except FleetSourceError:
+          continue
+        if not isinstance(raw_conn, dict) or not raw_conn:
+          continue
+        self._record_project_alias(raw_conn.get('name'))
+        conn_agent = classify_mcp_connector(engine_id, cid, raw_conn)
+        conn_agent['location'] = loc
+        conn_agent['engine_key'] = f'{loc}/{engine_id}'
+        conn_agent['engine_display_name'] = display
+        agents.append(conn_agent)
+    else:
+      with concurrent.futures.ThreadPoolExecutor(
+          max_workers=min(8, len(assistant_list) + len(mcp_cids)), thread_name_prefix='finops-ge-ag'
+      ) as pool:
+        asst_futs = {
+            assistant_id: pool.submit(self._paged, f'{base}/assistants/{assistant_id}/agents?pageSize=100', 'agents')
+            for assistant_id in assistant_list
+        }
+        conn_futs = {
+            cid: pool.submit(self._api.call, 'GET', f'{self._de_collection_base(loc, cid)}/dataConnector')
+            for cid in mcp_cids
+        }
+        for assistant_id in assistant_list:
+          for raw in asst_futs[assistant_id].result():
+            self._record_project_alias(raw.get('name'))
+            agent = classify_agent(engine_id, assistant_id, raw)
+            agent['location'] = loc
+            agent['engine_key'] = f'{loc}/{engine_id}'
+            agent['engine_display_name'] = display
+            agents.append(agent)
+        for cid in mcp_cids:
+          try:
+            raw_conn = conn_futs[cid].result()
+          except FleetSourceError:
+            continue
+          if not isinstance(raw_conn, dict) or not raw_conn:
+            continue
+          self._record_project_alias(raw_conn.get('name'))
+          conn_agent = classify_mcp_connector(engine_id, cid, raw_conn)
+          conn_agent['location'] = loc
+          conn_agent['engine_key'] = f'{loc}/{engine_id}'
+          conn_agent['engine_display_name'] = display
+          agents.append(conn_agent)
+
     meta = {
         'engine_id': engine_id,
         'engine_key': f'{loc}/{engine_id}',
@@ -2760,15 +3034,28 @@ class GeminiEnterpriseFleetService:
     return set(self._cloud_run_services_catalog(project).keys())
 
   def _discover_reasoning_engines(self, project: str) -> list[dict[str, Any]]:
-    """Lists every Vertex AI Agent Engine (ReasoningEngine) across configured regional endpoints."""
+    """Lists every Vertex AI Agent Engine (ReasoningEngine) across configured regional endpoints in parallel."""
     discovered: list[dict[str, Any]] = []
-    for loc in self.reasoning_engine_locations:
+    locs = list(self.reasoning_engine_locations)
+
+    def _fetch_loc(loc: str) -> list[dict[str, Any]]:
       url = f'{_AIPLATFORM.format(location=loc)}/projects/{project}/locations/{loc}/reasoningEngines?pageSize=100'
       try:
-        items = self._paged(url, 'reasoningEngines')
+        return self._paged(url, 'reasoningEngines')
       except FleetSourceError:
-        continue
-      for raw in items:
+        return []
+
+    if len(locs) <= 1:
+      items_by_loc = {loc: _fetch_loc(loc) for loc in locs}
+    else:
+      with concurrent.futures.ThreadPoolExecutor(
+          max_workers=min(8, len(locs)), thread_name_prefix='finops-re-disc'
+      ) as pool:
+        futs = {loc: pool.submit(_fetch_loc, loc) for loc in locs}
+        items_by_loc = {loc: futs[loc].result() for loc in locs}
+
+    for loc in locs:
+      for raw in items_by_loc.get(loc) or []:
         resource = str(raw.get('name') or '')
         if project == self.project_id:
           self._record_project_alias(resource)
@@ -3016,16 +3303,33 @@ class GeminiEnterpriseFleetService:
     status: dict[str, str] = {}
     engines, agents = [], []
 
-    for engine_id in self._resolve_engine_specs(errors):
-      try:
-        meta, engine_agents = self._list_engine_agents(engine_id)
-        engines.append(meta)
-        agents.extend(engine_agents)
-      except FleetSourceError as exc:
-        errors.append({'source': f'Discovery Engine agents ({engine_id})', 'detail': str(exc)})
-        loc, _, eid = engine_id.rpartition('/')
-        engines.append({'engine_id': eid, 'engine_key': f"{loc or self.location}/{eid}",
-                        'location': loc or self.location, 'display_name': eid, 'agents_count': None})
+    engine_specs = self._resolve_engine_specs(errors)
+    if len(engine_specs) <= 1:
+      for engine_id in engine_specs:
+        try:
+          meta, engine_agents = self._list_engine_agents(engine_id)
+          engines.append(meta)
+          agents.extend(engine_agents)
+        except FleetSourceError as exc:
+          errors.append({'source': f'Discovery Engine agents ({engine_id})', 'detail': str(exc)})
+          loc, _, eid = engine_id.rpartition('/')
+          engines.append({'engine_id': eid, 'engine_key': f"{loc or self.location}/{eid}",
+                          'location': loc or self.location, 'display_name': eid, 'agents_count': None})
+    else:
+      with concurrent.futures.ThreadPoolExecutor(
+          max_workers=min(8, len(engine_specs)), thread_name_prefix='finops-ge-eng'
+      ) as pool:
+        eng_futs = {engine_id: pool.submit(self._list_engine_agents, engine_id) for engine_id in engine_specs}
+        for engine_id in engine_specs:
+          try:
+            meta, engine_agents = eng_futs[engine_id].result()
+            engines.append(meta)
+            agents.extend(engine_agents)
+          except FleetSourceError as exc:
+            errors.append({'source': f'Discovery Engine agents ({engine_id})', 'detail': str(exc)})
+            loc, _, eid = engine_id.rpartition('/')
+            engines.append({'engine_id': eid, 'engine_key': f"{loc or self.location}/{eid}",
+                            'location': loc or self.location, 'display_name': eid, 'agents_count': None})
     status['inventory'] = 'error' if errors else 'ok'
 
     engines_by_project: dict[str, set[str]] = collections.defaultdict(set)
@@ -3156,11 +3460,25 @@ class GeminiEnterpriseFleetService:
             errors.append({'source': source_names.get(key[0], key[0]), 'detail': str(exc)[:300]})
 
       unreg_results: dict[tuple[str, ...], Any] = {}
+      unreg_failed: set[str] = set()
+      unreg_activity_sources = {
+          'unreg_re_requests': 'Unregistered Agent Engine request metrics',
+          'unreg_run_requests': 'Unregistered Cloud Run request metrics',
+      }
       for key, future in unreg_jobs.items():
         try:
           unreg_results[key] = future.result()
-        except Exception:
+        except Exception as exc:
           unreg_results[key] = None
+          unreg_failed.add(key[0])
+          if key[0] in unreg_activity_sources:
+            # Without request counts every runtime would read as 0 requests, i.e. idle.
+            errors.append({'source': unreg_activity_sources[key[0]], 'detail': str(exc)[:300]})
+
+    # Cost governance only treats an unregistered runtime as idle when its request metrics loaded.
+    for name, prefix in (('unregistered_engine_metrics', 'unreg_re_requests'),
+                         ('unregistered_cloud_run_metrics', 'unreg_run_requests')):
+      status[name] = 'error' if prefix in unreg_failed else 'ok'
 
     def source_state(prefix: str) -> str:
       keys = [k for k in results if k[0] == prefix]

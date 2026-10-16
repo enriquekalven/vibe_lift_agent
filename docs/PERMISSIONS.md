@@ -1,6 +1,6 @@
 # FinOps Dashboard permissions reference
 
-All the IAM roles, APIs and org policies FinOps Dashboard uses, in one place. Sources: `deploy/deploy_cloud_run.sh`, `deploy/setup_bigquery_sink.sh`, `deploy/setup_mart_refresh.sh`, `deploy/register_ge_agent.sh`, `deploy/setup_mcp_connector.py` and the README.
+All the IAM roles, APIs and org policies FinOps Dashboard uses, in one place. Sources: `deploy/deploy_cloud_run.sh`, `deploy/setup_bigquery_sink.sh`, `deploy/setup_mart_refresh.sh`, `deploy/setup_cloud_scheduler.sh`, `deploy/register_ge_agent.sh`, `deploy/setup_mcp_connector.py` and the README.
 
 Each row says whether a script grants it or you do it by hand. **Billing is manual**, and the Gemini Enterprise Custom MCP Server Data Store (`BYO_MCP` — **not** the Agent Registry / MCP Registry) is deployed and registered onto your Gemini Enterprise App instance by `deploy/register_ge_agent.sh <GE_APP_ID>` (which runs `deploy/setup_mcp_connector.py <GE_APP_ID>`), or automatically by `deploy/deploy_cloud_run.sh` when `GE_ENGINE_ID=<GE_APP_ID>` is set.
 
@@ -21,8 +21,10 @@ The Cloud Run service reads every metric as this account, never with the end use
 | `roles/container.clusterViewer` | Project | Discover GKE workloads | `deploy_cloud_run.sh` |
 | `roles/bigquery.dataViewer` | Project | Read sink tables and `finops_mart` | `deploy_cloud_run.sh` |
 | `roles/bigquery.jobUser` | Project | Run queries (mart and billing export queries run as jobs in this project) | `deploy_cloud_run.sh` |
-| `WRITER` (= BigQuery Data Editor) | Dataset `finops_mart` only | "Refresh Mart" button rebuilds `fct_turns` | `deploy_cloud_run.sh`, **only if the dataset already exists**. Re-run the script after `setup_bigquery_sink.sh`. |
+| `WRITER` (= BigQuery Data Editor) | Datasets `finops_mart` and `finops_analytics` only | "Refresh Mart" button rebuilds `fct_turns`; fleet snapshots (`agent_registry_snapshots`) and the scheduled clearance queue (`zombie_clearance_queue`: warning history and Keep-Alive snoozes shared by every instance) | `deploy_cloud_run.sh`, **only if the dataset already exists**. Re-run the script after `setup_bigquery_sink.sh`. |
 | **BigQuery Data Viewer** | **Billing export dataset** (often in another project) | Billed cost on the Cost tab | **Manual** (see section 4) |
+| `roles/secretmanager.secretAccessor` | The Gmail secrets (`FINOPS_GMAIL_REFRESH_TOKEN`, `FINOPS_GMAIL_CLIENT_SECRET`) and `FINOPS_GOVERNANCE_SECRET` | Email alerts and Keep-Alive links ([COST_GOVERNANCE.md](COST_GOVERNANCE.md)) | **Manual**, only if you use them |
+| `roles/iam.serviceAccountTokenCreator` | The delegating service account (`FINOPS_GMAIL_DWD_SERVICE_ACCOUNT`), even when it is the runtime SA itself | Keyless Gmail domain-wide delegation signs a JWT with IAM Credentials `signJwt` | **Manual**, only for Gmail option B |
 
 ## 2. Google-managed service identities
 
@@ -32,6 +34,7 @@ The Cloud Run service reads every metric as this account, never with the end use
 | Compute Engine default SA `PROJECT_NUMBER-compute@developer.gserviceaccount.com` | `roles/run.builder` | Cloud Build source deploys (needed in orgs created after May 2024) | `deploy_cloud_run.sh` |
 | Each log sink's writer identity | `roles/bigquery.dataEditor` | Route logs into the raw datasets | `setup_bigquery_sink.sh` |
 | BigQuery Data Transfer service agent | `roles/iam.serviceAccountTokenCreator` on the runtime SA | Hourly scheduled query runs as the runtime SA | `setup_mart_refresh.sh` |
+| Cloud Scheduler job identity (`SCHEDULER_SA_EMAIL`, default the runtime SA) | `roles/run.invoker` on the `finops-dashboard-mcp-app` service | The idle-warning, clearance and digest jobs call `/api/cron/*` with this identity's OIDC token | `setup_cloud_scheduler.sh` |
 
 ## 3. People
 
@@ -42,6 +45,8 @@ The Cloud Run service reads every metric as this account, never with the end use
 | Org admin (only if needed) | **Organization Policy Administrator**, if creating the MCP data store fails because of *Disable custom MCP server connector for Gemini Enterprise*. In `example-gcp-project` the policy showed as enforced but creation still worked. | MCP connector |
 | Billing account admin | **Billing Account Administrator** (or Billing Account Costs Manager) on the billing account | Turning on the BigQuery billing export |
 | Dashboard viewers | `roles/run.invoker` on the service (`FINOPS_INVOKERS` in `deploy_cloud_run.sh`) | Opening the dashboard through `gcloud run services proxy` |
+| Google Workspace super admin (only for Gmail option B) | Adds the delegating service account's client ID with the single scope `https://www.googleapis.com/auth/gmail.send` under *Admin console > Security > API controls > Domain-wide delegation* | Keyless email alerts ([COST_GOVERNANCE.md](COST_GOVERNANCE.md)) |
+| Runtime owners who receive warnings | `roles/iap.httpsResourceAccessor` on the IAP-protected `finops-tokenomics-dashboard` (when `FINOPS_SNOOZE_BASE_URL` points there) | Clicking the Keep-Alive link in a warning email |
 
 ## 4. Billing data (manual)
 
@@ -59,7 +64,7 @@ Scope: cost is filtered to `project.id = GOOGLE_CLOUD_PROJECT` and reported per 
 
 ## 5. APIs
 
-Enabled by `deploy_cloud_run.sh`: `run`, `cloudbuild`, `artifactregistry`, `logging`, `monitoring`, `discoveryengine`, `aiplatform`, `bigquery` (plus `compute` if the default SA is missing). `setup_mart_refresh.sh` enables `bigquerydatatransfer`.
+Enabled by `deploy_cloud_run.sh`: `run`, `cloudbuild`, `artifactregistry`, `logging`, `monitoring`, `discoveryengine`, `aiplatform`, `bigquery` (plus `compute` if the default SA is missing). `setup_mart_refresh.sh` enables `bigquerydatatransfer`. `setup_cloud_scheduler.sh` enables `cloudscheduler`. Gmail email alerts need `gmail` (and `iamcredentials` for domain-wide delegation), enabled by hand as described in [COST_GOVERNANCE.md](COST_GOVERNANCE.md).
 
 ## 6. Org policies that can block a deploy
 

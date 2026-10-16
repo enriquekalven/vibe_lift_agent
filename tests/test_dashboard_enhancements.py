@@ -731,6 +731,9 @@ class DashboardEnhancementLogicTest(unittest.TestCase):
     self.assertIn('Cloud Billing Export', pdf)
     self.assertIn(f"Page 1 of {rep['pageCount']}", pdf)
     self.assertIn(f"Page {rep['pageCount']} of {rep['pageCount']}", pdf)
+    self.assertIn('36 36 m 756 36 l S', pdf)
+    self.assertNotIn('36 756 36 m S', pdf)
+    self.assertNotIn("showApiNotice('Downloaded executive PDF report", _JS)
 
 
 if __name__ == '__main__':
