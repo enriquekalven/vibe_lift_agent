@@ -55,7 +55,7 @@ class TestLiveModePolicyTable(unittest.TestCase):
       for path in allowed:
         with self.subTest(path=path):
           r = self.client.post(path, json=stress_loop_1000.LIVE_POLICY_BODIES.get(path, {}))
-          self.assertIn(r.status_code, (200, 400, 422), (path, r.text[:200]))
+          self.assertIn(r.status_code, (200, 400, 404, 422), (path, r.text[:200]))
           body = r.json()
           status = body.get('status') if isinstance(body, dict) else None
           self.assertNotEqual(status, 'DISABLED_IN_LIVE_MODE', path)

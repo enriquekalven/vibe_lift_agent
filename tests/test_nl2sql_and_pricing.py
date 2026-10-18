@@ -67,6 +67,11 @@ class Nl2SqlVerifierTest(unittest.TestCase):
         'SELECT 1': 'no table reference',
         '': 'empty SQL',
         'WITH x AS (SELECT 1 FROM `p.finops_mart.t`) SELECT * FROM x': 'unquoted table reference',
+        'SELECT * FROM `p.finops_mart.t` -- inline comment': 'sql comment not allowed',
+        'SELECT * FROM `p.finops_mart.t` /* block comment */': 'sql comment not allowed',
+        'SELECT * FROM `p.finops_mart.t`, secret_project.secret_ds.secret_table': 'unquoted table reference',
+        'SELECT * FROM `p.finops_mart.INFORMATION_SCHEMA.COLUMNS`': 'INFORMATION_SCHEMA',
+        'SELECT * FROM EXTERNAL_QUERY("conn", "SELECT 1") JOIN `p.finops_mart.t` ON TRUE': 'EXTERNAL_QUERY',
     }
     for sql, expected in cases.items():
       with self.subTest(sql=sql):

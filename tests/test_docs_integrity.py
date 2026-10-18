@@ -20,7 +20,10 @@ README = ROOT / 'README.md'
 ARCH = ROOT / 'docs' / 'ARCHITECTURE.md'
 SUBMISSION = ROOT / 'docs' / 'HACKATHON_SUBMISSION.md'
 TESTING = ROOT / 'docs' / 'TESTING.md'
-DOCS = (README, ARCH, SUBMISSION, TESTING)
+THREAT_MODEL = ROOT / 'docs' / 'THREAT_MODEL.md'
+VARS_SECRETS = ROOT / 'docs' / 'VARIABLES_AND_SECRETS.md'
+USER_FLOWS = ROOT / 'docs' / 'USER_FLOWS.md'
+DOCS = (README, ARCH, SUBMISSION, TESTING, THREAT_MODEL, VARS_SECRETS, USER_FLOWS)
 REPO_URL = 'https://github.com/cloud-gtm/finops-dashboard-mcp-app'
 
 
@@ -200,7 +203,8 @@ class ConfigAndEndpointTest(unittest.TestCase):
 
   def test_every_documented_env_var_is_read_by_the_code(self) -> None:
     code = self._code_text()
-    for doc in DOCS:
+    all_docs = (*DOCS, *sorted((ROOT / 'docs').glob('*.md')))
+    for doc in dict.fromkeys(all_docs):
       for var in sorted(set(re.findall(r'\b(FINOPS_[A-Z0-9_]+)\b', _read(doc)))):
         with self.subTest(doc=doc.name, var=var):
           self.assertIn(var, code, f'{doc.name} documents {var}, but no code reads it')
@@ -212,11 +216,30 @@ class ConfigAndEndpointTest(unittest.TestCase):
     table = readme[readme.index('## REST API & MCP Endpoint Reference'):readme.index('## Security controls and known gaps')]
     paths = set(re.findall(r'^\| `(/[\w/.\-]+)`', table, flags=re.M))
     paths |= set(re.findall(r'^\| `[^`]+`, `(/[\w/.\-]+)`', table, flags=re.M))
+    for extra_doc in (ROOT / 'docs' / 'THREAT_MODEL.md', ROOT / 'docs' / 'USER_FLOWS.md'):
+      if extra_doc.is_file():
+        paths |= set(re.findall(r'`(/api/[\w/.\-]+)`', _read(extra_doc)))
     self.assertGreater(len(paths), 15)
     for path in sorted(paths):
       with self.subTest(path=path):
-        self.assertIn(path, routes, f'README lists {path}, which the production app (app/fast_api_app.py) does not route')
+        self.assertIn(path, routes, f'Doc lists {path}, which the production app (app/fast_api_app.py) does not route')
+
+  def test_mcp_spec_and_skill_match_live_mcp_tools_and_workspace_confinement(self) -> None:
+    import asyncio
+    import json
+    spec = json.loads(_read(ROOT / 'docs' / 'mcp_spec.json'))
+    spec_names = [t['name'] for t in spec['tools']]
+    live_names = [t['name'] for t in mcp_server._TOOLS]
+    self.assertEqual(spec_names, live_names)
+    skill_text = _read(ROOT / 'docs' / 'SKILL.md')
+    for tool_name in live_names:
+      self.assertIn(f'- {tool_name}', skill_text)
+
+    res = asyncio.run(mcp_server._tool_lint_agent_finops('s1', {'file_path': '/etc/hosts'}))
+    self.assertTrue(res.get('isError'))
+    self.assertEqual(res['structuredContent']['status'], 'INVALID_REQUEST')
 
 
 if __name__ == '__main__':
   unittest.main()
+

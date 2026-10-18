@@ -160,6 +160,9 @@ finops-dashboard-mcp-app/
 │   ├── ge_mart.py               # BigQuery finops_mart SQL builders, incremental MERGE & PII masking
 │   ├── prompt_xray.py           # Character-level Prompt Cache X-Ray & AlphaEvolve cache-friendly rewriter
 │   ├── cli_lint.py              # Standalone CLI & CI/CD gate (finops-lint) for AST FinOps & Prompt Cache X-Ray
+│   ├── cost_governance.py       # Idle-runtime evaluation, HMAC snooze links, scheduled clearance & 5-pillar score
+│   ├── throughput.py            # Peak-aware Vertex AI Provisioned Throughput (GSU) sizing & break-even math
+│   ├── reference_data.py        # Versioned Vertex AI pricing & GSU throughput reference loader
 │   ├── telemetry.py             # Rate cards, cache economics, Pub/Sub DLQ, @finops_telemetry
 │   ├── validator.py             # Deterministic checks + LLM-as-judge audit
 │   ├── optimizer.py             # User analytics, Gemini NL2SQL & Pre-Built FinOps SQL Recipes
@@ -197,6 +200,9 @@ finops-dashboard-mcp-app/
 │       └── ge_mart/             # SQL templates for the curated and mart layers
 ├── docs/
 │   ├── ARCHITECTURE.md          # Diagram as code, legend (live / simulated / not configured), known gaps
+│   ├── THREAT_MODEL.md          # Surface isolation, trust boundaries, threats (TM-01..TM-06) & verified mitigations
+│   ├── VARIABLES_AND_SECRETS.md # Complete runtime env var & Secret Manager reference
+│   ├── USER_FLOWS.md            # Gemini Enterprise MCP App, standalone dashboard & governance flows
 │   ├── PERMISSIONS.md           # Every IAM role, API and org policy FinOps Dashboard needs
 │   ├── COST_GOVERNANCE.md       # Idle-runtime clearance, Gmail alerts and Cloud Scheduler setup
 │   ├── spec.md                  # Architecture and data-source specification
@@ -285,7 +291,7 @@ Runtime variables are read by the service (set on Cloud Run by `deploy/deploy_cl
 | `FINOPS_DEFAULT_OWNER_EMAIL` | *(placeholder address)* | Owner to warn when the Cloud Audit Logs name no creator for a runtime. |
 | `FINOPS_SNOOZE_BASE_URL` | `FINOPS_PUBLIC_URL` | Browser-reachable base URL for Keep-Alive links (for example the IAP-protected `finops-tokenomics-dashboard`). The MCP service itself is private, so a link to it gets HTTP 403 in a browser. |
 | `FINOPS_GOVERNANCE_SECRET` / `FINOPS_GOVERNANCE_SECRET_FILE` | random per instance | HMAC secret for Keep-Alive links. Set the same value on every service that sends or serves links, or links fail on other instances and after restarts. |
-| `FINOPS_ALLOW_AUTOMATED_CLEARANCE` | `0` | `1` permits `mode=enforced` clearance. This build has no live clearance client wired in, so enforced requests still run as a dry run and say so in `note`. |
+| `FINOPS_ALLOW_AUTOMATED_CLEARANCE` | `0` | `1` permits `mode=enforced` clearance (`CLEARANCE_MODE=enforced`), allowing `CostGovernanceService` to scale idle Cloud Run services to `minScale=0` and delete unapproved idle Reasoning Engines (with `finopsIdleRuntimeCleaner` IAM role). Defaults to `0` (`dry_run`). |
 | `FINOPS_ANALYTICS_DATASET` / `FINOPS_AUDIT_DATASET` | `finops_analytics` / `ds_ge_audit_raw` | Datasets holding `zombie_clearance_queue` and the Cloud Audit Logs used to find each runtime's creator. |
 
 **Deploy-script variables** (read by the scripts in `deploy/`, not by the service)
@@ -301,13 +307,13 @@ Runtime variables are read by the service (set on Cloud Run by `deploy/deploy_cl
 | `FINOPS_RETENTION_DAYS` | `setup_bigquery_sink.sh`, `set_log_retention.sh` | `90` | Days of raw log history kept in BigQuery (partition expiration on the raw sink datasets). The mart reads the same window (`provision_ge_mart.py --lookback-days`, default 90). |
 | `FINOPS_REFRESH_SCHEDULE` | `setup_mart_refresh.sh` | `every 1 hours` | How often the scheduled query rebuilds `fct_turns` (Data Transfer schedule syntax). |
 | `FINOPS_REFRESH_SA` | `setup_mart_refresh.sh` | `finops-dashboard-runtime-sa@PROJECT.iam.gserviceaccount.com` | Service account the scheduled query runs as. |
-| `CLEARANCE_MODE` | `setup_cloud_scheduler.sh` | `dry_run` | Mode the clearance job requests: `dry_run` or `enforced` (see [docs/COST_GOVERNANCE.md](docs/COST_GOVERNANCE.md#5-clearance-modes)). Any other value is rejected. |
+| `CLEARANCE_MODE` | `setup_cloud_scheduler.sh` | `dry_run` | Mode the clearance job requests: `dry_run` or `enforced` (see [docs/COST_GOVERNANCE.md](docs/COST_GOVERNANCE.md#5-clearance-modes--5-pillar-governance-score)). Any other value is rejected. |
 | `DIGEST_CADENCE` | `setup_cloud_scheduler.sh` | `daily` | Executive digest at 08:30 daily, or `weekly` on Mondays, in `TIME_ZONE` (default `America/Los_Angeles`). |
 | `DIGEST_RECIPIENTS` | `setup_cloud_scheduler.sh` | the service's `FINOPS_DIGEST_RECIPIENTS` | Comma-separated digest recipients sent in the job body. |
 | `SCHEDULER_SA_EMAIL` | `setup_cloud_scheduler.sh` | runtime service account | Identity the jobs call the service as; granted `roles/run.invoker` on it. |
 | `GE_ENGINE_ID` | `register_ge_agent.sh`, `setup_mcp_connector.py`, `deploy_cloud_run.sh` | *(required for step 4)* | Gemini Enterprise app instance ID to register the GE Data Store to (or pass it as the first argument to `register_ge_agent.sh`). |
 | `GE_LOCATION` | `register_ge_agent.sh`, `setup_mcp_connector.py` | `global` | Location of that Gemini Enterprise app instance (`global`, `us`, `eu`). |
-| `FINOPS_PUBLISH_A2A` | `register_ge_agent.sh` | `0` | `1` also publishes the A2A agent card with `agents-cli`. Off by default because the A2A endpoint is not served. |
+| `FINOPS_PUBLISH_A2A` | `register_ge_agent.sh` | `0` | `1` also publishes the A2A agent card (`/.well-known/agent-card.json`, backed by `POST /a2a/app`) with `agents-cli`. Off by default so the primary registration uses the Custom MCP Server Data Store (`BYO_MCP`). |
 | `FINOPS_PROMPT_LOG_BUCKET` | `deploy_cloud_run.sh` | *(empty)* | Prompt-log bucket for the X-Ray live mode. Setting it grants the runtime SA read access and sets `FINOPS_PROMPT_XRAY_LIVE=1`. |
 
 ---
@@ -703,7 +709,7 @@ Gemini Enterprise then sends the user's token in the `Authorization` header, and
 URL=https://finops-dashboard-mcp-app-$(gcloud projects describe PROJECT_ID --format='value(projectNumber)').REGION.run.app
 TOKEN=$(gcloud auth print-identity-token)
 
-curl -s -H "Authorization: Bearer $TOKEN" $URL/health                        # {"status": "ok"}
+curl -s -H "Authorization: Bearer $TOKEN" $URL/api/health                    # {"status": "ok"}
 curl -s -H "Authorization: Bearer $TOKEN" "$URL/api/ge_fleet?window_hours=24" | python3 -m json.tool | head -40
 curl -s -H "Authorization: Bearer $TOKEN" "$URL/api/user_centric_finops?window_hours=168" | python3 -m json.tool | head -40
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
@@ -785,7 +791,7 @@ Routes marked **Simulator** act only on the built-in demo profiles. `tests/test_
 
 ## Security controls and known gaps
 
-**In place** (details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#security-controls-in-place)):
+**In place** (details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#security-controls-in-place), [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md), [docs/VARIABLES_AND_SECRETS.md](docs/VARIABLES_AND_SECRETS.md), and [docs/USER_FLOWS.md](docs/USER_FLOWS.md)):
 - **Private service, IAP and surface split (`FINOPS_SURFACE` / `FINOPS_SPLIT_EDGE`)**: deployed with `--no-allow-unauthenticated`. A request without an identity token gets HTTP 403. `FINOPS_SPLIT_EDGE=1` deploys `finops-dashboard-mcp-app` (`FINOPS_SURFACE=mcp`, invoked only by `service-PROJECT_NUMBER@gcp-sa-discoveryengine.iam.gserviceaccount.com`) and `finops-tokenomics-dashboard` (`FINOPS_SURFACE=dashboard`, protected by Cloud Run native `--iap`).
 - **Cloud Armor WAF, Serverless NEG, Pub/Sub DLQ & VPC-SC ([deploy/setup_enterprise_perimeter.sh](deploy/setup_enterprise_perimeter.sh))**: provisions the live Cloud Armor security policy `finops-waf-policy` (Rule 1000: OWASP SQLi `sqli-v33-stable` + XSS `xss-v33-stable` deny-403; Rule 2000: 120 req/min rate-based ban), Serverless NEG `finops-dashboard-neg`, Cloud Pub/Sub DLQ topic `finops-ingest-dlq`, BigQuery Data Catalog Policy Tag column masking (`user_email`), and customer-org VPC Service Controls perimeter (`finops_ge_perimeter`).
 - **Dedicated runtime service account** `finops-dashboard-runtime-sa` with viewer roles plus the custom role `finopsGeFleetReader`. That role includes two write permissions: `discoveryengine.agents.manage` (so `agents.list` returns agents created by other users) and `discoveryengine.agents.update` (used only by the trace logging switch). It has no create, delete or `setIamPolicy` permission. The service writes to BigQuery only when *Refresh Mart* updates `finops_mart.fct_turns`.

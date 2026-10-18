@@ -61,7 +61,7 @@ echo "=========================================================="
 echo ""
 echo "--- Step 1: Validating Cloud Run Service Health ---"
 ID_TOKEN="$(gcloud auth print-identity-token 2>/dev/null || true)"
-if [[ -n "${ID_TOKEN}" ]] && curl -fsS -m 15 -H "Authorization: Bearer ${ID_TOKEN}" "${PUBLIC_URL}/health" >/dev/null 2>&1; then
+if [[ -n "${ID_TOKEN}" ]] && curl -fsS -m 15 -H "Authorization: Bearer ${ID_TOKEN}" "${PUBLIC_URL}/api/health" >/dev/null 2>&1; then
   echo "Cloud Run service is online and healthy at ${PUBLIC_URL}."
 else
   echo "WARNING: authenticated health check failed. Check that ./deploy/deploy_cloud_run.sh finished and" >&2

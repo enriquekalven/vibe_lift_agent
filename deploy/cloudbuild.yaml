@@ -42,7 +42,7 @@ steps:
         set -euo pipefail
         cp -r /workspace /tmp/src
         cd /tmp/src
-        python -m compileall -q app finops tests deploy/bigquery
+        python -m compileall -q app finops_dashboard tests deploy/bigquery
         python -m unittest discover -s tests -t .
 
   - id: push
@@ -72,6 +72,7 @@ steps:
           --concurrency=80 \
           --timeout=300 \
           --cpu-boost \
+          --no-cpu-throttling \
           --min-instances=1 \
           --max-instances=10 \
           --update-env-vars='GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_REGION=${_REGION},GOOGLE_CLOUD_LOCATION=global,GOOGLE_GENAI_USE_VERTEXAI=TRUE,USE_UVICORN=1,ENABLE_MCP_APP=1,MCP_PROTOCOL_VERSION=2025-06-18,FINOPS_PUBLIC_URL=https://${_SERVICE}-${PROJECT_NUMBER}.${_REGION}.run.app'

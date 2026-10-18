@@ -93,6 +93,8 @@ flowchart LR
 | Scheduled & incremental refresh | [deploy/setup_mart_refresh.sh](../deploy/setup_mart_refresh.sh), [finops_dashboard/ge_mart.py](../finops_dashboard/ge_mart.py) | Live. Supports both hourly scheduled rebuilds and partition-pruned incremental `MERGE INTO` (`build_incremental_merge_fct_turns_dml`, `POST /api/ge_mart/refresh` with `{"incremental": true, "lookback_days": 3}`). |
 | Invariant checks | [deploy/bigquery/verify_ge_mart_invariants.py](../deploy/bigquery/verify_ge_mart_invariants.py) | 13 conservation and reconciliation checks across raw, curated and mart layers. |
 | Billing export | [finops_dashboard/billing_export.py](../finops_dashboard/billing_export.py) | Reads real invoice spend when `FINOPS_BILLING_EXPORT_TABLE` is connected; otherwise the Cost tab shows an explicit `not configured` status and labels figures as list-price estimates. |
+| Provisioned Throughput (GSU) sizing | [finops_dashboard/throughput.py](../finops_dashboard/throughput.py), [finops_dashboard/reference_data.py](../finops_dashboard/reference_data.py) | Computes peak-aware Vertex AI Provisioned Throughput (GSU) vs. PAYG break-even recommendations from observed P95/P99 5-minute token windows (`Cloud Monitoring` + `finops_mart`) against official Vertex AI TPM-per-GSU reference tables. |
+| Cost governance & scheduled clearance | [finops_dashboard/cost_governance.py](../finops_dashboard/cost_governance.py), [deploy/setup_cloud_scheduler.sh](../deploy/setup_cloud_scheduler.sh) | Two-stage idle runtime warning and scheduled clearance (`finops_analytics.zombie_clearance_queue`), HMAC-signed Keep-Alive snooze links, 5-pillar Governance Score (`FINOPS_MONTHLY_BUDGET_USD`, `FINOPS_CACHE_HIT_TARGET_PCT`), and Executive FinOps Digests. |
 
 ## Request paths
 

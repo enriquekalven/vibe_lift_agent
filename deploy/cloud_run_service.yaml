@@ -29,7 +29,7 @@ spec:
       annotations:
         autoscaling.knative.dev/minScale: '1'
         autoscaling.knative.dev/maxScale: '10'
-        run.googleapis.com/cpu-throttling: 'true'
+        run.googleapis.com/cpu-throttling: 'false'
         run.googleapis.com/startup-cpu-boost: 'true'
     spec:
       serviceAccountName: finops-dashboard-runtime-sa@__PROJECT_ID__.iam.gserviceaccount.com
@@ -62,7 +62,7 @@ spec:
             - name: http1
               containerPort: 8080
           # /healthz is FinOps Dashboard's own route, so it stays up even if the ADK API server fails to load.
-          # Cloud Run's internal probes can reach it; on the public URL it is reserved (use /health).
+          # Cloud Run's internal probes can reach it; on the public URL it is reserved (use /api/health).
           startupProbe:
             httpGet:
               path: /healthz

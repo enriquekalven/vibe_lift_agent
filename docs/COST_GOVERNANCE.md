@@ -97,10 +97,11 @@ gcloud run services update SERVICE --region=us-central1 --project=my-project \
   --update-secrets=FINOPS_GOVERNANCE_SECRET=finops-governance-secret:latest
 ```
 
-## 5. Clearance modes
+## 5. Clearance modes & 5-pillar governance score
 
-- **`dry_run`** (default): records what would be cleared (`CLEARED_DRY_RUN`) and changes nothing. A runtime marked `CLEARED_DRY_RUN` is not revisited by later runs.
-- **`enforced`**: needs `CLEARANCE_MODE=enforced` on the job **and** `FINOPS_ALLOW_AUTOMATED_CLEARANCE=1` on the service. It also needs a Cloud Run / Vertex AI clearance client, which this build does not wire in. Until one is added, an enforced request runs as a dry run and the response `note` says "No resources were changed". An enforced run also falls back to a dry run when it cannot re-read the queue from BigQuery, so a snooze is never overridden by stale state.
+- **`dry_run`** (default): records what would be cleared (`DRY_RUN`) and changes nothing in Google Cloud, leaving the runtime pending in `zombie_clearance_queue` so subsequent evaluations or an enforced run can still act on it.
+- **`enforced`**: requires `CLEARANCE_MODE=enforced` on the job **and** `FINOPS_ALLOW_AUTOMATED_CLEARANCE=1` on the service (plus the custom IAM role `finopsIdleRuntimeCleaner` granted by `deploy/deploy_cloud_run.sh` when `FINOPS_ALLOW_AUTOMATED_CLEARANCE=1`). `finops_dashboard/server.py` wires `cost_governance.google_api_caller` into `CostGovernanceService`, executing live Cloud Run `minScale=0` (`PATCH ...?updateMask=scaling.minInstanceCount`) and Vertex AI Reasoning Engine deletion (`DELETE ...?force=true`). Protected runtimes (`finops-dashboard-mcp-app`, `finops-tokenomics-dashboard`, `K_SERVICE`, `FINOPS_CLEARANCE_EXCLUDE`) are never cleared. An enforced run automatically falls back to `dry_run` when it cannot re-read `zombie_clearance_queue` from BigQuery or when fleet telemetry is warming/incomplete, so a snooze or active runtime is never overridden by stale state.
+- **5-Pillar Governance & Tokenomics Score (`compute_governance_score` in `finops_dashboard/cost_governance.py`)**: combines Pillar 1 (Prompt Cache Efficiency, 25 pts, `FINOPS_CACHE_HIT_TARGET_PCT`), Pillar 2 (Idle Runtime Hygiene, 25 pts), Pillar 3 (Trace & Observability Coverage, 20 pts), Pillar 4 (Cost Attribution & Budget Guardrails, 15 pts, `FINOPS_MONTHLY_BUDGET_USD`), and Pillar 5 (Seat & Quota Utilization, 15 pts, `FINOPS_SEAT_UTILIZATION_TARGET_PCT`).
 
 ## 6. Troubleshooting
 
