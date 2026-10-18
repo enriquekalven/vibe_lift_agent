@@ -176,6 +176,27 @@ def _as_list(value: Any) -> list[Any]:
   return list(value) if isinstance(value, (list, tuple)) else []
 
 
+def _as_mapping(value: Any) -> Mapping[str, Any]:
+  """The value when it is a mapping, else an empty dict (never None, so callers can .get() safely)."""
+  return value if isinstance(value, Mapping) else {}
+
+
+def _agent_trace_logging_enabled(agent: Mapping[str, Any]) -> bool:
+  """Whether Discovery Engine trace logging is on for a fleet agent.
+
+  The fleet sets observability_config.observability_enabled (fleet.classify_agent), the same field
+  the Agents tab's Trace badge reads. trace_logging.enabled and a top-level observability_enabled
+  are older payload shapes, still accepted.
+  """
+  cfg = _as_mapping(agent.get('observability_config'))
+  legacy = _as_mapping(agent.get('trace_logging'))
+  return (
+      bool(cfg.get('observability_enabled'))
+      or bool(legacy.get('enabled'))
+      or bool(agent.get('observability_enabled'))
+  )
+
+
 def _runtime_kind(rid: str, backend: Any = '') -> str:
   if isinstance(backend, Mapping):
     b = str(backend.get('kind') or '').strip().lower()
@@ -964,8 +985,8 @@ class CostGovernanceService:
       rid = str(rt.get('agent_id') or '').strip()
       if not rid or rid in protected:
         continue
-      metrics = rt.get('metrics') if isinstance(rt.get('metrics'), Mapping) else {}
-      backend = rt.get('backend') if isinstance(rt.get('backend'), Mapping) else {}
+      metrics = _as_mapping(rt.get('metrics'))
+      backend = _as_mapping(rt.get('backend'))
       kind = _runtime_kind(rid, backend)
       if not registered and (not inventory_ok or kind in metric_gaps):
         continue  # this snapshot cannot tell an idle unregistered runtime from a busy or registered one
@@ -1125,13 +1146,13 @@ class CostGovernanceService:
       if not (notification.get('delivered') or notification.get('dry_run')):
         continue
       with self._lock:
-        item = self._queue.get(pending['runtime_id'])
-        if item is not None and item.get('status') == 'PENDING_WARNING' and not item.get('warning_sent_at'):
-          item['status'] = 'WARNED_GRACE_PERIOD'
-          item['warning_sent_at'] = now_iso
-          item['scheduled_clearance_at'] = pending['planned_at']
-          item['updated_at'] = now_iso
-          updated[pending['runtime_id']] = dict(item)
+        queued = self._queue.get(pending['runtime_id'])
+        if queued is not None and queued.get('status') == 'PENDING_WARNING' and not queued.get('warning_sent_at'):
+          queued['status'] = 'WARNED_GRACE_PERIOD'
+          queued['warning_sent_at'] = now_iso
+          queued['scheduled_clearance_at'] = pending['planned_at']
+          queued['updated_at'] = now_iso
+          updated[pending['runtime_id']] = dict(queued)
 
     if persist_to_bq and updated:
       self._persist_queue_items_to_bq(list(updated.values()))
@@ -1250,9 +1271,9 @@ class CostGovernanceService:
       )
       return 'SCALED_TO_ZERO', None
 
-    scaling = svc.get('scaling') if isinstance(svc.get('scaling'), Mapping) else {}
-    template = svc.get('template') if isinstance(svc.get('template'), Mapping) else {}
-    tpl_scaling = template.get('scaling') if isinstance(template.get('scaling'), Mapping) else {}
+    scaling = _as_mapping(svc.get('scaling'))
+    template = _as_mapping(svc.get('template'))
+    tpl_scaling = _as_mapping(template.get('scaling'))
     svc_min = _as_int(scaling.get('minInstanceCount'))
     tpl_min = _as_int(tpl_scaling.get('minInstanceCount'))
     if svc_min <= 0 and tpl_min <= 0:
@@ -1440,7 +1461,7 @@ class CostGovernanceService:
         elif kind in metric_gaps:
           plan = 'metrics_unavailable'
         else:
-          live_m = live_rt.get('metrics') if isinstance(live_rt.get('metrics'), Mapping) else {}
+          live_m = _as_mapping(live_rt.get('metrics'))
           if _as_int(live_m.get('requests')) > 0 or _as_int(live_m.get('llm_calls')) > 0:
             plan = 'active_again'
 
@@ -1738,7 +1759,7 @@ class CostGovernanceService:
     for rt in all_runtimes:
       if not isinstance(rt, Mapping):
         continue
-      m = rt.get('metrics') if isinstance(rt.get('metrics'), Mapping) else {}
+      m = _as_mapping(rt.get('metrics'))
       in_tok = int(m.get('input_tokens') or 0)
       out_tok = int(m.get('output_tokens') or 0)
       cache_tok = int(m.get('cached_tokens') or 0)
@@ -1783,10 +1804,10 @@ class CostGovernanceService:
         })
 
     # 2. WoW / Period-over-Period Spend & Token Delta
-    curr_mu = fleet.get('model_usage') if isinstance(fleet.get('model_usage'), Mapping) else {}
-    prev_mu = fleet.get('model_usage_previous') if isinstance(fleet.get('model_usage_previous'), Mapping) else {}
-    curr_tot = curr_mu.get('totals') if isinstance(curr_mu.get('totals'), Mapping) else {}
-    prev_tot = prev_mu.get('totals') if isinstance(prev_mu.get('totals'), Mapping) else {}
+    curr_mu = _as_mapping(fleet.get('model_usage'))
+    prev_mu = _as_mapping(fleet.get('model_usage_previous'))
+    curr_tot = _as_mapping(curr_mu.get('totals'))
+    prev_tot = _as_mapping(prev_mu.get('totals'))
 
     curr_cost = float(curr_tot.get('estimated_cost_usd') or sum(r['est_token_cost_usd'] for r in agent_spend_rows) or 0.0)
     prev_cost = float(prev_tot.get('estimated_cost_usd') or 0.0)
@@ -1993,11 +2014,11 @@ def compute_governance_score(
   fleet = fleet_payload if isinstance(fleet_payload, Mapping) else {}
   uc = user_centric_payload if isinstance(user_centric_payload, Mapping) else {}
   clr = clearance_payload if isinstance(clearance_payload, Mapping) else {}
-  lf = fleet.get('live_finops') if isinstance(fleet.get('live_finops'), Mapping) else {}
+  lf = _as_mapping(fleet.get('live_finops'))
   agy = (
       antigravity_payload
       if isinstance(antigravity_payload, Mapping)
-      else (lf.get('antigravity_usage') if isinstance(lf.get('antigravity_usage'), Mapping) else {})
+      else (_as_mapping(lf.get('antigravity_usage')))
   )
 
   eff_cache_target = max(
@@ -2032,10 +2053,9 @@ def compute_governance_score(
   trace_enabled = 0
   token_attributed = 0
   for a in agents:
-    tl = a.get('trace_logging') if isinstance(a.get('trace_logging'), Mapping) else {}
-    if bool(tl.get('enabled')) or bool(a.get('observability_enabled')):
+    if _agent_trace_logging_enabled(a):
       trace_enabled += 1
-    m = a.get('metrics') if isinstance(a.get('metrics'), Mapping) else {}
+    m = _as_mapping(a.get('metrics'))
     if m.get('input_tokens') is not None or m.get('token_source') or _as_int(m.get('llm_calls')) > 0:
       token_attributed += 1
 
@@ -2085,7 +2105,7 @@ def compute_governance_score(
   ]
 
   # ---- Pillar 2: Prompt Cache & Token Efficiency (0-20 pts) ----
-  mu = fleet.get('model_usage') if isinstance(fleet.get('model_usage'), Mapping) else {}
+  mu = _as_mapping(fleet.get('model_usage'))
   mu_models = [m for m in _as_list(mu.get('models')) if isinstance(m, Mapping)]
   cache_read_tok = 0
   prompt_tok = 0
@@ -2101,7 +2121,7 @@ def compute_governance_score(
 
   if prompt_tok == 0 and agents:
     for a in agents:
-      am = a.get('metrics') if isinstance(a.get('metrics'), Mapping) else {}
+      am = _as_mapping(a.get('metrics'))
       inp = max(0, _as_int(am.get('input_tokens')))
       cr = min(inp, max(0, _as_int(am.get('cached_tokens'))))
       cache_read_tok += cr
@@ -2109,8 +2129,9 @@ def compute_governance_score(
       out_tok += max(0, _as_int(am.get('output_tokens')))
 
   if prompt_tok > 0:
-    cache_share_pct: float | None = 100.0 * cache_read_tok / prompt_tok
-    cache_pts = round(12.0 * min(1.0, max(0.0, cache_share_pct / eff_cache_target)))
+    cache_share = 100.0 * cache_read_tok / prompt_tok
+    cache_share_pct: float | None = cache_share
+    cache_pts = round(12.0 * min(1.0, max(0.0, cache_share / eff_cache_target)))
     cache_grounding = 'MEASURED'
   else:
     cache_share_pct = None
@@ -2119,14 +2140,15 @@ def compute_governance_score(
 
   combined_out = out_tok + reason_tok
   if combined_out > 0 and reason_tok > 0:
-    thinking_share_pct: float | None = 100.0 * reason_tok / combined_out
-    if thinking_share_pct <= eff_think_low:
+    think_share = 100.0 * reason_tok / combined_out
+    thinking_share_pct: float | None = think_share
+    if think_share <= eff_think_low:
       think_pts = 8
-    elif thinking_share_pct >= eff_think_high:
+    elif think_share >= eff_think_high:
       think_pts = 0
     else:
       think_pts = round(
-          8.0 * (eff_think_high - thinking_share_pct) / (eff_think_high - eff_think_low)
+          8.0 * (eff_think_high - think_share) / (eff_think_high - eff_think_low)
       )
     think_grounding = 'MEASURED'
   else:
@@ -2300,14 +2322,14 @@ def compute_governance_score(
     rw_label = 'Monthly budget cap not set (baseline 8/12)'
     rw_grounding = 'UNCONFIGURED_NEUTRAL'
 
-  sd = lf.get('spend_drift') if isinstance(lf.get('spend_drift'), Mapping) else {}
+  sd = _as_mapping(lf.get('spend_drift'))
   change_pct = _as_float(sd.get('change_pct')) if (sd.get('status') == 'LIVE' and sd.get('change_pct') is not None) else None
   if change_pct is None and sd.get('change_pct') is not None and not sd.get('status'):
     change_pct = _as_float(sd.get('change_pct'))
   if change_pct is None:
-    prev_mu = fleet.get('model_usage_previous') if isinstance(fleet.get('model_usage_previous'), Mapping) else {}
-    curr_tot = mu.get('totals') if isinstance(mu.get('totals'), Mapping) else {}
-    prev_tot = prev_mu.get('totals') if isinstance(prev_mu.get('totals'), Mapping) else {}
+    prev_mu = _as_mapping(fleet.get('model_usage_previous'))
+    curr_tot = _as_mapping(mu.get('totals'))
+    prev_tot = _as_mapping(prev_mu.get('totals'))
     c_usd = _as_float(curr_tot.get('estimated_cost_usd') or curr_tot.get('est_cost_usd'))
     p_usd = _as_float(prev_tot.get('estimated_cost_usd') or prev_tot.get('est_cost_usd'))
     if p_usd > 0:
@@ -2367,11 +2389,9 @@ def compute_governance_score(
   ]
 
   # ---- Pillar 5: Seat & Identity Attribution (0-20 pts) ----
-  agy_kpis = (
-      agy.get('kpis')
-      if isinstance(agy.get('kpis'), Mapping)
-      else (agy.get('seats') if isinstance(agy.get('seats'), Mapping) else {})
-  )
+  # kpis wins whenever it is a mapping (even an empty one); otherwise seats; otherwise {}.
+  raw_kpis = agy.get('kpis')
+  agy_kpis: Mapping[str, Any] = raw_kpis if isinstance(raw_kpis, Mapping) else _as_mapping(agy.get('seats'))
   purchased_seats = _as_int(agy_kpis.get('purchased_seats'))
   assigned_seats = _as_int(agy_kpis.get('assigned_seats'))
   idle_seats = _as_int(agy_kpis.get('idle_seats'))
@@ -2387,9 +2407,10 @@ def compute_governance_score(
         if active_explicit is not None
         else max(0, (assigned_seats or seat_denom) - idle_seats)
     )
-    seat_ratio: float | None = active_seats / float(seat_denom)
-    seat_pts = round(10.0 * min(1.0, max(0.0, (seat_ratio * 100.0) / eff_seat_target)))
-    seat_txt = f'{active_seats}/{seat_denom} active seats ({seat_ratio * 100.0:.0f}%)'
+    seat_share = active_seats / float(seat_denom)
+    seat_ratio: float | None = seat_share
+    seat_pts = round(10.0 * min(1.0, max(0.0, (seat_share * 100.0) / eff_seat_target)))
+    seat_txt = f'{active_seats}/{seat_denom} active seats ({seat_share * 100.0:.0f}%)'
     seat_grounding = 'MEASURED'
   else:
     seat_ratio = None
@@ -2406,8 +2427,9 @@ def compute_governance_score(
         if str(s.get('user_email') or '').strip().lower()
         not in ('', 'unattributed', 'anonymous', 'unknown', '—')
     )
-    attr_ratio: float | None = verified / float(len(sessions))
-    attr_pts = round(10.0 * attr_ratio)
+    attr_share = verified / float(len(sessions))
+    attr_ratio: float | None = attr_share
+    attr_pts = round(10.0 * attr_share)
     attr_txt = f'{verified}/{len(sessions)} sessions LDAP-attributed'
     attr_grounding = 'MEASURED'
   elif p_users:
@@ -2459,7 +2481,7 @@ def compute_governance_score(
       },
   ]
 
-  pillars = [
+  pillars: list[dict[str, Any]] = [
       {
           'id': 'observability',
           'label': 'Observability & Trace Readiness',

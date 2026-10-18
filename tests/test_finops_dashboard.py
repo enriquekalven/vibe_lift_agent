@@ -34,7 +34,7 @@ class FinOpsFrameworkTest(unittest.TestCase):
     log_entry = telemetry.TurnUsageLog(
         timestamp='2026-09-18T21:30:00Z',
         agent_name='finops-long-running-adk-agent',
-        model='gemini-3.1-flash',
+        model='gemini-3.8-flash',
         turn_index=4,
         prompt_prefix_hash='gen14_static_8f91a2c',
         cache_breakpoint_line=None,

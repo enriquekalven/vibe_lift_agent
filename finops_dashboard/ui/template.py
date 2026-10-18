@@ -47,10 +47,6 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       justify-content: space-between;
       flex-wrap: wrap;
       gap: 10px 16px;
-      position: sticky;
-      top: 0;
-      z-index: 20;
-      box-shadow: 0 1px 2px rgba(15,23,42,0.04);
     }
     .brand-row {
       display: flex;
@@ -134,6 +130,10 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       display: flex;
       gap: 16px;
       flex-wrap: wrap;
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      box-shadow: 0 1px 2px rgba(15,23,42,0.04);
     }
     .tab-btn {
       background: none;
@@ -1588,15 +1588,23 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="panel" id="vlTokenomicsPanel">
         <div class="panel-header">
           <div class="panel-title">
-            <span>Tokenomics quick wins: thinking-token tax &amp; model re-pricing</span>
+            <span>Tokenomics &amp; FinOps intelligence: thinking-token tax, cache savings &amp; failure tax, loop audit, Provisioned Throughput break-even &amp; model retirement radar</span>
             <span id="vlTokenomicsBadge" class="badge badge-blue">&mdash;</span>
           </div>
-          <div style="font-size:12px;color:var(--text-secondary);">Reasoning ("thinking") token share of output spend, and exact list-price arithmetic if high-cost model or agent traffic ran on a lower-cost tier.</div>
+          <div style="font-size:12px;color:var(--text-secondary);">Computed from observed token, request and error telemetry at list price. Failure tax and loop spend are allocation estimates; GSU sizing and model retirement use Google's published reference tables (dated in each card).</div>
         </div>
         <div class="kpi-grid" id="vlTokenomicsKpis"></div>
         <div class="vl-tok-grid">
           <div class="vl-tok-col" id="vlThinkingTaxBox"></div>
           <div class="vl-tok-col" id="vlRepricingBox"></div>
+        </div>
+        <div class="vl-tok-grid" style="margin-top:12px;">
+          <div class="vl-tok-col" id="vlValueRealizationBox"></div>
+          <div class="vl-tok-col" id="vlLoopCircuitBreakerBox"></div>
+        </div>
+        <div class="vl-tok-grid" style="margin-top:12px;">
+          <div class="vl-tok-col" id="vlGsuForecastBox"></div>
+          <div class="vl-tok-col" id="vlModernizationRadarBox"></div>
         </div>
       </div>
 
@@ -4938,9 +4946,16 @@ __FINOPS_ENHANCEMENTS_JS__
         emptyRow(puBody, 11, 'No user activity in this scope for the selected time range.');
         return;
       }
+      const statusLabels = {
+        LIVE_HUMAN_PRINCIPAL: 'Verified user',
+        SERVICE_ACCOUNT_TELEMETRY: 'Service account',
+        UNVERIFIED_SESSION_ID: 'Unverified session',
+      };
       users.forEach(function(u) {
         const st = String(u.anomaly_status || '—');
         const stCls = st.includes('OPTIMIZED') || st.includes('LIVE') ? 'badge-green' : 'badge-blue';
+        const stBadge = badge(statusLabels[st] || st, stCls);
+        stBadge.title = st;
         const hasLiveBreakdown = u.interactions_7d != null || u.api_calls_observed != null;
         const sessText = hasLiveBreakdown
           ? fmtInt(u.sessions_7d) + ' (' + fmtInt(u.interactions_7d || 0) + ' turns, ' + fmtInt(u.api_calls_observed || 0) + ' audit)'
@@ -4956,7 +4971,7 @@ __FINOPS_ENHANCEMENTS_JS__
           el('td', 'mono', [u.cache_hit_pct == null ? '—' : u.cache_hit_pct + '%']),
           el('td', 'mono', [u.avg_csat == null ? 'no ratings' : u.avg_csat + ' ★']),
           estCostCell(u),
-          el('td', null, [badge(st, stCls)]),
+          el('td', null, [stBadge]),
         ]);
         const puEmail = u.user_email || '';
         if (puEmail && geSessionsLastUc && Array.isArray(geSessionsLastUc.ge_sessions)) {
@@ -5197,8 +5212,20 @@ __FINOPS_ENHANCEMENTS_JS__
         Object.keys(bySvc).forEach(function(k) {
           if (k && (topSvc === null || Number(bySvc[k]) > Number(bySvc[topSvc]))) topSvc = k;
         });
-        const parts = ['Net billed, last ' + (b.window_days || 30) + ' days: ', el('strong', null, [amount(b.total_net_invoice_usd)]),
-                       ' (gross ' + amount(b.total_gross_usd) + ', credits ' + amount(b.total_credits_usd) + ')'];
+        const winLabel = b.window_days ? String(b.window_days) : 'recent';
+        let creditDetail = ', credits ' + amount(b.total_credits_usd);
+        if (b.credit_split_available && b.total_cud_credits_usd != null) {
+          creditDetail += ' [commitments/SUD ' + amount(b.total_cud_credits_usd) +
+                          ', contract ' + amount(b.total_contract_discount_credits_usd) +
+                          ', promo ' + amount(b.total_promo_credits_usd) +
+                          ', other ' + amount(b.total_other_credits_usd) + ']';
+        }
+        const parts = ['Net billed, last ' + winLabel + ' days: ', el('strong', null, [amount(b.total_net_invoice_usd)]),
+                       ' (gross ' + amount(b.total_gross_usd) + creditDetail + ')'];
+        if (b.effective_savings_rate_pct != null) {
+          const basis = b.esr_basis === 'LIST_PRICE' ? ' vs list price' : (b.esr_basis === 'CREDITS_ONLY' ? ' (credits only, a lower bound)' : '');
+          parts.push(' · Effective Savings Rate (ESR): ', el('strong', null, [String(b.effective_savings_rate_pct) + '%']), basis);
+        }
         if (topSvc) parts.push(' · largest service: ' + topSvc + ' (' + amount(bySvc[topSvc]) + ')');
         summary.replaceChildren.apply(summary, parts);
         if (b.message) detail.textContent = String(b.message);
@@ -5983,9 +6010,47 @@ __FINOPS_ENHANCEMENTS_JS__
       runtimes.forEach(function(rt) {
         const mm = m(rt.agent);
         const r = Number(mm.requests || 0), c = Number(mm.llm_calls || 0);
-        if (r > 0 && c / r >= 20) items.push({sev: 2, agent: rt.agent, text: rtLabel(rt) + ': ' + fmtInt(c) + ' LLM calls for ' + fmtInt(r) + ' requests (' +
+        // Same threshold as the health card: the agent's own cap when it has session history, else 20.
+        const loopCap = Number(mm.loop_threshold_calls_per_request) > 0 ? Number(mm.loop_threshold_calls_per_request) : 20;
+        if (r > 0 && c / r >= loopCap) items.push({sev: 2, agent: rt.agent, text: rtLabel(rt) + ': ' + fmtInt(c) + ' LLM calls for ' + fmtInt(r) + ' requests (' +
           fmtTokens(Number(mm.input_tokens || 0) + Number(mm.output_tokens || 0)) + ' tokens) ' + win + '. Possible agent loop; check its traces.'});
       });
+      const liveFin = (rawFl && rawFl.live_finops) || (fleet && fleet.live_finops) || {};
+      const loopBase = liveFin.loop_baselines || {};
+      (Array.isArray(loopBase.agents) ? loopBase.agents : []).forEach(function(b) {
+        if (!(Number(b.runaway_sessions) > 0)) return;
+        const top = (b.runaways || [])[0] || {};
+        items.push({sev: 1, target: 'vlLoopCircuitBreakerBox',
+          text: String(b.agent_name || 'Agent') + ': ' + fmtInt(b.runaway_sessions) + ' runaway session(s) in the last 30 days (up to ' +
+            String(top.calls_per_run != null ? top.calls_per_run : '?') + ' LLM calls in one ' + (b.basis === 'TURN' ? 'turn' : 'turn on average') +
+            '; normal p99 ' + String(b.p99_within_fence) + '). Suggested ADK cap: ' + fmtInt(b.recommended_cap) + '.'});
+      });
+      const mmr = liveFin.model_modernization_radar || {};
+      if (Number(mmr.retiring_model_count) > 0) {
+        const retFindings = (Array.isArray(mmr.findings) ? mmr.findings : []).filter(function(f) { return f && f.retirement_date; });
+        const seenRetModels = {};
+        let minRetDays = null;
+        const retPairs = [];
+        retFindings.forEach(function(f) {
+          const days = f.days_until_retirement != null ? Number(f.days_until_retirement) : null;
+          if (days != null && !isNaN(days) && (minRetDays == null || days < minRetDays)) minRetDays = days;
+          const mName = String(f.current_model || '');
+          if (mName && !seenRetModels[mName]) {
+            seenRetModels[mName] = true;
+            retPairs.push(mName + ' (retires ' + f.retirement_date + (f.recommended_model ? ' → ' + f.recommended_model : '') + ')');
+          }
+        });
+        const retDelta = mmr.retirement_cost_change_30d_usd != null ? Number(mmr.retirement_cost_change_30d_usd) : null;
+        const deltaStr = retDelta != null && !isNaN(retDelta)
+          ? '; replacement list-price change: ' + (retDelta > 0 ? '+' : '') + fmtUsd(retDelta) + '/30d'
+          : '';
+        items.push({
+          sev: minRetDays != null && minRetDays <= 30 ? 2 : 1,
+          target: 'vlModernizationRadarBox',
+          text: fmtInt(mmr.retiring_model_count) + ' active model(s) approaching retirement: ' +
+            (retPairs.slice(0, 3).join(', ') || 'see radar') + deltaStr + '. Plan migration in Cost & Tokenomics.'
+        });
+      }
       if (noTok.length) items.push({sev: 0, agent: noTok.length === 1 ? noTok[0].agent : null,
         text: noTok.length + ' agent(s) with traffic export no token data: ' + noTok.map(rtLabel).slice(0, 3).join(', ') +
         (noTok.length > 3 ? '…' : '') + '. For Agent Engine, deploy with GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=true.'});
@@ -6139,15 +6204,18 @@ __FINOPS_ENHANCEMENTS_JS__
         tbody.appendChild(emptyRow(7, 'No skills, sub-agents, or MCP servers discovered in this window.'));
         return;
       }
+      const kindLabels = {SKILL_OR_TOOL: 'Skill / tool', SUB_AGENT: 'Sub-agent', MCP_SERVER: 'MCP server'};
       skills.forEach(function(sk) {
         const k = String(sk.kind || 'SKILL_OR_TOOL');
         const bCls = k === 'MCP_SERVER' ? 'badge-green' : (k === 'SUB_AGENT' ? 'badge-yellow' : 'badge-blue');
+        const kBadge = badge(kindLabels[k] || k, bCls);
+        kBadge.title = k;
         tbody.appendChild(el('tr', null, [
           el('td', null, [
             el('strong', 'mono', [sk.name || '—']),
             sk.endpoint_uri ? el('div', 'kpi-sub mono', [sk.endpoint_uri]) : (sk.source ? el('div', 'kpi-sub', [sk.source]) : null),
           ]),
-          el('td', null, [badge(k, bCls)]),
+          el('td', null, [kBadge]),
           el('td', 'mono', [sk.parent_agent_name || (sk.parent_engines || []).join(', ') || 'Standalone']),
           el('td', 'mono', [
             fmtInt(sk.calls),
@@ -6826,7 +6894,8 @@ __FINOPS_ENHANCEMENTS_JS__
       });
 
       const t = fleet.totals || {};
-      const byType = Object.keys(t.by_type || {}).sort().map(function(k) { return t.by_type[k] + ' ' + k; }).join(' · ');
+      const kpiTypeNames = {ADK: 'ADK', A2A: 'A2A', LOW_CODE: 'No-code', MANAGED: 'Google-managed'};
+      const byType = Object.keys(t.by_type || {}).sort().map(function(k) { return t.by_type[k] + ' ' + (kpiTypeNames[k] || k); }).join(' · ');
       const usage = (fleet.model_usage && fleet.model_usage.totals) || null;
       const traffic = fleet.ge_traffic || null;
       const unrated = usage && (usage.models_without_rate_card || []).length;

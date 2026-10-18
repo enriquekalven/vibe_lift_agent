@@ -266,6 +266,13 @@ Object.keys(CASES.agents).forEach(function(k) {
   out.health[k] = {id: r.id, reasons: r.reasons};
 });
 out.healthCounts = VL.healthCounts(Object.values(CASES.agents));
+// Agents the server enriched with their own loop cap (finops.apply_loop_thresholds).
+out.healthOwnCap = {
+  orchestrator: VL.health({state: 'ENABLED', metrics: {requests: 220, llm_calls: 9790,
+    loop_threshold_calls_per_request: 59, loop_threshold_basis: 'SESSION_P99'}}),
+  simple: VL.health({state: 'ENABLED', metrics: {requests: 100, llm_calls: 1200,
+    loop_threshold_calls_per_request: 10, loop_threshold_basis: 'SESSION_P99'}}),
+};
 out.severity = CASES.severity.map(VL.serverErrorSeverity);
 out.sort = CASES.sort.map(VL.parseSortValue);
 out.sortedAsc = [3, null, 1, 'b', 'a'].sort(function(a, b) { return VL.compare(a, b, 'asc'); });
@@ -374,6 +381,8 @@ out.reprice = VL.modelRepricing({
     rate_cards: {
       'gemini-2.5-pro': {'input': 1.25, 'output': 10.0, 'cached_read': 0.125},
       'gemini-2.5-flash': {'input': 0.30, 'output': 2.50, 'cached_read': 0.03},
+      'gemini-3.8-flash': {'input': 0.75, 'output': 3.75, 'cached_read': 0.075},
+      'gemini-3.1-flash-lite': {'input': 0.25, 'output': 1.50, 'cached_read': 0.025},
     },
   },
   agents: [
@@ -505,6 +514,17 @@ out.govDegraded = VL.governanceScore({
     user_centric: {ge_sessions: [{session_id: 's1', user_email: ''}, {session_id: 's2', user_email: 'anonymous'}]},
   },
 });
+// The live fleet's agent shape (fleet.classify_agent): trace logging lives in observability_config.
+out.govFleetShape = VL.governanceScore({
+  fleet: {
+    window_hours: 24,
+    agents: [
+      {agent_id: 'f1', state: 'ENABLED', observability_config: {observability_enabled: true, sensitive_logging_enabled: false}, metrics: {}},
+      {agent_id: 'f2', state: 'ENABLED', observability_config: {observability_enabled: true, sensitive_logging_enabled: true}, metrics: {}},
+      {agent_id: 'f3', state: 'ENABLED', observability_config: {observability_enabled: false, sensitive_logging_enabled: false}, metrics: {}},
+    ],
+  },
+});
 process.stdout.write(JSON.stringify(out));
 """
 
@@ -531,6 +551,13 @@ class DashboardEnhancementLogicTest(unittest.TestCase):
     self.assertIn('44.5 LLM calls per request', ' '.join(self.out['health']['failing_loop']['reasons']))
     self.assertIn('low traffic', ' '.join(self.out['health']['degraded_low_traffic']['reasons']))
     self.assertIn('Within thresholds', ' '.join(self.out['health']['healthy']['reasons']))
+
+  def test_health_uses_the_agents_own_loop_cap(self):
+    own = self.out['healthOwnCap']
+    self.assertEqual(own['orchestrator']['id'], 'healthy')  # 44.5 calls/request is normal for this orchestrator (cap 59)
+    self.assertEqual(own['simple']['id'], 'failing')        # 12 calls/request is a loop for an agent capped at 10
+    reason = ' '.join(own['simple']['reasons'])
+    self.assertIn('12.0 LLM calls per request (\u2265 10, this agent\u2019s cap', reason)
 
   def test_server_error_severity_is_rate_based(self):
     # 0 = info, 1 = warning, 2 = critical. Low traffic with any 5xx is a warning, never critical.
@@ -750,10 +777,17 @@ class DashboardEnhancementLogicTest(unittest.TestCase):
 
   def test_model_repricing(self):
     rep = self.out['reprice']
-    self.assertGreater(rep['flashSavingsWindowUsd'], 9.0)
-    self.assertGreater(rep['liteSavingsWindowUsd'], 10.0)
+    # Window on 2.5 Pro ($1.25 in / $0.125 cached / $10 out): 2M in, 1M cached, 1M out = $12.625.
+    # Same tokens: 3.8 Flash $5.325, 3.1 Flash-Lite $2.025.
+    self.assertAlmostEqual(rep['flashSavingsWindowUsd'], 7.30, places=2)
+    self.assertAlmostEqual(rep['liteSavingsWindowUsd'], 10.60, places=2)
     self.assertEqual(rep['byAgent'][0]['agentId'], 'cr')
-    self.assertGreater(rep['byAgent'][0]['alternatives'][0]['savings30dUsd'], 250.0)
+    # Agent: 1.5M uncached + 0.5M cached input and 1M output = $11.9375 on Pro, $4.9125 on 3.8 Flash.
+    alts = rep['byAgent'][0]['alternatives']
+    self.assertEqual([a['targetModel'] for a in alts], ['gemini-3.8-flash', 'gemini-3.1-flash-lite'])
+    self.assertAlmostEqual(alts[0]['altCostUsd'], 4.9125, places=4)
+    self.assertAlmostEqual(alts[0]['savings30dUsd'], 210.75, places=2)
+    self.assertAlmostEqual(alts[1]['savings30dUsd'], 301.5, places=2)
 
   def test_session_receipt_and_user_summary(self):
     rec = self.out['receipt']
@@ -825,6 +859,15 @@ class DashboardEnhancementLogicTest(unittest.TestCase):
       self.assertEqual(sum(c['max_points'] for c in p['components']), p['max'], p['id'])
     self.assertIsNotNone(deg['topAction'])
     self.assertGreaterEqual(deg['topAction']['ptsLost'], 15)
+
+  def test_governance_trace_pillar_reads_fleet_observability_config(self):
+    # Regression: the scorer read trace_logging.enabled, which the live fleet never sets, so the
+    # Overview said "0/N agents with trace logging" while the Agents tab showed Trace: ON.
+    obs = {p['id']: p for p in self.out['govFleetShape']['pillars']}['observability']
+    trace = {c['id']: c for c in obs['components']}['trace_logging']
+    self.assertEqual(trace['measured_value'], 2)
+    self.assertEqual(trace['target_value'], 3)
+    self.assertEqual(trace['points'], 8)  # round(12 * 2 / 3)
 
 
 if __name__ == '__main__':

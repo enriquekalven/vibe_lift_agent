@@ -217,6 +217,50 @@ def build_trend(agents: list[dict[str, Any]], window_hours: int, now: dt.datetim
           'source': 'Cloud Monitoring request_count (Cloud Run + Agent Engine)'}
 
 
+def _preview_throughput_profile(name: str, r: dict[str, Any], window_hours: int, now: dt.datetime) -> dict[str, Any] | None:
+  from finops_dashboard import reference_data, throughput  # pylint: disable=import-outside-toplevel
+  spec = reference_data.pt_specs().get(reference_data.model_key(name))
+  if spec is None or window_hours > 168:
+    return None
+  _, out_mult, cache_mult = spec
+  total_burndown = (
+      int(r['input_tokens'])
+      + int(r['cache_write_tokens'])
+      + float(cache_mult) * int(r['cache_read_tokens'])
+      + float(out_mult) * (int(r['output_tokens']) + int(r['reasoning_tokens']))
+  )
+  if total_burndown <= 0:
+    return None
+  minutes = max(1, min(int(window_hours) * 60, 1440))
+  scale_to_profile = minutes / float(max(1, int(window_hours) * 60))
+  profile_burndown = total_burndown * scale_to_profile
+  rng = _rng(f'tp:{name}:{window_hours}')
+  weights = []
+  for m in range(minutes):
+    w = _diurnal(m, minutes, 60, now) * (0.75 + 0.5 * rng.random())
+    if m % 97 == 0:
+      w *= 2.6  # short batch spike
+    weights.append(w)
+  w_sum = sum(weights) or 1.0
+  active_tps = sorted(
+      round((profile_burndown * (w / w_sum)) / 60.0, 4)
+      for w in weights
+      if w > 0
+  )
+  return {
+      'resolution_s': 60,
+      'window_minutes': minutes,
+      'active_minutes': len(active_tps),
+      'peak_burndown_tps': round(active_tps[-1], 2),
+      'p99_burndown_tps': round(throughput._quantile(active_tps, 0.99), 2),  # pylint: disable=protected-access
+      'p95_burndown_tps': round(throughput._quantile(active_tps, 0.95), 2),  # pylint: disable=protected-access
+      'p50_burndown_tps': round(throughput._quantile(active_tps, 0.50), 2),  # pylint: disable=protected-access
+      'mean_burndown_tps': round(sum(active_tps) / len(active_tps), 2),
+      'quantiles_tps': [round(throughput._quantile(active_tps, i / 100.0), 4) for i in range(101)],  # pylint: disable=protected-access
+      'active_minute_tps': active_tps,
+  }
+
+
 def model_usage(window_hours: int, now: dt.datetime, rate_cards: dict[str, dict[str, float]],
                 previous: bool = False) -> dict[str, Any]:
   s = _scale(window_hours) * (0.86 if previous else 1.0)
@@ -246,6 +290,10 @@ def model_usage(window_hours: int, now: dt.datetime, rate_cards: dict[str, dict[
       totals['models_without_rate_card'].append(name)
     prompt = r['input_tokens'] + r['cache_read_tokens']
     r['cache_read_share_pct'] = round(r['cache_read_tokens'] / prompt * 100, 1) if prompt else 0.0
+    if not previous:
+      tp = _preview_throughput_profile(name, r, window_hours, now)
+      if tp is not None:
+        r['throughput_profile'] = tp
     for k in ('input_tokens', 'output_tokens', 'reasoning_tokens', 'cache_read_tokens', 'cache_write_tokens', 'invocations'):
       totals[k] += r[k]
     models.append(r)
@@ -477,8 +525,8 @@ def bq_rows(kind: str, now: dt.datetime) -> list[dict[str, Any]]:
                    'failed_turns': str(1 if i % 11 == 3 else 0), 'actionable_issues': '0', 'guardrail_blocks': '0',
                    'turns_with_tokens': str(turns), 'input_tokens': str(inp), 'output_tokens': str(inp // 16),
                    'cached_input_tokens': str(inp // 2), 'reasoning_tokens': str(inp // (28 if model == 'gemini-2.5-pro' else 50)),
-                   'total_tokens': str(inp + inp // 16), 'llm_calls': str(turns * 2), 'tool_calls': str(turns),
-                   'tool_failures': '0'})
+                   'total_tokens': str(inp + inp // 16), 'llm_calls': str(turns * (39 if agent == 'Contract Analyzer' else 2)),
+                   'tool_calls': str(turns), 'tool_failures': '0'})
     return rows
   if kind == 'build_session_turns_sql':
     rows = []
@@ -489,13 +537,18 @@ def bq_rows(kind: str, now: dt.datetime) -> list[dict[str, Any]]:
       sid = str(6446120131357637190 + i * 7741)
       for t in range(3):
         inp = rng.randint(4000, 16000)
+        if agent == 'Contract Analyzer':
+          # An orchestrator: 30-48 LLM calls per turn is normal for it; one turn ran away.
+          calls = 240 if (i == 14 and t == 2) else 30 + (i * 7 + t * 5) % 19
+        else:
+          calls = 1 + (i + t) % 3
         rows.append({'engine_key': ek, 'session_id': sid, 'turn_id': f'{sid}-{t}', 'turn_kind': 'CHAT',
                      'turn_status': 'ERROR' if (i % 11 == 3 and t == 2) else 'SUCCESS',
                      'ts': _iso(now - dt.timedelta(minutes=17 * i, seconds=-60 * t)),
                      'user_email': f'{u}@{DOMAIN}', 'agent_name': agent, 'model_name': model,
                      'latency_ms': str(rng.randint(600, 4200)), 'input_tokens': str(inp), 'output_tokens': str(inp // 15),
                      'cached_input_tokens': str(inp // 2), 'reasoning_tokens': str(inp // (28 if model == 'gemini-2.5-pro' else 60)),
-                     'total_tokens': str(inp + inp // 15), 'llm_calls': '2', 'tool_call_count': str(1 + (t % 2)),
+                     'total_tokens': str(inp + inp // 15), 'llm_calls': str(calls), 'tool_call_count': str(1 + (t % 2)),
                      'tool_names': 'search_kb, jira-mcp' if t % 2 else 'search_kb'})
     return rows
   if kind == 'build_recent_turns_sql':
@@ -528,19 +581,35 @@ def fake_bigquery(sql: Any, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
 def billing_summary(non_blocking: bool = False) -> dict[str, Any]:
   del non_blocking
   from finops_dashboard import billing_export  # pylint: disable=import-outside-toplevel
+  # Per-type credit split as returned by build_billing_sql(); "other" = credits_usd minus the three buckets.
+  def split(cud: float = 0.0, contract: float = 0.0, promo: float = 0.0) -> dict[str, float]:
+    return {'cud_credits_usd': cud, 'contract_discount_credits_usd': contract, 'promo_credits_usd': promo}
+
+  # Fictional list prices (cost_at_list): the Vertex AI SKUs carry a 10% negotiated discount; seats and
+  # Cloud Run bill at list.
+  def listed(list_usd: float, gross: float) -> dict[str, float]:
+    return {'list_usd': list_usd, 'listed_gross_usd': gross}
+
   rows = [
       {'sku_id': 'A1B2-C3D4', 'service': 'Vertex AI', 'sku_description': 'Gemini 2.5 Flash input tokens',
-       'usage_amount': 2.6e9, 'usage_unit': 'tokens', 'gross_usd': 790.12, 'credits_usd': -41.0, 'currency': 'USD'},
+       'usage_amount': 2.6e9, 'usage_unit': 'tokens', 'gross_usd': 790.12, **listed(877.91, 790.12),
+       'credits_usd': -41.0, **split(contract=-31.0, promo=-10.0), 'currency': 'USD'},
       {'sku_id': 'A1B2-C3D5', 'service': 'Vertex AI', 'sku_description': 'Gemini 2.5 Flash output tokens',
-       'usage_amount': 1.5e8, 'usage_unit': 'tokens', 'gross_usd': 371.9, 'credits_usd': 0, 'currency': 'USD'},
+       'usage_amount': 1.5e8, 'usage_unit': 'tokens', 'gross_usd': 371.9, **listed(413.22, 371.9),
+       'credits_usd': 0, **split(), 'currency': 'USD'},
       {'sku_id': 'B9F0-1122', 'service': 'Vertex AI', 'sku_description': 'Gemini 2.5 Pro input tokens',
-       'usage_amount': 6.3e8, 'usage_unit': 'tokens', 'gross_usd': 788.4, 'credits_usd': 0, 'currency': 'USD'},
+       'usage_amount': 6.3e8, 'usage_unit': 'tokens', 'gross_usd': 788.4, **listed(876.0, 788.4),
+       'credits_usd': -118.26, **split(contract=-118.26), 'currency': 'USD'},
       {'sku_id': 'C7D8-3344', 'service': 'Discovery Engine', 'sku_description': 'Gemini Enterprise Standard seats',
-       'usage_amount': 120, 'usage_unit': 'seat-month', 'gross_usd': 3600.0, 'credits_usd': 0, 'currency': 'USD'},
+       'usage_amount': 120, 'usage_unit': 'seat-month', 'gross_usd': 3600.0, **listed(3600.0, 3600.0),
+       'credits_usd': 0, **split(), 'currency': 'USD'},
       {'sku_id': 'D1E2-5566', 'service': 'Cloud Run', 'sku_description': 'CPU allocation time',
-       'usage_amount': 410000, 'usage_unit': 'vCPU-s', 'gross_usd': 9.84, 'credits_usd': 0, 'currency': 'USD'},
+       'usage_amount': 410000, 'usage_unit': 'vCPU-s', 'gross_usd': 9.84, **listed(9.84, 9.84),
+       'credits_usd': -2.46, **split(cud=-1.97), 'currency': 'USD'},
   ]
-  return billing_export.summarize_rows(rows, BILLING_TABLE)
+  out = billing_export.summarize_rows(rows, BILLING_TABLE)
+  out['list_price_column'] = 'present'
+  return out
 
 
 def billing_daily(non_blocking: bool = False, window_days: int = 30) -> dict[str, Any]:

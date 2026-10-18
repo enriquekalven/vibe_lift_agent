@@ -126,6 +126,52 @@ class CostGovernanceAndSwrTest(unittest.TestCase):
         self.assertEqual(stage2_ready["actions"][0]["status"], "DRY_RUN")
         self.assertEqual(gov._queue[other_rid]["status"], "WARNED_GRACE_PERIOD")
 
+    def test_stage1_warning_updates_each_runtimes_own_queue_row(self) -> None:
+        # Regression: after a warning goes out, the update must land on that runtime's queue item, not
+        # on the last candidate of the evaluation loop (one runtime alone cannot tell the two apart).
+        gov = CostGovernanceService(project_id="test-proj")
+
+        def idle_service(rid: str) -> dict:
+            return {
+                "agent_id": rid,
+                "display_name": rid,
+                "location": "us-central1",
+                "finops_status": "ZOMBIE_IDLE_SERVICE",
+                "backend": {"kind": "cloud_run", "project": "test-proj", "region": "us-central1"},
+                "metrics": {
+                    "requests": 0,
+                    "llm_calls": 0,
+                    "vcpu_hours": 1.0,
+                    "memory_gib_hours": 2.0,
+                    "billable_instance_hours": 1.0,
+                    "est_token_cost_usd": 0.0,
+                },
+            }
+
+        rids = [f"run-svc-{i}" for i in range(3)]
+        fleet = {"unregistered_runtimes": [idle_service(r) for r in rids], "agents": []}
+        persisted: list[dict] = []
+        with patch.object(gov, "_persist_queue_items_to_bq", side_effect=persisted.extend):
+            gov.evaluate_and_warn_idle_runtimes(
+                fleet,
+                grace_period_hours=48,
+                send_warnings=True,
+                dry_run_email=True,
+                lookup_bq=False,
+                persist_to_bq=True,
+            )
+        for rid in rids:
+            item = gov._queue[rid]
+            self.assertEqual(item["runtime_id"], rid)
+            self.assertEqual(item["status"], "WARNED_GRACE_PERIOD")
+            self.assertTrue(item["warning_sent_at"])
+            self.assertTrue(item["scheduled_clearance_at"], rid + " has no clearance time")
+        rows = {row["runtime_id"]: row for row in persisted}
+        self.assertEqual(set(rows), set(rids))
+        for rid in rids:
+            self.assertEqual(rows[rid]["status"], "WARNED_GRACE_PERIOD")
+            self.assertEqual(rows[rid]["scheduled_clearance_at"], gov._queue[rid]["scheduled_clearance_at"])
+
     def test_executive_digest_payload_structure(self) -> None:
         gov = CostGovernanceService(project_id="test-proj")
         fleet_payload = {
@@ -222,6 +268,31 @@ class CostGovernanceAndSwrTest(unittest.TestCase):
         self.assertEqual(score["status"], "OPTIMAL")
         self.assertEqual(len(score["pillars"]), 5)
 
+    def test_trace_pillar_counts_the_fleet_observability_config(self) -> None:
+        # Regression: Pillar 1 read trace_logging.enabled, which classify_agent never sets, so a live
+        # fleet scored 0/N even with trace logging on (the Agents tab badge reads observability_config).
+        from finops_dashboard.cost_governance import compute_governance_score
+        from finops_dashboard.fleet import classify_agent
+
+        def raw(i: int, on: bool) -> dict:
+            return {
+                "name": (
+                    "projects/p/locations/global/collections/default_collection/engines/e1/"
+                    f"assistants/default_assistant/agents/a{i}"
+                ),
+                "displayName": f"Agent {i}",
+                "state": "ENABLED",
+                "observabilityConfig": {"observabilityEnabled": on},
+            }
+
+        agents = [classify_agent("e1", "default_assistant", raw(i, i < 3)) for i in range(5)]
+        score = compute_governance_score(fleet_payload={"agents": agents})
+        components = [c for p in score["pillars"] for c in p["components"]]
+        trace = next(c for c in components if c["id"] == "trace_logging")
+        self.assertEqual(trace["measured_value"], 3)
+        self.assertEqual(trace["target_value"], 5)
+        self.assertEqual(trace["points"], 7)  # round(12 * 3 / 5)
+
     def test_swr_lite_boot_and_embedded_ui_state(self) -> None:
         ctrl = FinOpsRuntimeController()
         with patch.object(
@@ -304,6 +375,31 @@ class CostGovernanceAndSwrTest(unittest.TestCase):
         self.assertIsNotNone(loaded)
         self.assertEqual(loaded["project_id"], "test-proj")
         self.assertEqual(loaded["snapshot_source"], "bigquery_agent_registry_snapshots")
+
+    def test_default_bigquery_path_uses_the_real_query_signature(self) -> None:
+        # Regression: both readers passed maximum_bytes_billed=, a TypeError that `except Exception`
+        # swallowed, so without an injected fake the snapshot read and token pushdown never ran.
+        from finops_dashboard import gcp_telemetry
+
+        snapshot = {"project_id": "test-proj", "window_hours": 24, "agents": [{"id": "a1"}]}
+        rows = [
+            {
+                "snapshot_timestamp": datetime.now(UTC).isoformat(),
+                "age_seconds": 5.0,
+                "agent_breakdown_json": json.dumps(snapshot),
+            }
+        ]
+        collector = GeminiEnterpriseFleetService(project_id="test-proj", bq_snapshot_enabled=True)
+        collector._bq_query_fn = None
+        collector.bq_token_pushdown = True
+        with patch.object(gcp_telemetry, "GoogleCloudTelemetryService", autospec=True) as svc_cls:
+            svc_cls.return_value.run_bigquery_query.return_value = (rows, {})
+            self.assertIsNotNone(collector._read_bq_fleet_snapshot(hours=24))
+            self.assertEqual(collector._run_bq_token_query("test-proj", "SELECT 1"), rows)
+        calls = svc_cls.return_value.run_bigquery_query.call_args_list
+        self.assertEqual(len(calls), 2)
+        for call in calls:
+            self.assertIn("max_bytes_billed", call.kwargs)
 
     def test_http_routes_end_to_end(self) -> None:
         import fastapi

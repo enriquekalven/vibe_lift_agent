@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "version": "2026-10-16.1",
+  "max_age_days": 30,
+  "description": "Vertex AI and Cloud Billing reference data used for list-price estimates, Provisioned Throughput sizing, model retirement and billing credit classification. Every non-static section records the date its values were last checked against the cited Google page; tests/test_reference_data.py fails once a section is older than max_age_days.",
+  "sections": {
+    "model_list_prices": {
+      "checked": "2026-10-16",
+      "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+      "unit": "USD per 1M tokens: standard tier, global endpoint, <=200K-token context",
+      "notes": "cached_read is the cached-input price. cache_write is the price of writing a cache entry: Gemini bills cache creation as regular input (hourly cache storage is not modelled); Claude uses the 5-minute cache-write price. A schedule entry replaces the base price from its effective_from date (UTC).",
+      "models": {
+        "gemini-2.5-pro": {"input": 1.25, "cached_read": 0.125, "cache_write": 1.25, "output": 10.0},
+        "gemini-2.5-flash": {"input": 0.3, "cached_read": 0.03, "cache_write": 0.3, "output": 2.5},
+        "gemini-2.5-flash-lite": {"input": 0.1, "cached_read": 0.01, "cache_write": 0.1, "output": 0.4},
+        "gemini-3.1-flash-lite": {"input": 0.25, "cached_read": 0.025, "cache_write": 0.25, "output": 1.5},
+        "gemini-3.1-pro-preview": {"input": 2.0, "cached_read": 0.2, "cache_write": 2.0, "output": 12.0},
+        "gemini-3.5-flash": {"input": 1.5, "cached_read": 0.15, "cache_write": 1.5, "output": 9.0},
+        "gemini-3.5-flash-lite": {"input": 0.3, "cached_read": 0.03, "cache_write": 0.3, "output": 2.5},
+        "gemini-3.6-flash": {
+          "input": 0.75, "cached_read": 0.075, "cache_write": 0.75, "output": 3.75,
+          "schedule": [{"effective_from": "2027-01-01", "input": 1.5, "cached_read": 0.15, "cache_write": 1.5, "output": 7.5}]
+        },
+        "gemini-3.7-flash": {
+          "input": 0.75, "cached_read": 0.075, "cache_write": 0.75, "output": 3.75,
+          "schedule": [{"effective_from": "2027-01-01", "input": 1.5, "cached_read": 0.15, "cache_write": 1.5, "output": 7.5}]
+        },
+        "gemini-3.8-flash": {
+          "input": 0.75, "cached_read": 0.075, "cache_write": 0.75, "output": 3.75,
+          "schedule": [{"effective_from": "2027-01-01", "input": 1.5, "cached_read": 0.15, "cache_write": 1.5, "output": 7.5}]
+        },
+        "claude-opus-4-6": {"input": 5.0, "cached_read": 0.5, "cache_write": 6.25, "output": 25.0},
+        "claude-sonnet-4-6": {"input": 3.0, "cached_read": 0.3, "cache_write": 3.75, "output": 15.0}
+      }
+    },
+    "retired_model_list_prices": {
+      "static": true,
+      "source": "Last published Vertex AI list prices of retired models (no longer on the pricing page; kept only to price legacy traffic).",
+      "models": {
+        "gemini-1.5-pro": {"input": 1.25, "cached_read": 0.3125, "cache_write": 1.25, "output": 5.0},
+        "gemini-1.5-flash": {"input": 0.075, "cached_read": 0.01875, "cache_write": 0.075, "output": 0.3},
+        "gemini-2.0-flash": {"input": 0.15, "cached_read": 0.0375, "cache_write": 0.15, "output": 0.6}
+      }
+    },
+    "provisioned_throughput": {
+      "checked": "2026-10-16",
+      "price_source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+      "spec_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/provisioned-throughput/supported-models",
+      "hours_per_month": 730,
+      "gsu_hourly_usd_global": {"1_week": 7.14, "1_month": 3.698630137, "3_month": 3.287671233, "1_year": 2.739726027},
+      "notes": "Per-second throughput per GSU and text-token burndown multipliers for the <=200K-token context tier. Reasoning tokens burn at the output rate. Gemini 2.5 rows publish no cache-read rate, so cache reads count as input (this can only size GSUs up). Non-global endpoints cost about 10% more.",
+      "models": {
+        "gemini-2.5-pro": {"tokens_per_second_per_gsu": 650, "output_burndown": 8, "cache_read_burndown": 1.0},
+        "gemini-2.5-flash": {"tokens_per_second_per_gsu": 2690, "output_burndown": 9, "cache_read_burndown": 1.0},
+        "gemini-2.5-flash-lite": {"tokens_per_second_per_gsu": 8070, "output_burndown": 4, "cache_read_burndown": 1.0},
+        "gemini-3-flash-preview": {"tokens_per_second_per_gsu": 2015, "output_burndown": 6, "cache_read_burndown": 0.1},
+        "gemini-3.1-flash-lite": {"tokens_per_second_per_gsu": 4030, "output_burndown": 6, "cache_read_burndown": 0.1},
+        "gemini-3.1-pro-preview": {"tokens_per_second_per_gsu": 500, "output_burndown": 6, "cache_read_burndown": 0.1},
+        "gemini-3.5-flash": {"tokens_per_second_per_gsu": 675, "output_burndown": 6, "cache_read_burndown": 0.1},
+        "gemini-3.5-flash-lite": {"tokens_per_second_per_gsu": 3360, "output_burndown": 9, "cache_read_burndown": 0.1},
+        "gemini-3.6-flash": {"tokens_per_second_per_gsu": 675, "output_burndown": 5, "cache_read_burndown": 0.1},
+        "gemini-3.7-flash": {"tokens_per_second_per_gsu": 675, "output_burndown": 5, "cache_read_burndown": 0.1},
+        "gemini-3.8-flash": {"tokens_per_second_per_gsu": 675, "output_burndown": 5, "cache_read_burndown": 0.1}
+      }
+    },
+    "model_lifecycle": {
+      "checked": "2026-10-16",
+      "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
+      "notes": "Retirement date and Google's listed replacements. Replacements that are themselves retiring are resolved to their own replacement at run time.",
+      "models": {
+        "gemini-1.0-pro": {"retirement_date": "2025-04-21", "replacements": ["gemini-2.5-flash"]},
+        "gemini-1.5-pro": {"retirement_date": "2025-09-24", "replacements": ["gemini-2.5-flash"]},
+        "gemini-1.5-flash": {"retirement_date": "2025-09-24", "replacements": ["gemini-2.5-flash-lite"]},
+        "gemini-2.0-flash": {"retirement_date": "2026-06-01", "replacements": ["gemini-3.1-flash-lite"]},
+        "gemini-2.0-flash-lite": {"retirement_date": "2026-06-01", "replacements": ["gemini-3.1-flash-lite"]},
+        "gemini-2.5-pro": {"retirement_date": "2026-10-20", "replacements": ["gemini-3.8-flash", "gemini-3.5-flash"]},
+        "gemini-2.5-flash": {"retirement_date": "2026-10-20", "replacements": ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]},
+        "gemini-2.5-flash-lite": {"retirement_date": "2026-10-20", "replacements": ["gemini-3.8-flash", "gemini-3.1-flash-lite"]},
+        "gemini-3.6-flash": {"retirement_date": "2026-11-19", "replacements": ["gemini-3.8-flash"]},
+        "gemini-3.7-flash": {"retirement_date": "2027-01-28", "replacements": ["gemini-3.8-flash"]}
+      }
+    },
+    "billing_credit_types": {
+      "checked": "2026-10-16",
+      "source": "https://cloud.google.com/billing/docs/how-to/export-data-bigquery-tables/standard-usage",
+      "notes": "credits.type groups. Any type not listed (FEE_UTILIZATION_OFFSET, RESELLER_MARGIN, new types) is reported as 'other' and excluded from the Effective Savings Rate.",
+      "commitment": ["COMMITTED_USAGE_DISCOUNT", "COMMITTED_USAGE_DISCOUNT_DOLLAR_BASE", "SUBSCRIPTION_BENEFIT", "SUSTAINED_USAGE_DISCOUNT"],
+      "contract_discount": ["DISCOUNT"],
+      "promotional": ["PROMOTION", "FREE_TIER"]
+    }
+  }
+}

@@ -77,7 +77,8 @@ var VL = (function() {
   function healthRulesText() {
     var R = HEALTH_RULES;
     return 'Failing: 5xx \u2265 ' + R.failing5xxPct + '% of requests (with \u2265 ' + R.minRequestsForRates +
-      ' requests) or \u2265 ' + R.loopCallsPerRequest + ' LLM calls per request. Degraded: 5xx \u2265 ' +
+      ' requests) or \u2265 ' + R.loopCallsPerRequest + ' LLM calls per request (or the agent\u2019s own cap, ' +
+      '1.5 \u00d7 the p99 of its normal runs, when it has 30 days of session history). Degraded: 5xx \u2265 ' +
       R.degraded5xxPct + '%, 4xx \u2265 ' + R.degraded4xxPct + '%, p95 \u2265 ' + (R.degradedP95Ms / 1000) +
       ' s, or any 5xx on low traffic. Idle: enabled with 0 requests. Broken: the backend is missing. ' +
       'No telemetry: inventory only. Computed in your browser from the metrics shown.';
@@ -111,11 +112,15 @@ var VL = (function() {
     var p5 = r > 0 ? 100 * e5 / r : 0;
     var p4 = r > 0 ? 100 * e4 / r : 0;
     var cpr = llm !== null && r > 0 ? llm / r : null;
+    // Agents with enough session history carry their own cap (server: finops.apply_loop_thresholds).
+    var ownCap = num(m.loop_threshold_calls_per_request);
+    var loopCap = ownCap !== null && ownCap > 0 ? ownCap : R.loopCallsPerRequest;
     var reasons = [];
     var id = 'healthy';
-    if (cpr !== null && cpr >= R.loopCallsPerRequest) {
+    if (cpr !== null && cpr >= loopCap) {
       id = 'failing';
-      reasons.push(cpr.toFixed(1) + ' LLM calls per request (\u2265 ' + R.loopCallsPerRequest + '): possible agent loop.');
+      reasons.push(cpr.toFixed(1) + ' LLM calls per request (\u2265 ' + loopCap +
+        (loopCap === ownCap ? ', this agent\u2019s cap from its last 30 days of sessions' : '') + '): possible agent loop.');
     }
     if (rated && p5 >= R.failing5xxPct) {
       id = 'failing';
@@ -283,16 +288,20 @@ var VL = (function() {
   }
 
   // ---- Tokenomics & FinOps pure helpers ------------------------------------------------------------
+  // Mirror of finops_dashboard/reference/vertex_ai_reference.json (list prices per 1M tokens) for the models the
+  // what-if math needs before live rate cards arrive. tests/test_reference_data.py fails if it drifts.
   var DEFAULT_RATE_CARDS = {
     'gemini-2.5-pro': {input: 1.25, output: 10.0, cached_read: 0.125, cache_write: 1.25},
-    'gemini-3.8-flash': {input: 0.30, output: 2.50, cached_read: 0.03, cache_write: 0.30},
+    'gemini-3.8-flash': {input: 0.75, output: 3.75, cached_read: 0.075, cache_write: 0.75},
     'gemini-2.5-flash': {input: 0.30, output: 2.50, cached_read: 0.03, cache_write: 0.30},
-    'gemini-3.1-flash-lite': {input: 0.10, output: 0.40, cached_read: 0.01, cache_write: 0.10},
+    'gemini-3.1-flash-lite': {input: 0.25, output: 1.50, cached_read: 0.025, cache_write: 0.25},
     'gemini-2.0-flash': {input: 0.15, output: 0.60, cached_read: 0.0375, cache_write: 0.15},
     'gemini-1.5-pro': {input: 1.25, output: 5.0, cached_read: 0.3125, cache_write: 1.25},
     'gemini-1.5-flash': {input: 0.075, output: 0.30, cached_read: 0.01875, cache_write: 0.075},
   };
-  var REPRICE_TARGETS = ['gemini-2.5-flash', 'gemini-3.1-flash-lite'];
+  // gemini-2.5-flash retires on 2026-10-20; Google lists gemini-3.8-flash as its replacement.
+  var FLASH_REPRICE_TARGET = 'gemini-3.8-flash';
+  var REPRICE_TARGETS = [FLASH_REPRICE_TARGET, 'gemini-3.1-flash-lite'];
 
   function resolveRateCards(rawCards) {
     var out = {};
@@ -613,7 +622,7 @@ var VL = (function() {
     var liteTotalSaved = 0;
     byModel.forEach(function(r) {
       r.alternatives.forEach(function(al) {
-        if (al.targetModel === 'gemini-2.5-flash') flashTotalSaved += al.savingsWindowUsd;
+        if (al.targetModel === FLASH_REPRICE_TARGET) flashTotalSaved += al.savingsWindowUsd;
         if (al.targetModel === 'gemini-3.1-flash-lite') liteTotalSaved += al.savingsWindowUsd;
       });
     });
@@ -1097,8 +1106,11 @@ var VL = (function() {
     var tokenAttributed = 0;
     agents.forEach(function(a) {
       if (!a || typeof a !== 'object') return;
+      // The fleet sets observability_config.observability_enabled (the Trace badge's field);
+      // trace_logging.enabled and a top-level observability_enabled are older payload shapes.
+      var oc = a.observability_config || {};
       var tl = a.trace_logging || {};
-      if (tl.enabled === true || a.observability_enabled === true) traceEnabled += 1;
+      if (oc.observability_enabled === true || tl.enabled === true || a.observability_enabled === true) traceEnabled += 1;
       var m = a.metrics || {};
       if (num(m.input_tokens) !== null || m.token_source || (num(m.llm_calls) || 0) > 0) tokenAttributed += 1;
     });
@@ -3252,7 +3264,15 @@ var VL = (function() {
     var go = function() {
       if (item.agent) { openAgent(item.agent, li); return; }
       var panel = byId(item.target);
-      if (panel && panel.scrollIntoView) panel.scrollIntoView({behavior: 'smooth', block: 'start'});
+      if (!panel) return;
+      // A target on another tab (e.g. the Cost tab's loop audit) needs that tab shown before it can scroll.
+      var tabPanel = typeof panel.closest === 'function' ? panel.closest('[id^="tabPanel"]') : null;
+      var tabIdx = tabPanel ? Number(String(tabPanel.id).slice('tabPanel'.length)) : NaN;
+      if (tabPanel && tabPanel.classList.contains('hidden') && isFinite(tabIdx) &&
+          typeof window !== 'undefined' && typeof window.switchTab === 'function') {
+        window.switchTab(tabIdx);
+      }
+      if (panel.scrollIntoView) panel.scrollIntoView({behavior: 'smooth', block: 'start'});
     };
     li.addEventListener('click', go);
     li.addEventListener('keydown', function(ev) { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); go(); } });
@@ -3665,26 +3685,68 @@ var VL = (function() {
       return;
     }
 
+    var stObj = state() || {};
+    var lf = (fleet && fleet.live_finops) || stObj.live_finops || {};
+    var vr = lf.value_realization || null;
+    var lcb = lf.loop_circuit_breaker || null;
+    var gsu = lf.gsu_and_quota_forecast || null;
+    var mmr = lf.model_modernization_radar || null;
+
+    var vrBox = byId('vlValueRealizationBox');
+    var lcbBox = byId('vlLoopCircuitBreakerBox');
+    var gsuBox = byId('vlGsuForecastBox');
+    var mmrBox = byId('vlModernizationRadarBox');
+
     var cards = [];
     if (tax) {
       cards.push(kpi('Thinking-token spend \u00b7 ' + win, usdText(tax.reasoningCostUsd),
         fmtTokens(tax.reasoningTokens) + ' reasoning tokens (' + pctText(tax.thinkingShareOfOutputPct) + ' of all output tokens; ' +
         (tax.thinkingShareOfSpendPct !== null ? pctText(tax.thinkingShareOfSpendPct) + ' of total model spend' : 'billed at output rate') + ').',
         null, tax.thinkingShareOfOutputPct >= 45 ? 'vl-kpi-warn' : null));
-      cards.push(kpi('50% thinking-budget cap \u00b7 what-if', '-' + usdText(tax.cap50SavingsWindowUsd) + ' (' + win + ')',
-        'Projected ' + usdText(tax.cap50Savings30dUsd, 0) + '/30d if reasoning tokens per call were capped by 50% via ThinkingConfig.'));
+      cards.push(kpi('50% thinking-budget cap', 'Save ' + usdText(tax.cap50SavingsWindowUsd) + ' (' + win + ')',
+        'Projected ' + usdText(tax.cap50Savings30dUsd, 0) + '/30d if reasoning tokens per call were capped by 50% via ThinkingConfig.',
+        null, 'vl-kpi-whatif'));
+    }
+    if (vr && vr.status === 'LIVE') {
+      if (num(vr.realized_cache_savings_window_usd) !== null) {
+        cards.push(kpi('Cache-read savings \u00b7 ' + win, usdText(vr.realized_cache_savings_window_usd),
+          'Run-rate ' + usdText(vr.realized_cache_savings_30d_usd, 0) + '/30d at list price from a ' +
+          pctText(num(vr.fleet_cache_hit_share_pct)) + ' cache-hit share (' + fmtTokens(vr.total_cache_read_tokens) +
+          ' cached tokens). Gross: cache storage charges are not deducted.',
+          null, 'vl-kpi-ok'));
+      }
+      if (num(vr.failure_token_tax_window_usd) !== null) {
+        cards.push(kpi('Failure token tax (est.) \u00b7 ' + win, usdText(vr.failure_token_tax_window_usd),
+          fmtInt(vr.agent_failed_requests) + ' server errors (5xx, ' + pctText(num(vr.agent_failure_rate_pct)) +
+          ' of requests that ran); ' + fmtInt(vr.agent_rejected_requests) + ' rejected (4xx) assumed token-free. ' +
+          'Cost per successful request: ' +
+          (num(vr.cost_per_successful_request_usd) !== null ? usdText(vr.cost_per_successful_request_usd, 4) : DASH) + '.',
+          null, num(vr.agent_failure_rate_pct) >= 5 ? 'vl-kpi-warn' : null));
+      }
+    }
+    if (lcb && lcb.status === 'LIVE' && num(lcb.offender_count) > 0) {
+      cards.push(kpi('Spend above loop threshold (est.) \u00b7 ' + win,
+        num(lcb.excess_loop_cost_window_usd) !== null ? usdText(lcb.excess_loop_cost_window_usd) : fmtInt(lcb.total_excess_llm_calls) + ' calls',
+        lcb.offender_count + ' runtime(s) at ' + (lcb.threshold_basis === 'PER_AGENT'
+          ? 'their loop threshold (own cap from session history, else ' + lcb.threshold_calls_per_request + ' LLM calls/request; '
+          : '\u2265 ' + lcb.threshold_calls_per_request + ' LLM calls/request (') +
+        fmtInt(lcb.total_excess_llm_calls) + ' calls above the threshold' +
+        (num(lcb.excess_loop_cost_30d_usd) !== null ? ' \u00b7 ' + usdText(lcb.excess_loop_cost_30d_usd, 0) + '/30d' : '') + ').',
+        null, 'vl-kpi-bad'));
     }
     if (rep) {
-      cards.push(kpi('Re-price Pro \u2192 2.5 Flash \u00b7 what-if',
-        rep.flashSavingsWindowUsd > 0 ? '-' + usdText(rep.flashSavingsWindowUsd) + ' (' + win + ')' : '$0.00',
+      cards.push(kpi('Re-price Pro \u2192 3.8 Flash',
+        rep.flashSavingsWindowUsd > 0 ? 'Save ' + usdText(rep.flashSavingsWindowUsd) + ' (' + win + ')' : '$0.00',
         rep.flashSavingsWindowUsd > 0
-          ? 'Projected ' + usdText(rep.flashSavings30dUsd, 0) + '/30d at list price if higher-tier traffic ran on gemini-2.5-flash.'
-          : 'All observed traffic is already on Flash or Flash-Lite tiers.'));
-      cards.push(kpi('Re-price to 3.1 Flash-Lite \u00b7 what-if',
-        rep.liteSavingsWindowUsd > 0 ? '-' + usdText(rep.liteSavingsWindowUsd) + ' (' + win + ')' : '$0.00',
+          ? 'Projected ' + usdText(rep.flashSavings30dUsd, 0) + '/30d at list price if higher-tier traffic ran on ' + FLASH_REPRICE_TARGET + '.'
+          : 'All observed traffic is already on Flash or Flash-Lite tiers.',
+        null, 'vl-kpi-whatif'));
+      cards.push(kpi('Re-price to 3.1 Flash-Lite',
+        rep.liteSavingsWindowUsd > 0 ? 'Save ' + usdText(rep.liteSavingsWindowUsd) + ' (' + win + ')' : '$0.00',
         rep.liteSavingsWindowUsd > 0
           ? 'Projected ' + usdText(rep.liteSavings30dUsd, 0) + '/30d at list price if eligible traffic ran on gemini-3.1-flash-lite.'
-          : 'No lower-priced tier available for observed models.'));
+          : 'No lower-priced tier available for observed models.',
+        null, 'vl-kpi-whatif'));
     }
     setKids(kpisBox, cards);
 
@@ -3769,7 +3831,7 @@ var VL = (function() {
         repBox.replaceChildren();
       } else {
         var agentRows = rep.byAgent.map(function(ag) {
-          var flashAlt = ag.alternatives.filter(function(al) { return al.targetModel === 'gemini-2.5-flash'; })[0] || null;
+          var flashAlt = ag.alternatives.filter(function(al) { return al.targetModel === FLASH_REPRICE_TARGET; })[0] || null;
           var liteAlt = ag.alternatives.filter(function(al) { return al.targetModel === 'gemini-3.1-flash-lite'; })[0] || null;
           var openBtn = h('button', {type: 'button', class: 'btn btn-xs', onclick: function() {
             var target = findAgent(ag.agentId);
@@ -3794,7 +3856,7 @@ var VL = (function() {
         });
 
         var modelRows = rep.byModel.map(function(m) {
-          var flashAlt = m.alternatives.filter(function(al) { return al.targetModel === 'gemini-2.5-flash'; })[0] || null;
+          var flashAlt = m.alternatives.filter(function(al) { return al.targetModel === FLASH_REPRICE_TARGET; })[0] || null;
           var liteAlt = m.alternatives.filter(function(al) { return al.targetModel === 'gemini-3.1-flash-lite'; })[0] || null;
           return h('tr', {}, [
             h('td', {class: 'mono'}, [m.model]),
@@ -3826,7 +3888,7 @@ var VL = (function() {
                   h('th', {}, ['Project model (Cloud Monitoring)']),
                   h('th', {}, ['Calls']),
                   h('th', {}, ['Current est. (' + win + ')']),
-                  h('th', {}, ['If gemini-2.5-flash']),
+                  h('th', {}, ['If ' + FLASH_REPRICE_TARGET]),
                   h('th', {}, ['If gemini-3.1-flash-lite']),
                 ])]),
                 h('tbody', {}, modelRows),
@@ -3839,12 +3901,362 @@ var VL = (function() {
                   h('th', {}, ['Current model']),
                   h('th', {}, ['Input / Output tok']),
                   h('th', {}, ['Current est. (' + win + ')']),
-                  h('th', {}, ['Savings on 2.5 Flash']),
+                  h('th', {}, ['Savings on 3.8 Flash']),
                   h('th', {}, ['Savings on 3.1 Flash-Lite']),
                 ])]),
                 h('tbody', {}, agentRows),
               ]),
             ]) : null,
+          ]),
+        ]);
+      }
+    }
+
+    // Feature 1 UI: cache-read savings & failure token tax ledger
+    if (vrBox) {
+      if (!vr || vr.status !== 'LIVE') {
+        vrBox.replaceChildren();
+      } else {
+        var taxCell = function(ag) {
+          var t = num(ag.failure_token_tax_usd);
+          if (t === null) return DASH;  // no rate card: unknown, never a fake $0.00
+          if (t <= 0) return usdText(0);
+          return h('span', {class: 'badge badge-red'}, [usdText(t, 3) + ' (' + usdText(ag.failure_token_tax_30d_usd, 0) + '/30d)']);
+        };
+        var agentTaxRows = (vr.by_agent || []).slice(0, 8).map(function(ag) {
+          return h('tr', {}, [
+            h('td', {}, [ag.display_name || ag.agent_id || DASH]),
+            h('td', {class: 'mono'}, [fmtInt(ag.successful_requests) + ' / ' + fmtInt(ag.failed_requests) + ' / ' +
+              fmtInt(ag.rejected_requests) + (num(ag.failure_rate_pct) !== null ? ' (' + pctText(num(ag.failure_rate_pct)) + ' 5xx)' : '')]),
+            h('td', {class: 'mono'}, [num(ag.productive_spend_usd) !== null ? usdText(ag.productive_spend_usd, 3) : DASH]),
+            h('td', {class: 'mono'}, [taxCell(ag)]),
+            h('td', {class: 'mono'}, [num(ag.cost_per_successful_request_usd) !== null ? usdText(ag.cost_per_successful_request_usd, 4) : DASH]),
+          ]);
+        });
+        var martNote = num(vr.mart_failure_rate_pct) !== null
+          ? 'Gemini Enterprise turn failure rate (' + String(vr.mart_source || 'finops_mart') +
+            (num(vr.mart_window_days) !== null ? ', ' + vr.mart_window_days + ' days' : '') + '): ' +
+            pctText(num(vr.mart_failure_rate_pct)) + ' (' + fmtInt(vr.mart_failed_turns) + ' of ' + fmtInt(vr.mart_turns_total) + ' turns).'
+          : null;
+        setKids(vrBox, [
+          h('div', {class: 'vl-tok-card'}, [
+            h('div', {class: 'vl-tok-head'}, [
+              h('div', {}, [
+                h('h3', {class: 'vl-tok-title'}, ['Cache Savings & Failure Token Tax']),
+                h('div', {class: 'vl-d-note'}, [
+                  'Estimated split of agent token spend into productive spend and spend on server errors (5xx); ' +
+                  'rejected (4xx) requests are assumed token-free. Cache-read savings (gross, before cache storage): ' +
+                  (num(vr.realized_cache_savings_window_usd) !== null ? usdText(vr.realized_cache_savings_window_usd) + ' in ' + win + ', ' + usdText(vr.realized_cache_savings_30d_usd, 0) + '/30d' : DASH) + '.',
+                ]),
+                martNote ? h('div', {class: 'vl-d-note'}, [martNote]) : null,
+              ]),
+              h('span', {class: 'badge badge-green'}, [
+                'Productive: ' + (num(vr.productive_agent_spend_usd) !== null ? usdText(vr.productive_agent_spend_usd) : DASH),
+              ]),
+            ]),
+            agentTaxRows.length ? h('div', {class: 'table-scroll', style: 'margin-top:8px'}, [
+              h('table', {class: 'vl-mini-table'}, [
+                h('thead', {}, [h('tr', {}, [
+                  h('th', {}, ['Agent runtime']),
+                  h('th', {}, ['OK / 5xx / 4xx']),
+                  h('th', {}, ['Productive spend (' + win + ')']),
+                  h('th', {}, ['Failure token tax (est.)']),
+                  h('th', {}, ['Cost / successful req']),
+                ])]),
+                h('tbody', {}, agentTaxRows),
+              ]),
+            ]) : h('div', {class: 'vl-d-note', style: 'margin-top:6px'}, ['No per-agent request + token telemetry in this window.']),
+          ]),
+        ]);
+      }
+    }
+
+    // Feature 2 UI: loop / fan-out audit + ADK circuit-breaker snippet
+    if (lcbBox) {
+      var kindLabels = {SKILL_OR_TOOL: 'Skill / tool', SUB_AGENT: 'Sub-agent', MCP_SERVER: 'MCP server'};
+      var subLoops = (lcb && Array.isArray(lcb.looping_sub_agents)) ? lcb.looping_sub_agents : [];
+      var subLoopNote = subLoops.length
+        ? h('div', {class: 'vl-d-note', style: 'margin-top:8px'}, [
+            'Sub-agents / tools at \u2265 ' + lcb.threshold_calls_per_request + ' calls per sampled trace: ' +
+            subLoops.slice(0, 5).map(function(s) {
+              var kName = kindLabels[s.kind] || String(s.kind || '');
+              return String(s.name || DASH) + ' (' + kName + ', ' + String(s.calls_per_trace) +
+                ' calls/trace over ' + fmtInt(s.traces_count) + ' traces)';
+            }).join('; ') + '.',
+          ])
+        : null;
+      // F2: per-agent caps and runaway sessions from the last 30 days of Gemini Enterprise sessions.
+      var lb = lf.loop_baselines || null;
+      var lbAgents = (lb && lb.status === 'LIVE' && Array.isArray(lb.agents)) ? lb.agents : [];
+      var runaways = [];
+      lbAgents.forEach(function(b) {
+        (b.runaways || []).forEach(function(rw) { runaways.push({agent: b, rw: rw}); });
+      });
+      runaways.sort(function(x, y) { return (num(y.rw.calls_per_run) || 0) - (num(x.rw.calls_per_run) || 0); });
+      var baseNode = lbAgents.length ? h('div', {style: 'margin-top:12px'}, [
+        h('div', {class: 'vl-d-note'}, ['Per-agent loop caps from the last 30 days of sessions: cap = max(10, 1.5 \u00d7 p99 of ' +
+          'normal runs, largest normal run). A runaway session has a run above the agent\u2019s outlier fence.']),
+        h('div', {class: 'table-scroll', style: 'margin-top:6px'}, [
+          h('table', {class: 'vl-mini-table'}, [
+            h('thead', {}, [h('tr', {}, [
+              h('th', {}, ['Agent']), h('th', {}, ['Runs']), h('th', {}, ['LLM calls per run (p50 / p99)']),
+              h('th', {}, ['Recommended cap']), h('th', {}, ['Runaway sessions']),
+            ])]),
+            h('tbody', {}, lbAgents.map(function(b) {
+              return h('tr', {}, [
+                h('td', {}, [String(b.agent_name || DASH)]),
+                h('td', {class: 'mono', title: b.basis === 'TURN' ? 'Turns' : 'Sessions (average calls per turn; no turn detail)'},
+                  [fmtInt(b.samples) + (b.basis === 'TURN' ? ' turns' : ' sessions')]),
+                h('td', {class: 'mono'}, [String(b.p50) + ' / ' + String(b.p99_within_fence)]),
+                h('td', {class: 'mono'}, [fmtInt(b.recommended_cap)]),
+                h('td', {class: 'mono'}, [num(b.runaway_sessions) > 0
+                  ? h('span', {class: 'badge badge-yellow'}, [fmtInt(b.runaway_sessions) + ' (' + pctText(num(b.runaway_session_share_pct)) + ')'])
+                  : '0']),
+              ]);
+            })),
+          ]),
+        ]),
+        runaways.length ? h('div', {class: 'table-scroll', style: 'margin-top:8px'}, [
+          h('table', {class: 'vl-mini-table'}, [
+            h('thead', {}, [h('tr', {}, [
+              h('th', {}, ['Runaway session']), h('th', {}, ['Agent']), h('th', {}, ['User']),
+              h('th', {}, ['LLM calls in one turn']), h('th', {}, ['Cap']),
+            ])]),
+            h('tbody', {}, runaways.slice(0, 8).map(function(x) {
+              return h('tr', {}, [
+                h('td', {class: 'mono'}, [String(x.rw.session_id || DASH)]),
+                h('td', {}, [String(x.agent.agent_name || DASH)]),
+                h('td', {}, [String(x.rw.user_email || DASH)]),
+                h('td', {class: 'mono'}, [h('span', {class: 'badge badge-red'}, [String(x.rw.calls_per_run) +
+                  (x.rw.run_basis === 'SESSION_AVERAGE' ? ' avg' : '')])]),
+                h('td', {class: 'mono'}, [fmtInt(x.agent.recommended_cap)]),
+              ]);
+            })),
+          ]),
+        ]) : null,
+        (lb.insufficient || []).length ? h('div', {class: 'vl-d-note', style: 'margin-top:6px'}, [
+          'Not enough history for a cap (fewer than ' + fmtInt(lb.min_samples) + ' runs; the default ' +
+          (lcb ? lcb.threshold_calls_per_request : 20) + ' calls/request rule applies): ' +
+          lb.insufficient.slice(0, 6).map(function(b) { return String(b.agent_name); }).join(', ') + '.']) : null,
+      ]) : null;
+      if (!lcb || lcb.status !== 'LIVE') {
+        lcbBox.replaceChildren();
+      } else if (!lcb.offenders || !lcb.offenders.length) {
+        setKids(lcbBox, [
+          h('div', {class: 'vl-tok-card'}, [
+            h('div', {class: 'vl-tok-head'}, [
+              h('h3', {class: 'vl-tok-title'}, ['Agent Loop & Fan-Out Audit']),
+              h('span', {class: 'badge badge-green'}, ['No runtime at its loop threshold']),
+            ]),
+            h('div', {class: 'vl-d-note', style: 'margin-top:4px'}, [
+              lcb.threshold_basis === 'PER_AGENT'
+                ? 'No agent runtime averages its own cap (or ' + lcb.threshold_calls_per_request +
+                  ' LLM calls per request without session history) in this window.'
+                : 'No agent runtime averages \u2265 ' + lcb.threshold_calls_per_request +
+                  ' LLM calls per request in this window (same rule as the health card).',
+            ]),
+            baseNode,
+            subLoopNote,
+          ]),
+        ]);
+      } else {
+        var topLoop = lcb.offenders[0];
+        var loopSnippet = String(topLoop.adk_circuit_breaker_snippet || '');
+        var copyLoopBtn = h('button', {type: 'button', class: 'btn btn-xs', onclick: function() { copyText(loopSnippet, copyLoopBtn); }}, ['Copy ADK RunConfig']);
+        setKids(lcbBox, [
+          h('div', {class: 'vl-tok-card'}, [
+            h('div', {class: 'vl-tok-head'}, [
+              h('div', {}, [
+                h('h3', {class: 'vl-tok-title'}, ['Agent Loop & Fan-Out Audit']),
+                h('div', {class: 'vl-d-note'}, [
+                  'Runtimes whose average LLM calls per request reach their threshold (their own cap from 30 days of sessions, ' +
+                  'else ' + lcb.threshold_calls_per_request + '), and the estimated token spend above it. A cap makes runs that ' +
+                  'exceed it fail, so prefer a cap derived from the agent\u2019s own history.',
+                ]),
+              ]),
+              copyLoopBtn,
+            ]),
+            h('div', {class: 'table-scroll', style: 'margin-top:8px'}, [
+              h('table', {class: 'vl-mini-table'}, [
+                h('thead', {}, [h('tr', {}, [
+                  h('th', {}, ['Agent']),
+                  h('th', {}, ['Calls / req']),
+                  h('th', {}, ['Threshold']),
+                  h('th', {}, ['Calls above threshold']),
+                  h('th', {}, ['Tokens above threshold']),
+                  h('th', {}, ['Spend above threshold (' + win + ' / 30d, est.)']),
+                ])]),
+                h('tbody', {}, lcb.offenders.map(function(o) {
+                  return h('tr', {}, [
+                    h('td', {}, [o.display_name]),
+                    h('td', {class: 'mono'}, [h('span', {class: 'badge badge-red'}, [String(o.llm_calls_per_request) + 'x'])]),
+                    h('td', {class: 'mono', title: o.threshold_basis === 'SESSION_P99'
+                      ? 'This agent\u2019s cap from its last 30 days of sessions' : 'Default rule (not enough session history)'},
+                      [String(o.threshold_calls_per_request) + (o.threshold_basis === 'SESSION_P99' ? ' (own cap)' : ' (default)')]),
+                    h('td', {class: 'mono'}, [fmtInt(o.excess_llm_calls)]),
+                    h('td', {class: 'mono'}, [fmtTokens(o.excess_tokens)]),
+                    h('td', {class: 'mono'}, [
+                      num(o.excess_loop_cost_window_usd) !== null
+                        ? usdText(o.excess_loop_cost_window_usd) + ' (' + usdText(o.excess_loop_cost_30d_usd, 0) + '/30d)'
+                        : DASH,
+                    ]),
+                  ]);
+                })),
+              ]),
+            ]),
+            loopSnippet ? h('details', {style: 'margin-top:10px'}, [
+              h('summary', {}, ['Show ADK RunConfig for ' + String(topLoop.display_name || 'the top offender')]),
+              h('pre', {class: 'vl-cmd', style: 'margin-top:6px'}, [loopSnippet]),
+            ]) : null,
+            baseNode,
+            subLoopNote,
+          ]),
+        ]);
+      }
+    }
+
+    // Feature 4 UI: pay-as-you-go vs Provisioned Throughput (GSU) break-even & 30/60/90-day projection
+    if (gsuBox) {
+      if (!gsu || gsu.status !== 'PROJECTION' || !Array.isArray(gsu.by_model) || !gsu.by_model.length) {
+        gsuBox.replaceChildren();
+      } else {
+        var gsuRef = gsu.gsu_reference || {};
+        var recBadge = {COMMIT_GSU_1YR: 'badge-yellow', STAY_ON_PAYG: 'badge-green'};
+        var recLabel = {
+          COMMIT_GSU_1YR: 'Commit 1-yr GSU',
+          STAY_ON_PAYG: 'Stay on pay-as-you-go',
+          NO_PT_REFERENCE: 'Pay-as-you-go only',
+          UNPRICED_MODEL: 'No rate card',
+        };
+        var hasProfileSizing = gsu.sizing_basis === 'PER_MINUTE_PROFILE';
+        setKids(gsuBox, [
+          h('div', {class: 'vl-tok-card'}, [
+            h('div', {class: 'vl-tok-head'}, [
+              h('div', {}, [
+                h('h3', {class: 'vl-tok-title'}, ['Pay-as-you-go vs. Provisioned Throughput & 30/60/90-Day Projection']),
+                h('div', {class: 'vl-d-note'}, [
+                  'Linear projection, not a forecast: 30d ' + usdText(num(gsu.forecast_30d_usd), 0) +
+                  ' \u00b7 60d ' + usdText(num(gsu.forecast_60d_usd), 0) +
+                  ' \u00b7 90d ' + usdText(num(gsu.forecast_90d_usd), 0) +
+                  ' (' + String(gsu.burn_rate_basis || '') + ').',
+                ]),
+                h('div', {class: 'vl-d-note'}, [String(gsu.sizing_caveat || '')]),
+              ]),
+              h('span', {class: 'badge ' + (num(gsu.gsu_candidates_count) > 0 ? 'badge-yellow' : 'badge-blue')}, [
+                num(gsu.gsu_candidates_count) > 0 ? gsu.gsu_candidates_count + ' model(s) past 1-yr break-even' : 'Pay-as-you-go is cheaper',
+              ]),
+            ]),
+            h('div', {class: 'table-scroll', style: 'margin-top:8px'}, [
+              h('table', {class: 'vl-mini-table'}, [
+                h('thead', {}, [h('tr', {}, [
+                  h('th', {}, ['Model']),
+                  h('th', {}, [hasProfileSizing ? 'GSU load (avg / p99 / peak)' : 'Avg GSU load']),
+                  h('th', {}, ['Pay-as-you-go 30d']),
+                  h('th', {}, ['1-yr GSU (' + usdText(num(gsuRef.gsu_1yr_usd), 0) + '/GSU-month)']),
+                  h('th', {}, ['Break-even']),
+                  h('th', {}, ['Recommendation']),
+                ])]),
+                h('tbody', {}, gsu.by_model.map(function(m) {
+                  var loadCell = DASH;
+                  if (num(m.est_single_gsu_utilization_pct) !== null) {
+                    loadCell = m.sizing_basis === 'PER_MINUTE_PROFILE' && num(m.p99_gsu_units) !== null
+                      ? pctText(num(m.est_single_gsu_utilization_pct)) + ' avg \u00b7 ' + m.p99_gsu_units + ' GSU p99 (' + m.peak_gsu_units + ' peak)'
+                      : pctText(num(m.est_single_gsu_utilization_pct)) + ' of 1 GSU';
+                  }
+                  var gsuCostCell = DASH;
+                  if (num(m.gsu_1yr_commitment_usd) !== null) {
+                    var spillUsd = num(m.spillover_payg_30d_usd);
+                    gsuCostCell = usdText(num(m.gsu_1yr_commitment_usd), 0) + ' (' + m.recommended_gsu_units + ' GSU' +
+                      (spillUsd !== null && spillUsd >= 1 ? ' + ' + usdText(spillUsd, 0) + ' spillover' : '') + ')';
+                  }
+                  return h('tr', {}, [
+                    h('td', {class: 'mono'}, [m.model]),
+                    h('td', {class: 'mono'}, [loadCell]),
+                    h('td', {class: 'mono'}, [usdText(num(m.payg_30d_run_rate_usd), 0)]),
+                    h('td', {class: 'mono'}, [gsuCostCell]),
+                    h('td', {class: 'mono'}, [pctText(num(m.break_even_progress_pct))]),
+                    h('td', {title: m.recommendation_note || ''}, [
+                      h('span', {class: 'badge vl-nowrap ' + (recBadge[m.recommendation] || 'badge-blue')}, [
+                        recLabel[m.recommendation] || m.recommendation,
+                      ]),
+                    ]),
+                  ]);
+                })),
+              ]),
+            ]),
+            h('div', {class: 'vl-d-note', style: 'margin-top:6px'}, [
+              'Sources (checked ' + String(gsuRef.checked || DASH) + '): ' + String(gsuRef.price_source || DASH) + '; ' +
+              String(gsuRef.throughput_source || DASH) + '.',
+            ]),
+          ]),
+        ]);
+      }
+    }
+
+    // Feature 5 UI: model retirement & right-sizing radar
+    if (mmrBox) {
+      if (!mmr || mmr.status !== 'LIVE' || !Array.isArray(mmr.findings) || !mmr.findings.length) {
+        mmrBox.replaceChildren();
+      } else {
+        var migSnippet = String(mmr.findings[0].migration_snippet || '');
+        var copyMigBtn = migSnippet
+          ? h('button', {type: 'button', class: 'btn btn-xs', onclick: function() { copyText(migSnippet, copyMigBtn); }}, ['Copy top migration'])
+          : null;
+        var headParts = [];
+        var retChange = num(mmr.retirement_cost_change_30d_usd);
+        if (num(mmr.retiring_model_count) > 0) {
+          headParts.push(mmr.retiring_model_count + ' retired or retiring model(s)' + (retChange !== null
+            ? ' (same tokens on the replacements: ' + (retChange > 0 ? '+' : '') + usdText(retChange, 0) + '/30d at list price)' : ''));
+        }
+        if (num(mmr.project_model_savings_30d_usd) > 0) {
+          headParts.push('right-sizing candidates worth ' + usdText(num(mmr.project_model_savings_30d_usd), 0) + '/30d at list price (eval first)');
+        }
+        setKids(mmrBox, [
+          h('div', {class: 'vl-tok-card'}, [
+            h('div', {class: 'vl-tok-head'}, [
+              h('div', {}, [
+                h('h3', {class: 'vl-tok-title'}, ['Model Retirement & Right-Sizing Radar']),
+                h('div', {class: 'vl-d-note'}, [
+                  (headParts.length ? headParts.join('; ') : mmr.finding_count + ' finding(s)') +
+                  '. Lifecycle as of ' + String(mmr.as_of || DASH) + ' (' + String(mmr.lifecycle_source || DASH) + ').',
+                ]),
+              ]),
+              copyMigBtn,
+            ]),
+            h('div', {class: 'table-scroll', style: 'margin-top:8px'}, [
+              h('table', {class: 'vl-mini-table'}, [
+                h('thead', {}, [h('tr', {}, [
+                  h('th', {}, ['Target']),
+                  h('th', {}, ['Current \u2192 Recommended']),
+                  h('th', {}, ['Deadline / gate']),
+                  h('th', {}, ['List-price change (30d)']),
+                  h('th', {}, ['Why']),
+                ])]),
+                h('tbody', {}, mmr.findings.slice(0, 8).map(function(f) {
+                  var chg = num(f.cost_change_30d_usd);
+                  var retired = num(f.days_until_retirement) !== null && f.days_until_retirement <= 0;
+                  var chgNode = DASH;
+                  if (chg !== null) {
+                    if (chg > 0) {
+                      chgNode = h('span', {class: 'badge badge-yellow vl-nowrap', title: 'Replacement list price is higher at the same token volume'}, ['+' + usdText(chg, 0)]);
+                    } else if (chg < 0) {
+                      chgNode = h('span', {class: 'badge badge-green vl-nowrap', title: 'Lower list price at the same token volume'}, ['-' + usdText(Math.abs(chg), 0)]);
+                    } else {
+                      chgNode = '$0';
+                    }
+                  }
+                  return h('tr', {}, [
+                    h('td', {}, [f.subject]),
+                    h('td', {class: 'mono'}, [f.current_model + ' \u2192 ' + (f.recommended_model || DASH)]),
+                    h('td', {class: 'mono'}, [f.retirement_date
+                      ? h('span', {class: 'badge badge-red vl-nowrap'}, [(retired ? 'Retired ' : 'Retires ') + f.retirement_date])
+                      : h('span', {class: 'badge badge-yellow vl-nowrap'}, ['Eval first'])]),
+                    h('td', {class: 'mono'}, [chgNode]),
+                    h('td', {style: 'font-size:11.5px;color:var(--text-secondary)'}, [f.rationale]),
+                  ]);
+                })),
+              ]),
+            ]),
           ]),
         ]);
       }
@@ -3857,6 +4269,7 @@ var VL = (function() {
     var gdu = st.ge_daily_usage || null;
     var days = gdu && Array.isArray(gdu.days) ? gdu.days : [];
     var billingStatus = gdu ? String(gdu.billing_status || 'NOT_CONFIGURED') : null;
+    var br = st.billing_reconciliation || null;
     var fl = rawFleet() || st.ge_fleet || {};
     var mu = fl.model_usage || null;
     var budget = readBudget();
@@ -3873,6 +4286,25 @@ var VL = (function() {
       billedCards.push(kpi('Projected month-end', cs.projection !== null ? usdText(cs.projection) : DASH,
         cs.projection !== null ? 'Run-rate: last ' + cs.avg7Days + ' billed days avg ' + usdText(cs.avg7) + '/day \u00d7 ' + cs.daysRemaining +
           ' days left. A projection, not an invoice forecast.' : 'Needs at least 3 billed days.'));
+      if (br && br.status === 'LIVE' && num(br.effective_savings_rate_pct) !== null) {
+        // Credits are negative in the export; savings read better as positive amounts.
+        var saved = function(v) { var n = num(v); return n === null ? DASH : usdText(Math.abs(n)); };
+        var credSub;
+        if (br.esr_basis === 'LIST_PRICE') {
+          credSub = 'Vs list price ' + usdText(num(br.total_list_usd)) + ': discounts built into prices ' +
+            usdText(num(br.price_discount_usd)) + ' + commitments/SUD ' + saved(br.total_cud_credits_usd) +
+            ' + contract ' + saved(br.total_contract_discount_credits_usd) + '. Promotions excluded.' +
+            (num(br.credit_esr_pct) !== null ? ' Credits alone: ' + pctText(num(br.credit_esr_pct)) + '.' : '');
+        } else {
+          credSub = 'Credits only: commitments/SUD ' + saved(br.total_cud_credits_usd) + ' + contract ' +
+            saved(br.total_contract_discount_credits_usd) + ' on gross ' + usdText(num(br.total_gross_usd)) +
+            '. Promotions excluded. Lower bound: ' + (br.list_price_column === 'absent'
+              ? 'this export has no list prices (cost_at_list).'
+              : 'discounts built into prices are not counted.');
+        }
+        billedCards.push(kpi('Effective Savings Rate (ESR)', pctText(num(br.effective_savings_rate_pct)), credSub,
+          null, num(br.effective_savings_rate_pct) > 0 ? 'vl-kpi-ok' : null));
+      }
       billedCards.push(budgetCard(cs));
       billedCards.push(kpi('Cost per 1k turns \u00b7 7 days', cs.per1kTurns7d !== null ? usdText(cs.per1kTurns7d) : DASH,
         'Billed AI spend \u00f7 Gemini Enterprise turns (finops_mart), last ' + cs.avg7Days + ' billed days.'));
