@@ -401,9 +401,32 @@ async def _tool_lint_agent_finops(session_key: str, args: dict[str, Any]) -> dic
   prev_prompt = str(args.get('previous_prompt') or '')
   curr_prompt = str(args.get('current_prompt') or '')
   model = str(args.get('model') or 'gemini-2.5-flash')
-  paths: list[str] = [file_path] if file_path else []
+  repo_root = os.path.realpath(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+  paths: list[str] = []
+  if file_path:
+    candidate = file_path if os.path.isabs(file_path) else os.path.join(repo_root, file_path)
+    resolved = os.path.realpath(candidate)
+    try:
+      in_workspace = os.path.commonpath([repo_root, resolved]) == repo_root
+    except ValueError:
+      in_workspace = False
+    if not in_workspace:
+      err_report = {
+          'status': 'INVALID_REQUEST',
+          'passed': False,
+          'error': 'file_path must reside within the repository workspace.',
+          'scanned_files_count': 0,
+          'findings_count': 0,
+          'findings': [],
+      }
+      return {
+          'isError': True,
+          'content': [{'type': 'text', 'text': err_report['error']}],
+          'structuredContent': err_report,
+      }
+    paths = [resolved]
   if not paths and not code_snippet.strip():
-    paths = [os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'app')]
+    paths = [os.path.join(repo_root, 'app')]
   report = await asyncio.to_thread(
       cli_lint.lint_code_and_prompts,
       paths=paths,

@@ -337,19 +337,54 @@ def _get_governance_secret() -> str:
     return _EPHEMERAL_SECRET
 
 
-def sign_snooze_token(runtime_id: str, days: int = 7) -> str:
+_SNOOZE_TOKEN_PARAM_RE = re.compile(r'((?:[?&]|&amp;)token=)[^&\s"\'<>]+')
+
+
+def _redact_snooze_tokens(text: str) -> str:
+  """Redacts HMAC token query parameters from URLs and preview strings before public exposure."""
+  return _SNOOZE_TOKEN_PARAM_RE.sub(r'\1REDACTED', str(text or ''))
+
+
+def sign_snooze_token(
+    runtime_id: str,
+    days: int = 7,
+    *,
+    expires_at: int | None = None,
+) -> str:
   """Generates an HMAC-SHA256 signature for a Keep-Alive / Snooze link."""
   secret = _get_governance_secret().encode()
+  if expires_at is not None:
+    exp_int = int(expires_at)
+    msg = f'{runtime_id}:{int(days)}:{exp_int}'.encode()
+    sig = hmac.new(secret, msg, hashlib.sha256).hexdigest()[:32]
+    return f'{exp_int}.{sig}'
   msg = f'{runtime_id}:{int(days)}'.encode()
   return hmac.new(secret, msg, hashlib.sha256).hexdigest()[:32]
 
 
-def verify_snooze_token(runtime_id: str, days: int, token: str) -> bool:
-  """Constant-time verification of a snooze HMAC token."""
-  if not token or not runtime_id:
+def verify_snooze_token(
+    runtime_id: str,
+    days: int,
+    token: str,
+    *,
+    now_ts: int | None = None,
+) -> bool:
+  """Constant-time verification of a snooze HMAC token (supports optional expiry prefix)."""
+  clean_token = str(token or '').strip()
+  if not clean_token or not runtime_id:
     return False
+  if '.' in clean_token:
+    exp_part, sig_part = clean_token.split('.', 1)
+    if not exp_part.isdigit() or not sig_part:
+      return False
+    exp_int = int(exp_part)
+    current_ts = int(now_ts if now_ts is not None else _utcnow().timestamp())
+    if current_ts > exp_int:
+      return False
+    expected = sign_snooze_token(runtime_id, days, expires_at=exp_int)
+    return hmac.compare_digest(expected, clean_token)
   expected = sign_snooze_token(runtime_id, days)
-  return hmac.compare_digest(expected, str(token).strip())
+  return hmac.compare_digest(expected, clean_token)
 
 
 class CostGovernanceService:
@@ -1188,8 +1223,12 @@ class CostGovernanceService:
       return {'status': 'INVALID_REQUEST', 'error': 'Invalid runtime_id.'}
     eff_days = snooze_days if snooze_days is not None else days
     clean_days = max(1, min(int(eff_days or 7), 90))
-    if verify_token and not verify_snooze_token(rid, clean_days, str(token or '')):
-      return {'status': 'FORBIDDEN', 'error': 'Invalid or expired snooze token.'}
+    has_token = bool(str(token or '').strip())
+    if verify_token or has_token:
+      if not verify_snooze_token(rid, clean_days, str(token or '')):
+        return {'status': 'FORBIDDEN', 'error': 'Invalid or expired snooze token.'}
+    else:
+      clean_days = min(clean_days, 7)
     if lookup_bq:
       # The warning may have been issued by another instance: adopt its record before updating it.
       self._load_queue_from_bq_if_needed(force=True)
@@ -1201,6 +1240,11 @@ class CostGovernanceService:
     with self._lock:
       item = self._queue.get(rid)
       if item is None:
+        if not has_token:
+          return {
+              'status': 'NOT_FOUND',
+              'error': f'Runtime {rid} is not in the active clearance queue.',
+          }
         item = {
             'runtime_id': rid,
             'resource_name': rid,
@@ -1612,11 +1656,28 @@ class CostGovernanceService:
     }
 
   def _public_queue_item(self, item: Mapping[str, Any]) -> dict[str, Any]:
-    """Returns a UI-safe clearance queue item with masked creator email."""
+    """Returns a UI-safe clearance queue item with masked creator email and redacted snooze token."""
     out = dict(item)
     out['creator_email_masked'] = mask_email_for_ui(str(item.get('creator_email') or ''))
     out.pop('creator_email', None)
     out.pop('snooze_token', None)
+    if isinstance(out.get('snooze_7d_url'), str):
+      out['snooze_7d_url'] = _redact_snooze_tokens(out['snooze_7d_url'])
+    return out
+
+  def _public_notification_item(self, item: Mapping[str, Any]) -> dict[str, Any]:
+    """Returns a UI-safe notification log entry with HMAC snooze tokens redacted."""
+    out = dict(item)
+    if isinstance(out.get('text_preview'), str):
+      out['text_preview'] = _redact_snooze_tokens(out['text_preview'])
+    if isinstance(out.get('html_preview'), str):
+      out['html_preview'] = _redact_snooze_tokens(out['html_preview'])
+    meta = out.get('metadata')
+    if isinstance(meta, Mapping):
+      clean_meta = dict(meta)
+      if isinstance(clean_meta.get('snooze_7d_url'), str):
+        clean_meta['snooze_7d_url'] = _redact_snooze_tokens(clean_meta['snooze_7d_url'])
+      out['metadata'] = clean_meta
     return out
 
   def compute_governance_score(
@@ -1686,6 +1747,8 @@ class CostGovernanceService:
       items = [self._public_queue_item(v) for v in self._queue.values()]
       notifs = list(self._notifications_log[:15])
       history = list(self._clearance_history[:15])
+    raw_warnings = extra_warnings if extra_warnings is not None else notifs
+    public_warnings = [self._public_notification_item(w) for w in raw_warnings if isinstance(w, Mapping)]
     items.sort(key=lambda x: (str(x.get('status') or ''), -float(x.get('est_monthly_waste_usd') or 0.0)))
     pending_cnt = sum(1 for i in items if i.get('status') in ('PENDING_WARNING', 'WARNED_GRACE_PERIOD'))
     snoozed_cnt = sum(1 for i in items if i.get('status') == 'SNOOZED')
@@ -1715,7 +1778,7 @@ class CostGovernanceService:
             'est_reclaimable_monthly_usd': total_waste,
         },
         'queue': items,
-        'recent_warnings': extra_warnings if extra_warnings is not None else notifs,
+        'recent_warnings': public_warnings,
         'clearance_history': history,
     }
     if include_score:

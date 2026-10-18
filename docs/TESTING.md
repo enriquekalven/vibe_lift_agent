@@ -1,6 +1,6 @@
 # Testing
 
-526 tests across 23 files. They run offline: `GOOGLE_APPLICATION_CREDENTIALS` points at a file that does not
+528 tests across 23 files. They run offline: `GOOGLE_APPLICATION_CREDENTIALS` points at a file that does not
 exist, and every Google Cloud API is replaced by an in-process fake (`FakeGoogleApi` in
 [`tests/test_fleet.py`](../tests/test_fleet.py)), so no live project is touched.
 
@@ -43,7 +43,7 @@ is shown as unknown, never as an invented value. These tests enforce it.
 | No hardcoded project, URL or fake agents | `DeploymentHardeningTest` (`test_unconfigured_project_never_resolves_to_a_real_project`, `test_open_dashboard_does_not_publish_a_hardcoded_url`, `test_real_ge_agents_and_sub_second_mcp_open_dashboard`) |
 | Dependency pins consistent across requirements, constraints and pyproject | `DeploymentHardeningTest.test_dependency_pins_are_consistent` |
 | Dashboard renders; JS is valid; every DOM id the JS uses exists | `FinOpsFrameworkTest.test_http_server_renders_ui_and_executes_rest_api_end_to_end`, `test_dashboard_javascript_syntax_is_valid_and_pip_configured`, `test_all_js_dom_ids_exist_in_rendered_html_and_all_state_keys_surfaced` |
-| MCP and ADK surfaces work (A2A is an agent card only) | `test_mcp_server_sync_dispatch_coverage`, `ProductionAppTest`, `test_adk_agent_tools`, `test_trigger_alpha_evolve_returns_newest_action_and_telemetry_hours` |
+| MCP, ADK and A2A (`/a2a/app`) surfaces work | `test_mcp_server_sync_dispatch_coverage`, `ProductionAppTest`, `test_adk_agent_tools`, `test_trigger_alpha_evolve_returns_newest_action_and_telemetry_hours` |
 | **Invalid ingest is rejected, not stored.** HTTP 422 with reasons; values-free dead letters | `test_ingest_validation.py` |
 | **The optimizer is labeled a simulator** everywhere it surfaces (UI, MCP, ADK, agent card, docs) | `test_simulator_labels.py` |
 | Billing errors are visible with a fix hint; per-user cost is a labeled list-price estimate | `test_cost_visibility.py` |

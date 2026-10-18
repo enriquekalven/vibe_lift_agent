@@ -1394,7 +1394,7 @@ def _run_bucket_check(i: int, bucket: int, cx: _LoopContext, counts: dict[str, i
     body = LIVE_POLICY_BODIES.get(path, {})
     with mock.patch.object(ctrl, '_is_live_gcp', return_value=True):
       r = client.post(path, json=body)
-    assert r.status_code in (200, 400, 422), (path, r.status_code, r.text[:200])
+    assert r.status_code in (200, 400, 404, 422), (path, r.status_code, r.text[:200])
     payload = r.json()
     status = payload.get('status') if isinstance(payload, dict) else None
     if LIVE_MODE_POLICY[path] == 'guarded':

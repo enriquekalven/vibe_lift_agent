@@ -668,14 +668,16 @@ class FinOpsRuntimeController:
       token: str,
       snooze_days: int | None = None,
       actor: str = 'owner_link',
+      *,
+      require_token: bool = False,
   ) -> dict[str, Any]:
-    """Verifies an HMAC snooze token (if provided) and snoozes scheduled clearance for a runtime."""
+    """Verifies an HMAC snooze token (required on GET links; verified if present on POST) and snoozes clearance."""
     self.cost_governance.project_id = self.gcp_telemetry.project_id
     return self.cost_governance.snooze_runtime(
         runtime_id=runtime_key,
         days=snooze_days or 7,
         token=token,
-        verify_token=bool(token),
+        verify_token=True if require_token else bool(token),
         lookup_bq=self._is_live_gcp(),
         persist_to_bq=self._is_live_gcp(),
         actor=actor,
@@ -835,7 +837,12 @@ class FinOpsRuntimeController:
       enabled = ge_fleet.parse_bool(raw_enabled)
     raw_sens = raw.get('sensitive_logging')
     if raw_sens is None:
-      sensitive_logging = enabled
+      env_sens = os.environ.get('FINOPS_DEFAULT_SENSITIVE_LOGGING')
+      sensitive_logging = (
+          enabled and ge_fleet.parse_bool(env_sens)
+          if env_sens is not None
+          else enabled
+      )
     elif isinstance(raw_sens, bool):
       sensitive_logging = raw_sens
     else:
@@ -1467,6 +1474,8 @@ class FinOpsRequestHandler(http.server.BaseHTTPRequestHandler):
     path = parsed.path
     try:
       self._handle_get(parsed, path)
+    except (BrokenPipeError, ConnectionResetError):
+      return
     except Exception as exc:  # pylint: disable=broad-except
       self._send_json(build_code_error_response(f'GET {path}', exc), status=500)
 
@@ -1549,8 +1558,11 @@ class FinOpsRequestHandler(http.server.BaseHTTPRequestHandler):
           runtime_key=r_key,
           token=token,
           snooze_days=days_val if days_ok else 7,
+          actor='owner_link',
+          require_token=True,
       )
-      self._send_json(res, status=403 if res.get('status') == 'FORBIDDEN' else 200)
+      status_code = 403 if res.get('status') == 'FORBIDDEN' else (404 if res.get('status') == 'NOT_FOUND' else 200)
+      self._send_json(res, status=status_code)
       return
     if path == '/api/gcp_telemetry':
       self._send_json(srv.controller.gcp_telemetry.get_telemetry_summary_payload())
@@ -1697,8 +1709,11 @@ class FinOpsRequestHandler(http.server.BaseHTTPRequestHandler):
           runtime_key=r_key,
           token=token,
           snooze_days=days_val if days_ok else 7,
+          actor='dashboard_ui',
+          require_token=False,
       )
-      self._send_json(res, status=403 if res.get('status') == 'FORBIDDEN' else 200)
+      status_code = 403 if res.get('status') == 'FORBIDDEN' else (404 if res.get('status') == 'NOT_FOUND' else 200)
+      self._send_json(res, status=status_code)
       return
     if self.path in ('/api/governance/executive_digest', '/api/cron/send_executive_digest'):
       send_flag = ge_fleet.parse_bool(body.get('send_email', True))
@@ -1957,9 +1972,13 @@ def register_api_routes(app: Any, controller: FinOpsRuntimeController) -> None:
         runtime_key=r_key,
         token=str(token or '').strip(),
         snooze_days=days_val if days_ok else 7,
+        actor='owner_link',
+        require_token=True,
     )
     if res.get('status') == 'FORBIDDEN':
       return JSONResponse(status_code=403, content=res)
+    if res.get('status') == 'NOT_FOUND':
+      return JSONResponse(status_code=404, content=res)
     return res
 
   @app.post('/api/governance/snooze')
@@ -1976,9 +1995,13 @@ def register_api_routes(app: Any, controller: FinOpsRuntimeController) -> None:
         runtime_key=r_key,
         token=str(body.get('token') or '').strip(),
         snooze_days=days_val if days_ok else 7,
+        actor='dashboard_ui',
+        require_token=False,
     )
     if res.get('status') == 'FORBIDDEN':
       return JSONResponse(status_code=403, content=res)
+    if res.get('status') == 'NOT_FOUND':
+      return JSONResponse(status_code=404, content=res)
     return res
 
   @app.get('/api/governance/executive_digest')

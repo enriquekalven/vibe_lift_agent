@@ -4761,6 +4761,22 @@ var VL = (function() {
     document.addEventListener('keydown', function(ev) {
       if (ev.key === 'Escape' && paletteOpen()) { closePalette(); return; }
       if (ev.key === 'Escape' && openState) { closeAgent(); return; }
+      if (ev.key === 'Escape') {
+        var inlineDrawers = [
+          ['nl2sqlCopilotDrawer', 'toggleNl2SqlBtn'],
+          ['telemetryValidatorDrawer', 'toggleTelemetryValidatorBtn'],
+          ['agentObsDrawer', 'toggleObsScriptBtn']
+        ];
+        for (var dIdx = 0; dIdx < inlineDrawers.length; dIdx++) {
+          var drw = byId(inlineDrawers[dIdx][0]);
+          if (drw && !drw.classList.contains('hidden')) {
+            drw.classList.add('hidden');
+            var tBtn = byId(inlineDrawers[dIdx][1]);
+            if (tBtn) tBtn.setAttribute('aria-expanded', 'false');
+            return;
+          }
+        }
+      }
       var tag = ev.target && ev.target.tagName;
       var typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (ev.target && ev.target.isContentEditable);
       if (ev.key === '/' && !typing && !ev.metaKey && !ev.ctrlKey) {

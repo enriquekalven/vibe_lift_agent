@@ -1147,7 +1147,70 @@ class GovernanceEmailAndSchedulingTest(unittest.TestCase):
         self.assertTrue(embedded_gov["accountability"]["sum_check_ok"])
         self.assertGreaterEqual(embedded_gov["accountability"]["measured_points_possible"], 88)
 
+    def test_snooze_token_redaction_expiry_and_route_guards(self) -> None:
+        # 1. Timestamped token expiry verification
+        exp_future = int((datetime.now(UTC) + timedelta(days=7)).timestamp())
+        exp_past = int((datetime.now(UTC) - timedelta(seconds=10)).timestamp())
+        tok_future = sign_snooze_token("re-exp-1", days=7, expires_at=exp_future)
+        tok_past = sign_snooze_token("re-exp-1", days=7, expires_at=exp_past)
+        self.assertTrue(verify_snooze_token("re-exp-1", 7, tok_future))
+        self.assertFalse(verify_snooze_token("re-exp-1", 7, tok_past))
+
+        # 2. Public queue & recent_warnings redact HMAC token query param
+        import fastapi
+        from fastapi.testclient import TestClient
+
+        from finops_dashboard.server import register_api_routes
+
+        ctrl = FinOpsRuntimeController()
+        fake_fleet = {
+            "status": "OK",
+            "unregistered_runtimes": [_idle_engine("re-55443322")],
+            "agents": [],
+        }
+        app = fastapi.FastAPI()
+        register_api_routes(app, ctrl)
+        client = TestClient(app)
+
+        with patch.object(ctrl, "get_fleet_payload", return_value=fake_fleet):
+            r_warn = client.post(
+                "/api/governance/evaluate_idle",
+                json={"send_warnings": True, "dry_run_email": True},
+            )
+            self.assertEqual(r_warn.status_code, 200)
+            warn_data = r_warn.json()
+            q_item = warn_data["queue"][0]
+            self.assertNotIn("snooze_token", q_item)
+            self.assertTrue(q_item["snooze_7d_url"].endswith("token=REDACTED"))
+            notif = warn_data["recent_warnings"][0]
+            self.assertNotIn(sign_snooze_token("re-55443322", 7), notif["text_preview"])
+            self.assertIn("token=REDACTED", notif["text_preview"])
+            self.assertIn("token=REDACTED", notif["html_preview"])
+            self.assertTrue(notif["metadata"]["snooze_7d_url"].endswith("token=REDACTED"))
+
+            # 3. GET /api/governance/snooze without token is rejected with 403
+            r_get_no_tok = client.get("/api/governance/snooze?runtime_id=re-55443322&days=7")
+            self.assertEqual(r_get_no_tok.status_code, 403)
+
+            # 4. Tokenless POST /api/governance/snooze on unqueued phantom ID is rejected with 404
+            r_post_phantom = client.post(
+                "/api/governance/snooze",
+                json={"runtime_id": "re-phantom-999", "days": 90},
+            )
+            self.assertEqual(r_post_phantom.status_code, 404)
+            self.assertNotIn("re-phantom-999", ctrl.cost_governance._queue)
+
+            # 5. Tokenless POST /api/governance/snooze on queued runtime succeeds and caps days at 7
+            r_post_queued = client.post(
+                "/api/governance/snooze",
+                json={"runtime_id": "re-55443322", "days": 90},
+            )
+            self.assertEqual(r_post_queued.status_code, 200)
+            self.assertEqual(r_post_queued.json()["days"], 7)
+            self.assertEqual(r_post_queued.json()["governance_status"], "SNOOZED")
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

@@ -1272,12 +1272,12 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
             <span class="badge badge-blue">L1 Infra &bull; L2 LLM &bull; L3 ADK &bull; L4 A2A &bull; L5 A2UI</span>
           </div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;">
-            <button class="btn" onclick="setOtelLayerFilter('ALL')">All 5 Layers (26)</button>
-            <button class="btn" onclick="setOtelLayerFilter('L1_INFRA')">L1: Infra</button>
-            <button class="btn" onclick="setOtelLayerFilter('L2_LLM')">L2: LLM</button>
-            <button class="btn" onclick="setOtelLayerFilter('L3_ADK')">L3: ADK</button>
-            <button class="btn" onclick="setOtelLayerFilter('L4_A2A')">L4: A2A</button>
-            <button class="btn" onclick="setOtelLayerFilter('L5_A2UI')">L5: A2UI</button>
+            <button class="btn active" data-otel-layer="ALL" aria-pressed="true" onclick="setOtelLayerFilter('ALL')">All 5 Layers (26)</button>
+            <button class="btn" data-otel-layer="L1_INFRA" aria-pressed="false" onclick="setOtelLayerFilter('L1_INFRA')">L1: Infra</button>
+            <button class="btn" data-otel-layer="L2_LLM" aria-pressed="false" onclick="setOtelLayerFilter('L2_LLM')">L2: LLM</button>
+            <button class="btn" data-otel-layer="L3_ADK" aria-pressed="false" onclick="setOtelLayerFilter('L3_ADK')">L3: ADK</button>
+            <button class="btn" data-otel-layer="L4_A2A" aria-pressed="false" onclick="setOtelLayerFilter('L4_A2A')">L4: A2A</button>
+            <button class="btn" data-otel-layer="L5_A2UI" aria-pressed="false" onclick="setOtelLayerFilter('L5_A2UI')">L5: A2UI</button>
           </div>
         </div>
         <div class="table-scroll">
@@ -1743,7 +1743,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
           <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
             <button type="button" class="btn" id="govWarnBtn" onclick="triggerGovernanceWarn(false)">Evaluate Idle Queue</button>
             <button type="button" class="btn" id="govSendWarnBtn" onclick="triggerGovernanceWarn(true)">Send Stage 1 Warnings</button>
-            <button type="button" class="btn" id="govClearDryRunBtn" onclick="triggerScheduledClearance(true)">Run Stage 2 Clearance (Dry-Run)</button>
+            <button type="button" class="btn" id="govClearDryRunBtn" onclick="triggerScheduledClearance('dry_run')">Run Stage 2 Clearance (Dry-Run)</button>
             <button type="button" class="btn" id="govDigestPreviewBtn" onclick="previewExecutiveDigest(false)">Preview Executive Digest</button>
           </div>
         </div>
@@ -1757,9 +1757,11 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
               <tr>
                 <th>Runtime &amp; Kind</th>
                 <th>Creator (Cloud Audit Log)</th>
+                <th>Idle Signal</th>
                 <th>First Flagged Idle</th>
                 <th>Grace Window &amp; Scheduled Action</th>
                 <th>Lifecycle Status</th>
+                <th>Est. Waste</th>
                 <th>Keep Alive / Snooze</th>
               </tr>
             </thead>
@@ -2659,9 +2661,9 @@ __FINOPS_ENHANCEMENTS_JS__
       if (isEmbedded() || hydratedLazyTabs[tab]) return;
       try {
         if (tab === 4 && currentState && currentState.lite_boot && !currentState.user_centric_finops) {
-          hydratedLazyTabs[tab] = true;
           const res = await fetch('/api/user_centric_finops?window_hours=' + encodeURIComponent(fleetWindowHours), {cache: 'no-store', credentials: 'same-origin'});
           if (res.ok) {
+            hydratedLazyTabs[tab] = true;
             const payload = await res.json();
             if (currentState) {
               currentState.user_centric_finops = payload;
@@ -2674,9 +2676,9 @@ __FINOPS_ENHANCEMENTS_JS__
             }
           }
         } else if (tab === 7 && currentState && currentState.lite_boot && !currentState.antigravity_finops) {
-          hydratedLazyTabs[tab] = true;
           const res = await fetch('/api/antigravity_finops?window_days=30', {cache: 'no-store', credentials: 'same-origin'});
           if (res.ok) {
+            hydratedLazyTabs[tab] = true;
             const payload = await res.json();
             if (currentState) {
               currentState.antigravity_finops = payload;
@@ -2752,6 +2754,9 @@ __FINOPS_ENHANCEMENTS_JS__
 
       const polyPoints = points.map((p, i) => `${xFor(i).toFixed(1)},${yFor(Number(p[key])).toFixed(1)}`).join(' ');
       const targetY = yFor(targetVal).toFixed(1);
+      const safeUnit = esc(unit);
+      const safeColor = esc(color);
+      const safeTargetVal = esc(targetVal);
 
       let circlesHtml = '';
       points.forEach((p, i) => {
@@ -2761,14 +2766,14 @@ __FINOPS_ENHANCEMENTS_JS__
           String(p.timestamp_label || '').includes('Rej') ||
           String(p.event_marker || '').includes('Rejected') ||
           String(p.event_marker || '').includes('Blocked');
-        const dotColor = isRejected ? '#991b1b' : color;
+        const dotColor = isRejected ? '#991b1b' : safeColor;
         circlesHtml += `
           <circle cx="${cx}" cy="${cy}" r="${isRejected ? 5.5 : 4}" fill="${dotColor}" stroke="#fff" stroke-width="1.5"/>
           <text x="${cx}" y="${(Number(cy) - 8).toFixed(1)}" text-anchor="middle" font-size="10.5" font-weight="600" fill="${dotColor}">
-            ${unit === '$' ? '$' + Number(p[key]).toFixed(1) : Number(p[key]) + unit}
+            ${unit === '$' ? '$' + Number(p[key]).toFixed(1) : Number(p[key]) + safeUnit}
           </text>
           <text x="${cx}" y="${h - 8}" text-anchor="middle" font-size="10" fill="#475569">
-            ${p.timestamp_label}
+            ${esc(p.timestamp_label)}
           </text>
         `;
       });
@@ -2777,9 +2782,9 @@ __FINOPS_ENHANCEMENTS_JS__
         <svg viewBox="0 0 ${w} ${h}" width="100%" height="155">
           <line x1="${padL}" y1="${targetY}" x2="${w - padR}" y2="${targetY}" stroke="#64748b" stroke-dasharray="4,4" stroke-width="1.2"/>
           <text x="${w - padR}" y="${(Number(targetY) - 4).toFixed(1)}" text-anchor="end" font-size="9.5" fill="#475569" font-weight="600">
-            Target Goal: ${unit === '$' ? '$' + targetVal : targetVal + unit}
+            Target Goal: ${unit === '$' ? '$' + safeTargetVal : safeTargetVal + safeUnit}
           </text>
-          <polyline fill="none" stroke="${color}" stroke-width="2.2" points="${polyPoints}"/>
+          <polyline fill="none" stroke="${safeColor}" stroke-width="2.2" points="${polyPoints}"/>
           ${circlesHtml}
         </svg>
       `;
@@ -3089,8 +3094,10 @@ __FINOPS_ENHANCEMENTS_JS__
 
     function toggleNl2SqlDrawer() {
       const drawer = document.getElementById('nl2sqlCopilotDrawer');
+      const btn = document.getElementById('toggleNl2SqlBtn');
       if (drawer) {
-        drawer.classList.toggle('hidden');
+        const isHidden = drawer.classList.toggle('hidden');
+        if (btn) btn.setAttribute('aria-expanded', String(!isHidden));
         notifyHostSizeChanged();
       }
     }
@@ -3158,6 +3165,11 @@ __FINOPS_ENHANCEMENTS_JS__
 
     function setOtelLayerFilter(layerId) {
       currentOtelLayerFilter = layerId || 'ALL';
+      document.querySelectorAll('[data-otel-layer]').forEach(function(btn) {
+        const isActive = btn.getAttribute('data-otel-layer') === currentOtelLayerFilter;
+        btn.classList.toggle('active', isActive);
+        btn.setAttribute('aria-pressed', String(isActive));
+      });
       if (currentState && currentState.otel_catalog) {
         renderOtelCatalog(currentState.otel_catalog);
       }
@@ -3165,8 +3177,10 @@ __FINOPS_ENHANCEMENTS_JS__
 
     function toggleTelemetryValidatorDrawer() {
       const drawer = document.getElementById('telemetryValidatorDrawer');
+      const btn = document.getElementById('toggleTelemetryValidatorBtn');
       if (drawer) {
-        drawer.classList.toggle('hidden');
+        const isHidden = drawer.classList.toggle('hidden');
+        if (btn) btn.setAttribute('aria-expanded', String(!isHidden));
         notifyHostSizeChanged();
       }
     }
@@ -5372,8 +5386,13 @@ __FINOPS_ENHANCEMENTS_JS__
     // ---------------------------------------------------------------------------
     const FLEET_TOOL = 'query_ge_agent_fleet';
     const FLEET_REFRESH_MS = 60000;
-    let fleetWindowHours = VL.urlWindowHours() || 24;
-    let userSelectedWindow = VL.urlWindowHours() > 0;
+    let storedFleetWindowHours = 0;
+    try {
+      const rawStoredWin = Number(localStorage.getItem('finops.fleetWindowHours'));
+      if ([1, 6, 24, 168, 720].indexOf(rawStoredWin) >= 0) storedFleetWindowHours = rawStoredWin;
+    } catch (e) {}
+    let fleetWindowHours = VL.urlWindowHours() || storedFleetWindowHours || 24;
+    let userSelectedWindow = (VL.urlWindowHours() > 0) || (storedFleetWindowHours > 0);
     let fleetTimer = null;
     let fleetRefreshMode = 'pending';  // 'host' (MCP App bridge), 'http' (direct API), 'snapshot'
     let lastFleet = null;
@@ -7118,9 +7137,11 @@ __FINOPS_ENHANCEMENTS_JS__
 
     function toggleAgentObsDrawer() {
       const drawer = document.getElementById('agentObsDrawer');
+      const btn = document.getElementById('toggleObsScriptBtn');
       if (!drawer) return;
       const wasHidden = drawer.classList.contains('hidden');
       drawer.classList.toggle('hidden', !wasHidden);
+      if (btn) btn.setAttribute('aria-expanded', String(wasHidden));
       if (wasHidden) {
         // Rebuilt on every open so the project and engine values match the latest fleet.
         const info = buildClientObsScript(null, true, false, null);
@@ -7610,16 +7631,26 @@ __FINOPS_ENHANCEMENTS_JS__
       });
     }
 
-    async function triggerGovernanceWarn() {
+    async function triggerGovernanceWarn(sendWarnings) {
+      const doSend = Boolean(sendWarnings);
       const note = document.getElementById('govStatusNote');
-      if (note) note.textContent = 'Evaluating fleet idle telemetry & dispatching Stage 1 warnings…';
+      if (note) {
+        note.textContent = doSend
+          ? 'Evaluating fleet idle telemetry & dispatching Stage 1 warnings…'
+          : 'Evaluating fleet idle telemetry (read-only)…';
+      }
       try {
         const res = await fetch('/api/governance/evaluate_idle', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({send_warnings: true, dry_run_email: true}),
+          body: JSON.stringify({send_warnings: doSend, dry_run_email: !doSend}),
         });
         const data = await res.json();
+        if (!res.ok || isNonStateErrorPayload(data)) {
+          classifyAndShowApiError('/api/governance/evaluate_idle', res.status, data, null);
+          if (note) note.textContent = 'Stage 1 evaluation failed: HTTP ' + res.status;
+          return;
+        }
         const govPayload = (data && data.cost_governance) ? data.cost_governance : data;
         if (govPayload) renderCostGovernance(govPayload);
         if (note) {
@@ -7632,18 +7663,24 @@ __FINOPS_ENHANCEMENTS_JS__
     }
 
     async function triggerScheduledClearance(mode) {
+      const cleanMode = (mode === true || !mode) ? 'dry_run' : String(mode);
       const note = document.getElementById('govStatusNote');
-      if (note) note.textContent = 'Executing Stage 2 scheduled clearance (' + mode + ')…';
+      if (note) note.textContent = 'Executing Stage 2 scheduled clearance (' + cleanMode + ')…';
       try {
         const res = await fetch('/api/governance/execute_clearance', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({mode: mode || 'dry_run'}),
+          body: JSON.stringify({mode: cleanMode}),
         });
         const data = await res.json();
+        if (!res.ok || isNonStateErrorPayload(data)) {
+          classifyAndShowApiError('/api/governance/execute_clearance', res.status, data, null);
+          if (note) note.textContent = 'Stage 2 clearance failed: HTTP ' + res.status;
+          return;
+        }
         if (data && data.cost_governance) renderCostGovernance(data.cost_governance);
         if (note) {
-          const execMode = String((data && data.mode_executed) || mode || 'dry_run');
+          const execMode = String((data && data.mode_executed) || cleanMode || 'dry_run');
           if (execMode === 'dry_run') {
             const wouldClear = Number((data && data.would_clear_count) || 0);
             const totalActions = Array.isArray(data && data.actions) ? data.actions.length : wouldClear;
@@ -7667,6 +7704,10 @@ __FINOPS_ENHANCEMENTS_JS__
           body: JSON.stringify({runtime_id: runtimeId, days: 7}),
         });
         const data = await res.json();
+        if (!res.ok || isNonStateErrorPayload(data)) {
+          if (note) note.textContent = 'Snooze rejected: ' + String((data && data.error) || ('HTTP ' + res.status));
+          return;
+        }
         if (data && data.cost_governance) renderCostGovernance(data.cost_governance);
         if (note) {
           note.textContent = data && data.status === 'OK'
@@ -7689,6 +7730,11 @@ __FINOPS_ENHANCEMENTS_JS__
           body: JSON.stringify({cadence: 'daily', dry_run: !sendNotifications}),
         });
         const data = await res.json();
+        if (!res.ok || isNonStateErrorPayload(data)) {
+          classifyAndShowApiError('/api/cron/send_executive_digest', res.status, data, null);
+          if (note) note.textContent = 'Executive Digest preview failed: HTTP ' + res.status;
+          return;
+        }
         if (box && data) {
           box.replaceChildren();
           box.classList.remove('hidden');
@@ -7731,6 +7777,10 @@ __FINOPS_ENHANCEMENTS_JS__
           body: JSON.stringify({window_hours: fleetWindowHours}),
         });
         const data = await res.json();
+        if (!res.ok || isNonStateErrorPayload(data)) {
+          classifyAndShowApiError('/api/sync_gcp_telemetry', res.status, data, null);
+          return;
+        }
         renderState(data.state || data);
         await refreshFleet(true);
       } catch (err) {

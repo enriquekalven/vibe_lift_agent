@@ -277,20 +277,29 @@ CREATE TABLE IF NOT EXISTS \`${PROJECT_ID}.${DATASET_ID}.agent_registry_snapshot
 echo "Creating table ${DATASET_ID}.zombie_clearance_queue..."
 bq query --use_legacy_sql=false --project_id="${PROJECT_ID}" "
 CREATE TABLE IF NOT EXISTS \`${PROJECT_ID}.${DATASET_ID}.zombie_clearance_queue\` (
-  resource_id STRING,
+  runtime_id STRING,
+  resource_name STRING,
+  runtime_kind STRING,
   display_name STRING,
-  kind STRING,
-  region STRING,
+  project_id STRING,
+  location STRING,
+  finops_status STRING,
   creator_email STRING,
   first_flagged_idle_at TIMESTAMP,
   warning_sent_at TIMESTAMP,
   scheduled_clearance_at TIMESTAMP,
   snoozed_until TIMESTAMP,
   status STRING,
-  estimated_monthly_Floor_usd FLOAT64,
-  idle_reason STRING,
+  recommended_action STRING,
+  action_command STRING,
+  est_monthly_waste_usd FLOAT64,
+  vcpu_hours FLOAT64,
+  memory_gib_hours FLOAT64,
+  billable_instance_hours FLOAT64,
   updated_at TIMESTAMP
-);
+)
+PARTITION BY DATE(updated_at)
+CLUSTER BY project_id, runtime_id, status;
 "
 
 # View: vw_fleet_finops_summary

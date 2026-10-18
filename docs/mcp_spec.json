@@ -6,7 +6,7 @@
   "tools": [
     {
       "name": "open_dashboard",
-      "description": "CRITICAL: Always call this tool FIRST whenever the user asks to see, open, launch, or inspect the FinOps dashboard, FinOps and Tokenomics dashboard, FinOps MCP dashboard, or FinOps & Tokenomics Analytics Dashboard, or asks for the Gemini Enterprise agent fleet, agent telemetry, prompt cache economics, or AlphaEvolve optimization in the interactive UI. Opens the interactive dashboard in the side panel or full screen: every agent deployed on the Gemini Enterprise app with live Cloud Monitoring and Cloud Logging telemetry, plus the AlphaEvolve optimization studio.",
+      "description": "CRITICAL: Always call this tool FIRST whenever the user asks to see, open, launch, or inspect the FinOps dashboard, FinOps and Tokenomics dashboard, FinOps MCP dashboard, or FinOps & Tokenomics Analytics Dashboard, or asks for the Gemini Enterprise agent fleet, standalone/unregistered agents (Vertex AI Agent Engine, Cloud Run, GKE), MCP servers, Skills/tools, agent telemetry, prompt cache economics, user-centric FinOps, or the optimizer simulator in the interactive UI. Opens the interactive dashboard in the right side panel (with a Fullscreen button): every agent registered in Gemini Enterprise PLUS standalone/unregistered Agent Engines, Cloud Run services, GKE workloads, Skills, and MCP servers.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -20,7 +20,7 @@
           },
           "window_hours": {
             "type": "integer",
-            "description": "Telemetry window for the live fleet in hours (1-720, default 24)."
+            "description": "Telemetry window for the live fleet in hours (1-8760, default 24; e.g. 1, 6, 24, 168, 720, 2160, 4320, 8760)."
           }
         }
       }
@@ -40,13 +40,13 @@
     },
     {
       "name": "query_ge_agent_fleet",
-      "description": "Lists every agent deployed on the Gemini Enterprise app (ADK agents on Vertex AI Agent Engine, A2A agents, and Google-managed agents) with live telemetry aggregated from Cloud Monitoring and Cloud Logging: requests, 4xx/5xx errors, p50/p95 latency, LLM calls, input/output tokens, conversations, and last activity, plus project-wide Vertex AI model token usage and estimated cost.",
+      "description": "Lists every agent deployed on the Gemini Enterprise app PLUS standalone/unregistered runtimes across the GCP project (standalone Vertex AI Agent Engines, zombie/idle engines, Cloud Run agents, MCP servers, Skill backends, GKE agent/inference workloads, and Cloud Trace Skills/MCP tool spans) with live telemetry aggregated from Cloud Monitoring, Cloud Logging, and Cloud Trace.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "window_hours": {
             "type": "integer",
-            "description": "Telemetry window in hours (1-720, default 24; e.g. 1, 6, 24, 168)."
+            "description": "Telemetry window in hours (1-8760, default 24; e.g. 1, 6, 24, 168, 720, 2160, 4320, 8760)."
           },
           "force_refresh": {
             "type": "boolean",
@@ -57,25 +57,29 @@
     },
     {
       "name": "calculate_prompt_cache_economics",
-      "description": "Calculates prompt cache hit ratio and net dollar savings vs naive rate cards for Google Cloud Gemini models (gemini-3.8-flash, gemini-2.5-flash, gemini-2.5-pro, gemini-1.5-flash, gemini-1.5-pro, gemini-3.1-flash).",
+      "description": "Prices the token counts you pass at Vertex AI list price (an estimate, not billed cost) and returns the cache hit ratio and the saving versus no caching. Omitted output or thought counts are 0. A model without a rate card is returned unpriced.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "prompt_token_count": {
             "type": "integer",
-            "description": "Total prompt token count."
+            "description": "Total prompt (input) token count, including cached tokens."
           },
           "cached_content_token_count": {
             "type": "integer",
-            "description": "Number of tokens read from Gemini prompt cache."
+            "description": "Number of input tokens read from the prompt cache."
           },
           "output_token_count": {
             "type": "integer",
-            "description": "Number of generated candidate tokens (defaults to 500)."
+            "description": "Generated output tokens (0 if omitted)."
+          },
+          "thoughts_token_count": {
+            "type": "integer",
+            "description": "Thinking tokens billed as output (0 if omitted)."
           },
           "model": {
             "type": "string",
-            "description": "Gemini model identifier (e.g. 'gemini-2.5-flash')."
+            "description": "Model id with a rate card (default 'gemini-2.5-flash')."
           }
         },
         "required": [
@@ -86,30 +90,31 @@
     },
     {
       "name": "lint_agent_finops",
-      "description": "Runs the standalone FinOps AST Linter (FIN-01..FIN-05) on Python agent code and optionally runs the character-level Prompt Cache X-Ray & AlphaEvolve cache-friendly rewriter across two prompt turns.",
+      "description": "Scans Python agent code for FinOps anti-patterns (FIN-01 missing thinking_budget cap, FIN-02 unbounded conversation history, FIN-03 volatile timestamp/UUID in system prompt prefix, FIN-04 Pro model without Flash tier router, FIN-05 LLM call missing retry/backoff) and optionally runs Prompt Cache X-Ray diffing between two prompt snapshots.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "code_snippet": {
             "type": "string",
-            "description": "Python source code of an ADK / Vertex AI / LangChain agent to scan for FinOps anti-patterns."
+            "description": "Optional inline Python source code to scan for FinOps AST findings."
+          },
+          "file_path": {
+            "type": "string",
+            "description": "Optional Python file or directory path within the repository workspace to scan (defaults to app/)."
           },
           "previous_prompt": {
             "type": "string",
-            "description": "Optional Turn N-1 prompt text for character-level Prompt Cache X-Ray."
+            "description": "Optional Turn N-1 prompt text for Prompt Cache X-Ray diffing."
           },
           "current_prompt": {
             "type": "string",
-            "description": "Optional Turn N prompt text for character-level Prompt Cache X-Ray."
+            "description": "Optional Turn N prompt text for Prompt Cache X-Ray diffing."
           },
           "model": {
             "type": "string",
-            "description": "Model identifier for cache savings calculation (default 'gemini-2.5-flash')."
+            "description": "Model rate card for token cache pricing (default 'gemini-2.5-flash')."
           }
-        },
-        "required": [
-          "code_snippet"
-        ]
+        }
       }
     },
     {
@@ -118,6 +123,87 @@
       "inputSchema": {
         "type": "object",
         "properties": {}
+      }
+    },
+    {
+      "name": "xray_prompt_cache",
+      "description": "Compares two snapshots of the same prompt (pasted text, or two logged turns by event id) and finds the exact character where the cacheable prefix breaks, the cache-buster on that line (timestamp, UUID, user e-mail, JSON key order, whitespace), the static tokens stranded behind it and their cost per 1,000 requests from the rate card, plus a reordered prompt whose cached share is re-measured.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "previous_prompt": {
+            "type": "string",
+            "description": "Prompt text from turn N-1."
+          },
+          "current_prompt": {
+            "type": "string",
+            "description": "Prompt text from turn N."
+          },
+          "previous_event_id": {
+            "type": "string",
+            "description": "Instead of text: event id of a logged turn from list_prompt_snapshot_turns."
+          },
+          "current_event_id": {
+            "type": "string",
+            "description": "Event id of the later logged turn."
+          },
+          "model": {
+            "type": "string",
+            "description": "Rate card model (default 'gemini-2.5-flash')."
+          },
+          "monthly_requests": {
+            "type": "integer",
+            "description": "Optional request volume per month; without it no monthly figure is given."
+          },
+          "current_input_tokens": {
+            "type": "integer",
+            "description": "Optional logged input token count of the current prompt, for grounded token figures."
+          }
+        }
+      }
+    },
+    {
+      "name": "list_prompt_snapshot_turns",
+      "description": "Lists recent OTel GenAI turns whose system instruction and input messages were logged to Cloud Storage, so xray_prompt_cache can compare two of them. Opt-in (FINOPS_PROMPT_XRAY_LIVE).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "set_agent_trace_logging",
+      "description": "Enables or disables Discovery Engine trace logging (observabilityConfig: observabilityEnabled and sensitiveLoggingEnabled) on one Gemini Enterprise agent, or on all registered agents (optionally only No-Code / Low-Code agents). This changes live agent settings: only call it when the user explicitly asks to enable or disable trace logging, and pass resource_name for a single agent (omitting it updates every registered agent). Runs as the server service account, which needs discoveryengine.agents.update.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "true to enable trace logging, false to disable it."
+          },
+          "resource_name": {
+            "type": "string",
+            "description": "Full agent resource name (projects/.../locations/.../collections/.../engines/.../assistants/.../agents/...). Omit to update every registered agent."
+          },
+          "only_low_code": {
+            "type": "boolean",
+            "description": "With no resource_name, only update No-Code / Low-Code agents."
+          },
+          "sensitive_logging": {
+            "type": "boolean",
+            "description": "Also log prompts and responses (defaults to the value of enabled unless FINOPS_DEFAULT_SENSITIVE_LOGGING overrides it)."
+          },
+          "engine_id": {
+            "type": "string",
+            "description": "Optional 'engine_id' or 'location/engine_id' to limit a bulk update."
+          },
+          "location": {
+            "type": "string",
+            "description": "Optional Discovery Engine location."
+          }
+        },
+        "required": [
+          "enabled"
+        ]
       }
     }
   ]

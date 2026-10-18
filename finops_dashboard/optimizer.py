@@ -17,7 +17,8 @@ NL2SQL_MAX_BYTES_BILLED = 100 * 1024 * 1024
 
 _NL2SQL_FORBIDDEN_KEYWORDS = re.compile(
     r'\b(INSERT|UPDATE|DELETE|MERGE|DROP|ALTER|CREATE|REPLACE|TRUNCATE|GRANT|REVOKE|'
-    r'CALL|EXECUTE|EXPORT|LOAD|DECLARE|SET|BEGIN|COMMIT|ROLLBACK)\b',
+    r'CALL|EXECUTE|EXPORT|LOAD|DECLARE|SET|BEGIN|COMMIT|ROLLBACK|'
+    r'EXTERNAL_QUERY|INFORMATION_SCHEMA)\b',
     re.IGNORECASE,
 )
 
@@ -26,9 +27,10 @@ def verify_nl2sql_sql(sql: str, allowed_datasets: Sequence[Any]) -> dict[str, An
   """Checks that NL2SQL output is one read-only SELECT over allowed datasets.
 
   Runs on every generated query; server.py does not send a query that fails.
-  The checks fail closed: one statement only (no ';'), starts with SELECT or
-  WITH, no write, DDL or scripting keyword, every FROM/JOIN target is a
-  backticked name (so it can be checked), and every backticked table is in
+  The checks fail closed: one statement only (no ';'), no SQL comments, starts
+  with SELECT or WITH, no write, DDL, scripting, EXTERNAL_QUERY or
+  INFORMATION_SCHEMA keyword, every FROM/JOIN/comma-join target is a backticked
+  name (so it can be checked), and every backticked table is in
   ``allowed_datasets`` (``project.dataset`` strings).
 
   Returns:
@@ -40,22 +42,33 @@ def verify_nl2sql_sql(sql: str, allowed_datasets: Sequence[Any]) -> dict[str, An
   # a project id such as `my-set-1` or a literal such as 'update' can't match.
   scan = re.sub(r'`[^`]*`', '``', text)
   scan = re.sub(r"'(?:[^'\\]|\\.)*'", "''", scan)
+  scan = re.sub(r'"(?:[^"\\]|\\.)*"', '""', scan)
   errors: list[str] = []
   if not text:
     errors.append('empty SQL')
   if ';' in scan:
     errors.append('more than one statement')
+  if '--' in scan or '/*' in scan or '*/' in scan:
+    errors.append('sql comment not allowed')
   if text and not scan.upper().startswith(('SELECT', 'WITH')):
     errors.append('not a SELECT')
   bad = sorted({m.group(1).upper() for m in _NL2SQL_FORBIDDEN_KEYWORDS.finditer(scan)})
   if bad:
     errors.append('write or scripting keyword: ' + ', '.join(bad))
-  unquoted = sorted(set(re.findall(r'\b(?:FROM|JOIN)\s+(?!`)([A-Za-z_][\w.-]*)', scan, re.IGNORECASE)))
+  unquoted_from_join = re.findall(r'\b(?:FROM|JOIN)\s+(?!`)([A-Za-z_][\w.-]*)', scan, re.IGNORECASE)
+  unquoted_comma_join = re.findall(
+      r'``(?:\s+(?:AS\s+)?(?!WHERE\b|GROUP\b|ORDER\b|LIMIT\b|HAVING\b|JOIN\b|LEFT\b|INNER\b|CROSS\b|ON\b)[A-Za-z_]\w*)?\s*,\s*(?!`)([A-Za-z_][\w.-]*)',
+      scan,
+      re.IGNORECASE,
+  )
+  unquoted = sorted(set(unquoted_from_join + unquoted_comma_join))
   if unquoted:
     errors.append('unquoted table reference: ' + ', '.join(unquoted))
   refs = re.findall(r'`([^`]+)`', text)
   if text and not refs:
     errors.append('no table reference')
+  if any('INFORMATION_SCHEMA' in r.upper() for r in refs):
+    errors.append('INFORMATION_SCHEMA not allowed')
   datasets = sorted({'.'.join(r.split('.')[:2]) for r in refs})
   allowed = {str(d) for d in allowed_datasets}
   outside = [d for d in datasets if d not in allowed]
