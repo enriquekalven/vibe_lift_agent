@@ -178,6 +178,40 @@ class CatalogHonestyTest(unittest.TestCase):
     demo = server.FinOpsRuntimeController(fleet_service=_FAKE_FLEET).get_state_payload(include_fleet=False)
     self.assertNotIn('values_measured', demo['otel_catalog'])
 
+    from finops_dashboard import finops, throughput  # pylint: disable=import-outside-toplevel
+    self.assertEqual(throughput.build_model_throughput_profiles([], window_s=86400), {})
+    self.assertEqual(finops.build_session_loop_baselines([])['status'], 'NO_DATA')
+    self.assertEqual(finops.build_gsu_and_quota_forecast({})['status'], 'NO_DATA')
+    prof = throughput.build_model_throughput_profiles(
+        [{
+            'resource': {'labels': {'model_user_id': 'gemini-2.5-flash'}},
+            'metric': {'labels': {'type': 'input'}},
+            'points': [{'interval': {'endTime': '2026-10-16T00:00:00Z'}, 'value': {'int64Value': '120000'}}],
+        }],
+        window_s=86400,
+    )
+    self.assertIn('Cloud Monitoring v3', prof['gemini-2.5-flash']['source'])
+    gsu = finops.build_gsu_and_quota_forecast({
+        'window_hours': 24,
+        'model_usage': {
+            'source': 'Cloud Monitoring v3 aiplatform.googleapis.com/publisher/online_serving/token_count',
+            'models': [{
+                'model': 'gemini-2.5-flash',
+                'input_tokens': 120000,
+                'est_cost_usd': 0.036,
+                'throughput_profile': prof['gemini-2.5-flash'],
+            }],
+        },
+    })
+    self.assertIn('Cloud Monitoring v3', gsu['telemetry_source'])
+    self.assertEqual(gsu['sizing_basis'], 'PER_MINUTE_PROFILE')
+    baselines = finops.build_session_loop_baselines(
+        [{'session_key': f'g|s{i}', 'session_id': f's{i}', 'agent_name': 'Bot', 'turns': 1, 'llm_calls': 4} for i in range(12)]
+    )
+    self.assertIn('finops_mart.fct_sessions', baselines['source'])
+    tagged = finops.apply_loop_thresholds([{'display_name': 'Bot', 'metrics': {'requests': 10, 'llm_calls': 40}}], baselines)
+    self.assertIn('finops_mart.fct_sessions', tagged[0]['metrics']['loop_threshold_source'])
+
 
 class DashboardFallbackTest(unittest.TestCase):
   """The dashboard script must show a dash, not an invented number, when a value is missing."""

@@ -351,8 +351,17 @@ class FinOpsRuntimeController:
       with self._lock:
         self.optimizer.sync_from_ge_fleet(fleet, bq_insights=bq_insights)
       # Token economics / spend change for the same window as the fleet (shallow copy: fleet is cached).
+      # The UI reads fleet.live_finops before state.live_finops, so give it the same billing / mart inputs.
       fleet = dict(fleet)
-      fleet['live_finops'] = self._live_finops(fleet)
+      fleet['live_finops'] = self._live_finops(
+          fleet,
+          daily_usage=self._ge_daily_usage(bq_insights),
+          sessions=list(bq_insights.get('ge_sessions') or []) if isinstance(bq_insights, dict) else None,
+          session_turns=bq_insights.get('ge_session_turns') if isinstance(bq_insights, dict) else None,
+      )
+      # Per-agent loop thresholds for the health card (copies; the collector's cached agents stay untouched).
+      fleet['agents'] = live_finops.apply_loop_thresholds(
+          fleet.get('agents'), fleet['live_finops'].get('loop_baselines'))
       self._last_fleet_payload = fleet
       return fleet
     except Exception:  # collect() degrades per source; this guards against unexpected failures.
@@ -448,10 +457,15 @@ class FinOpsRuntimeController:
       what_if_default = None
       # The OTel catalog stays as a reference list; its example baseline/current values are simulator data.
       otel_catalog = alpha_evolve_optimizer.catalog_reference_only(otel_catalog)
-      live_finops_payload = self._live_finops(fleet_payload or self.optimizer._live_fleet_payload)
+      live_bq = bq_insights if isinstance(bq_insights, dict) else self.optimizer._live_bq_insights
+      live_finops_payload = self._live_finops(
+          fleet_payload or self.optimizer._live_fleet_payload,
+          daily_usage=ge_daily_usage,
+          sessions=list(live_bq.get('ge_sessions') or []) if isinstance(live_bq, dict) else None,
+          session_turns=live_bq.get('ge_session_turns') if isinstance(live_bq, dict) else None,
+      )
       # Never show demo personas in live mode: if BigQuery principals have not
       # loaded yet, show an empty table with an explicit loading status.
-      live_bq = bq_insights if isinstance(bq_insights, dict) else self.optimizer._live_bq_insights
       user_centric = dict(user_centric)
       if isinstance(live_bq, dict):
         user_centric['ge_sessions'] = list(live_bq.get('ge_sessions') or [])
@@ -866,8 +880,17 @@ class FinOpsRuntimeController:
           'results': [],
       }
 
-  def _live_finops(self, fleet: Mapping[str, Any] | None) -> dict[str, Any]:
-    payload = live_finops.build_live_finops(fleet)
+  def _live_finops(
+      self,
+      fleet: Mapping[str, Any] | None,
+      *,
+      daily_usage: Mapping[str, Any] | None = None,
+      sessions: Sequence[Mapping[str, Any]] | None = None,
+      session_turns: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+  ) -> dict[str, Any]:
+    payload = live_finops.build_live_finops(
+        fleet, daily_usage=daily_usage, sessions=sessions, session_turns=session_turns
+    )
     payload['rate_card_models'] = sorted(self._rate_cards())
     return payload
 

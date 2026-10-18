@@ -17,15 +17,23 @@ import re
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from typing import Any
+
+from finops_dashboard import reference_data
 
 logger = logging.getLogger(__name__)
 
 BILLING_TABLE_ENV = 'FINOPS_BILLING_EXPORT_TABLE'
 WINDOW_DAYS = 30
 CACHE_TTL_S = 900.0
+# The export schema only changes when Google adds columns, so one metadata read a day is plenty.
+SCHEMA_CACHE_TTL_S = 86400.0
+# List price per line item, exported since 2023-06-29. Older or custom tables may not have it.
+LIST_PRICE_COLUMN = 'cost_at_list'
+_LIST_COLUMN_ERROR_RE = re.compile(r'\bcost_at_list\b', re.IGNORECASE)
 
 _TABLE_RE = re.compile(
     r'^(?:[a-z][a-z0-9\-]{1,61}[a-z0-9]\.[a-z]{2,}:)?[a-z][a-z0-9\-]{4,61}[a-z0-9]\.[A-Za-z0-9_]{1,1024}\.[A-Za-z0-9_]{1,1024}$'
@@ -81,20 +89,55 @@ def configured_table() -> str | None:
   return table or None
 
 
-def build_billing_sql(table: str, project_id: str, window_days: int = WINDOW_DAYS) -> str:
-  """Builds the per-SKU billed cost query. Inputs are validated because they are interpolated."""
+# Cloud Billing export `credits.type` groups come from the versioned reference file (section
+# billing_credit_types, checked against the export schema page). Commitment, subscription and sustained-use
+# discounts plus contractual spending-based DISCOUNT credits count toward the Effective Savings Rate;
+# promotional / free-tier credits are a form of payment, not a rate optimization, and are excluded.
+COMMITMENT_CREDIT_TYPES = reference_data.credit_types('commitment')
+CONTRACT_DISCOUNT_CREDIT_TYPES = reference_data.credit_types('contract_discount')
+PROMOTIONAL_CREDIT_TYPES = reference_data.credit_types('promotional')
+# Every other type is reported as "other" and excluded from ESR: FEE_UTILIZATION_OFFSET (offsets a spend-based
+# CUD fee that is itself in gross cost, so it is not a saving on its own), RESELLER_MARGIN and new/unknown types.
+_CREDIT_TYPE_RE = re.compile(r'^[A-Z_]+$')
+
+
+def _sql_in(values: tuple[str, ...]) -> str:
+  """Quoted IN-list for module constants (never user input); the check keeps it injection-proof anyway."""
+  if not values or not all(_CREDIT_TYPE_RE.match(v) for v in values):
+    raise ValueError(f'Invalid credit type list: {values!r}')
+  return ', '.join(f"'{v}'" for v in values)
+
+
+def build_billing_sql(table: str, project_id: str, window_days: int = WINDOW_DAYS,
+                      include_list_price: bool = False) -> str:
+  """Builds the per-SKU billed cost query. Inputs are validated because they are interpolated.
+
+  include_list_price adds list_usd (SUM of cost_at_list) and listed_gross_usd (cost of the line items that
+  have a list price). Only request it when the table has cost_at_list (BillingExportReader probes for it).
+  """
   if not _TABLE_RE.match(table):
     raise ValueError(f'Invalid billing export table name: {table!r}')
   if not _PROJECT_RE.match(project_id):
     raise ValueError(f'Invalid project id: {project_id!r}')
   days = max(1, min(int(window_days), 400))
+  list_cols = (
+      f'ROUND(SUM({LIST_PRICE_COLUMN}), 6) AS list_usd,\n'
+      f'      ROUND(SUM(IF({LIST_PRICE_COLUMN} IS NULL, 0, cost)), 6) AS listed_gross_usd,\n      '
+      if include_list_price else ''
+  )
   return f"""
     SELECT
       service.description AS service,
       sku.id AS sku_id,
       sku.description AS sku_description,
       ROUND(SUM(cost), 6) AS gross_usd,
-      ROUND(SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)), 6) AS credits_usd,
+      {list_cols}ROUND(SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)), 6) AS credits_usd,
+      ROUND(SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c
+        WHERE c.type IN ({_sql_in(COMMITMENT_CREDIT_TYPES)})), 0)), 6) AS cud_credits_usd,
+      ROUND(SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c
+        WHERE c.type IN ({_sql_in(CONTRACT_DISCOUNT_CREDIT_TYPES)})), 0)), 6) AS contract_discount_credits_usd,
+      ROUND(SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c
+        WHERE c.type IN ({_sql_in(PROMOTIONAL_CREDIT_TYPES)})), 0)), 6) AS promo_credits_usd,
       ROUND(SUM(usage.amount_in_pricing_units), 6) AS usage_amount,
       ANY_VALUE(usage.pricing_unit) AS usage_unit,
       ANY_VALUE(currency) AS currency,
@@ -109,8 +152,38 @@ def build_billing_sql(table: str, project_id: str, window_days: int = WINDOW_DAY
   """
 
 
+ESR_METHOD = (
+    'Effective Savings Rate = commitment, subscription and sustained-use discount credits plus contractual '
+    'spending-based DISCOUNT credits, divided by gross cost. Promotional / free-tier credits, '
+    'FEE_UTILIZATION_OFFSET, reseller margin and unknown credit types are excluded. Discounts already built into '
+    'the unit price (negotiated or new spend-based CUD pricing, i.e. cost_at_list - cost) are not included, so '
+    'this is a lower bound.'
+)
+
+ESR_METHOD_LIST = (
+    'Effective Savings Rate = savings against list price, divided by list price (cost_at_list), over the line '
+    'items that have a list price. Savings = discounts built into the unit price (negotiated or spend-based CUD '
+    'pricing: cost_at_list - cost) plus commitment, subscription and sustained-use discount credits and contractual '
+    'spending-based DISCOUNT credits. Promotional / free-tier credits, FEE_UTILIZATION_OFFSET, reseller margin and '
+    'unknown credit types are excluded. Line items without a list price (such as taxes and some fees) are left '
+    'out, so a commitment fee without a list price, including any fee paid for unused commitment, is not deducted.'
+)
+
+
+def _pct_of(part: float | None, whole: float) -> float | None:
+  """Savings share of gross as a positive percentage (credits are negative in the export)."""
+  if part is None or whole <= 0:
+    return None
+  return round(-part / whole * 100.0, 1)
+
+
 def summarize_rows(rows: list[dict[str, Any]], table: str, window_days: int = WINDOW_DAYS) -> dict[str, Any]:
-  """Turns BigQuery rows into the dashboard's billing payload."""
+  """Turns BigQuery rows into the dashboard's billing payload.
+
+  When the rows carry list_usd (build_billing_sql(include_list_price=True)), the Effective Savings Rate is
+  measured against list price, so discounts built into the unit price count too (esr_basis LIST_PRICE).
+  Otherwise it is the credits-only lower bound (esr_basis CREDITS_ONLY).
+  """
 
   def _f(v: object) -> float:
     try:
@@ -119,9 +192,41 @@ def summarize_rows(rows: list[dict[str, Any]], table: str, window_days: int = WI
       return 0.0
 
   ledger: list[dict[str, Any]] = []
+  split_rows = 0
+  list_queried = any('list_usd' in r for r in rows)
+  # List-price basis, over the SKUs that have a list price: list, the gross of their listed line items,
+  # and their commitment + contract credits (negative in the export).
+  list_total = 0.0
+  listed_gross_total = 0.0
+  listed_esr_credits = 0.0
+  unlisted_rows = 0
+  unlisted_gross = 0.0
   for r in rows:
     gross = _f(r.get('gross_usd'))
     credits = _f(r.get('credits_usd'))  # negative in the export
+    split_keys = ('cud_credits_usd', 'contract_discount_credits_usd', 'promo_credits_usd')
+    # Rows from an older query (or fixture) carry no per-type split: report it as unknown, never guess.
+    if any(r.get(k) is not None for k in split_keys):
+      split_rows += 1
+      cud_cred: float | None = _f(r.get('cud_credits_usd'))
+      contract_cred: float | None = _f(r.get('contract_discount_credits_usd'))
+      promo_cred: float | None = _f(r.get('promo_credits_usd'))
+      other_cred: float | None = credits - (cud_cred or 0.0) - (contract_cred or 0.0) - (promo_cred or 0.0)
+      esr_part: float | None = (cud_cred or 0.0) + (contract_cred or 0.0)
+    else:
+      cud_cred = contract_cred = promo_cred = other_cred = esr_part = None
+    list_usd = _f(r.get('list_usd')) if r.get('list_usd') is not None else None
+    price_discount: float | None = None
+    if list_usd is not None and list_usd > 0:
+      listed_raw = r.get('listed_gross_usd')
+      listed_gross = _f(listed_raw) if listed_raw is not None else gross
+      price_discount = list_usd - listed_gross
+      list_total += list_usd
+      listed_gross_total += listed_gross
+      listed_esr_credits += esr_part or 0.0
+    elif list_queried and gross != 0:
+      unlisted_rows += 1  # taxes, some fees: no list price, so no ESR basis
+      unlisted_gross += gross
     usage = r.get('usage_amount')
     unit = r.get('usage_unit') or ''
     ledger.append({
@@ -131,7 +236,14 @@ def summarize_rows(rows: list[dict[str, Any]], table: str, window_days: int = WI
         'usage_volume': (f'{_f(usage):,.2f} {unit}'.strip() if usage is not None else None),
         'telemetry_estimated_usd': None,
         'billing_export_gross_usd': round(gross, 2),
+        'list_price_usd': round(list_usd, 2) if list_usd is not None else None,
+        'price_discount_usd': round(price_discount, 2) if price_discount is not None else None,
         'cud_and_cache_credits_usd': round(credits, 2),
+        'cud_credits_usd': round(cud_cred, 2) if cud_cred is not None else None,
+        'contract_discount_credits_usd': round(contract_cred, 2) if contract_cred is not None else None,
+        'promo_credits_usd': round(promo_cred, 2) if promo_cred is not None else None,
+        'other_credits_usd': round(other_cred, 2) if other_cred is not None else None,
+        'effective_savings_rate_pct': _pct_of(esr_part, gross),
         'net_invoice_usd': round(gross + credits, 2),
         'variance_pct': None,
         'currency': r.get('currency') or 'USD',
@@ -139,6 +251,20 @@ def summarize_rows(rows: list[dict[str, Any]], table: str, window_days: int = WI
     })
   total_gross = round(sum(x['billing_export_gross_usd'] for x in ledger), 2)
   total_credits = round(sum(x['cud_and_cache_credits_usd'] for x in ledger), 2)
+  split_known = bool(ledger) and split_rows == len(ledger)
+
+  def _total(key: str) -> float | None:
+    return round(sum(x[key] for x in ledger), 2) if split_known else None
+
+  total_cud = _total('cud_credits_usd')
+  total_contract = _total('contract_discount_credits_usd')
+  credit_esr = _pct_of((total_cud or 0.0) + (total_contract or 0.0), total_gross) if split_known else None
+  # Promotions can only be excluded when the credit split is known, so the list basis needs it too.
+  list_basis = split_known and list_total > 0
+  price_discount_total = list_total - listed_gross_total
+  list_esr = (
+      round((price_discount_total - listed_esr_credits) / list_total * 100.0, 1) if list_basis else None
+  )
   by_service: dict[str, float] = {}
   for x in ledger:
     by_service[x['service']] = round(by_service.get(x['service'], 0.0) + x['net_invoice_usd'], 2)
@@ -151,6 +277,23 @@ def summarize_rows(rows: list[dict[str, Any]], table: str, window_days: int = WI
       'net_by_service': dict(sorted(by_service.items(), key=lambda kv: -kv[1])),
       'total_gross_usd': total_gross,
       'total_credits_usd': total_credits,
+      'credit_split_available': split_known,
+      'total_cud_credits_usd': total_cud,
+      'total_contract_discount_credits_usd': total_contract,
+      'total_promo_credits_usd': _total('promo_credits_usd'),
+      'total_other_credits_usd': _total('other_credits_usd'),
+      'effective_savings_rate_pct': list_esr if list_basis else credit_esr,
+      'esr_basis': 'LIST_PRICE' if list_basis else ('CREDITS_ONLY' if split_known else None),
+      # Credits only (the lower bound), kept so the two bases can be compared.
+      'credit_esr_pct': credit_esr,
+      'total_list_usd': round(list_total, 2) if list_total > 0 else None,
+      'price_discount_usd': round(price_discount_total, 2) if list_total > 0 else None,
+      'list_price_rows_excluded': unlisted_rows if list_queried else None,
+      'list_price_gross_excluded_usd': round(unlisted_gross, 2) if list_queried else None,
+      'cud_savings_rate_pct': _pct_of(total_cud, total_gross),
+      # All credits, promotions included: the "distorted" headline rate the ESR filters out.
+      'blended_credit_rate_pct': _pct_of(total_credits, total_gross),
+      'esr_method': ESR_METHOD_LIST if list_basis else ESR_METHOD,
       'total_net_invoice_usd': round(total_gross + total_credits, 2),
       'currency': ledger[0]['currency'] if ledger else 'USD',
       # Token estimates cover a different window (24h list price), so no invoice "match" is claimed.
@@ -172,6 +315,21 @@ def not_connected_payload(message: str | None = None, status: str = 'NOT_CONNECT
       'net_by_service': {},
       'total_gross_usd': None,
       'total_credits_usd': None,
+      'credit_split_available': False,
+      'total_cud_credits_usd': None,
+      'total_contract_discount_credits_usd': None,
+      'total_promo_credits_usd': None,
+      'total_other_credits_usd': None,
+      'effective_savings_rate_pct': None,
+      'esr_basis': None,
+      'credit_esr_pct': None,
+      'total_list_usd': None,
+      'price_discount_usd': None,
+      'list_price_rows_excluded': None,
+      'list_price_gross_excluded_usd': None,
+      'list_price_column': None,
+      'cud_savings_rate_pct': None,
+      'blended_credit_rate_pct': None,
       'total_net_invoice_usd': None,
       'reconciliation_delta_pct': None,
       'message': message or HOW_TO_CONNECT,
@@ -192,6 +350,8 @@ class BillingExportReader:
     self._daily_cache: dict[str, Any] | None = None
     self._daily_cache_ts = 0.0
     self._daily_inflight = False
+    # table -> (monotonic time, top-level column names), from the tables.get schema probe.
+    self._schema_cache: dict[str, tuple[float, frozenset[str]]] = {}
 
   def get(self, non_blocking: bool = False) -> dict[str, Any]:
     table = configured_table()
@@ -255,12 +415,61 @@ class BillingExportReader:
       self._daily_inflight = False
 
   def _query(self, table: str) -> dict[str, Any]:
-    rows, error = self._run(build_billing_sql(table, self.project_id))
+    columns = self._table_columns(table)
+    # An unknown schema (metadata read failed) still tries the list-price column, then falls back.
+    with_list = columns is None or LIST_PRICE_COLUMN in columns
+    rows, error = self._run(build_billing_sql(table, self.project_id, include_list_price=with_list))
+    if error and with_list and _LIST_COLUMN_ERROR_RE.search(error):
+      logger.info('Billing export has no %s column; using the credits-only savings rate.', LIST_PRICE_COLUMN)
+      with_list = False
+      rows, error = self._run(build_billing_sql(table, self.project_id))
     if error:
       # _run returns HTTP, credential and timeout failures instead of raising: log them here.
       logger.warning('Billing export query failed: %s', error)
       return not_connected_payload(error, status='ERROR', table=table)
-    return summarize_rows(rows, table)
+    out = summarize_rows(rows, table)
+    out['list_price_column'] = 'present' if with_list else 'absent'
+    return out
+
+  def _table_columns(self, table: str) -> frozenset[str] | None:
+    """Top-level column names of the export table, read with BigQuery tables.get (metadata, no query cost).
+
+    Cached for SCHEMA_CACHE_TTL_S. Returns None when the metadata cannot be read; nothing is cached then.
+    """
+    now = time.monotonic()
+    with self._lock:
+      hit = self._schema_cache.get(table)
+      if hit is not None and (now - hit[0]) < SCHEMA_CACHE_TTL_S:
+        return hit[1]
+    token = self._token_provider()
+    if not token or not _TABLE_RE.match(table):
+      return None
+    # Dataset and table ids cannot contain dots, so this also keeps a domain-scoped project
+    # (example.com:project) whole.
+    project, dataset, name = table.rsplit('.', 2)
+    url = (
+        'https://bigquery.googleapis.com/bigquery/v2/projects/'
+        f'{urllib.parse.quote(project, safe=":")}/datasets/{urllib.parse.quote(dataset, safe="")}'
+        f'/tables/{urllib.parse.quote(name, safe="")}'
+    )
+    req = urllib.request.Request(
+        url,
+        headers={'Authorization': f'Bearer {token}', 'x-goog-user-project': self.project_id},
+        method='GET',
+    )
+    try:
+      with urllib.request.urlopen(req, timeout=10.0) as resp:
+        res = json.loads(resp.read().decode('utf-8'))
+      fields = res['schema']['fields']
+      columns = frozenset(str(f['name']) for f in fields if isinstance(f, dict) and f.get('name'))
+    except Exception as exc:  # pylint: disable=broad-except
+      logger.info('Billing export schema read failed for %s: %s', table, exc)
+      return None
+    if not columns:
+      return None
+    with self._lock:
+      self._schema_cache[table] = (time.monotonic(), columns)
+    return columns
 
   def _run(self, sql: str) -> tuple[list[dict[str, Any]], str | None]:
     """Runs a query over REST. Returns (rows, None) or ([], error message)."""

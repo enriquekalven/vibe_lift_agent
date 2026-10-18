@@ -41,7 +41,7 @@ except ImportError:  # pragma: no cover - google-auth ships with the Cloud clien
   google_auth = None  # type: ignore[assignment]
   GoogleAuthRequest = None  # type: ignore[assignment,misc]
 
-from finops_dashboard import agy_finops, gcp_telemetry, telemetry
+from finops_dashboard import agy_finops, gcp_telemetry, telemetry, throughput
 from finops_dashboard import finops as live_finops
 
 logger = logging.getLogger(__name__)
@@ -2109,7 +2109,7 @@ class GeminiEnterpriseFleetService:
           res = fn(sql)
       else:
         svc = gcp_telemetry.GoogleCloudTelemetryService(project_id=project)
-        res = svc.run_bigquery_query(sql, query_parameters=params, maximum_bytes_billed=50 * 1024 * 1024)
+        res = svc.run_bigquery_query(sql, query_parameters=params, max_bytes_billed=50 * 1024 * 1024)
       rows = res[0] if (isinstance(res, tuple) and len(res) == 2) else res
       if not isinstance(rows, list) or not rows:
         return None
@@ -2589,7 +2589,7 @@ class GeminiEnterpriseFleetService:
         res = fn(sql)
       else:
         svc = gcp_telemetry.GoogleCloudTelemetryService(project_id=project)
-        res = svc.run_bigquery_query(sql, maximum_bytes_billed=100 * 1024 * 1024)
+        res = svc.run_bigquery_query(sql, max_bytes_billed=100 * 1024 * 1024)
       if isinstance(res, tuple) and len(res) == 2:
         rows, meta = res
         if isinstance(meta, Mapping) and meta.get('error'):
@@ -3207,6 +3207,27 @@ class GeminiEnterpriseFleetService:
     """List-price rate cards (USD per 1M tokens) used for every cost estimate."""
     return self._rate_cards()
 
+  def _model_throughput(self, window_s: int) -> dict[str, dict[str, Any]]:
+    """Per-minute burndown-token profiles for Provisioned Throughput (GSU) sizing.
+
+    Uses raw 60 s DELTA `token_count` points (no server-side alignment) over at most 24 h so diurnal
+    peaks and short bursts are captured without double-counting points on alignment boundaries.
+    """
+    if window_s > RAW_SERIES_MAX_WINDOW_S:
+      return {}
+    profile_window_s = max(throughput.BUCKET_S, min(window_s, throughput.THROUGHPUT_WINDOW_MAX_S))
+    end = _utcnow()
+    params = [
+        ('filter', 'metric.type="aiplatform.googleapis.com/publisher/online_serving/token_count"'),
+        ('interval.startTime', _iso(end - datetime.timedelta(seconds=profile_window_s))),
+        ('interval.endTime', _iso(end)),
+    ]
+    url = f'{_MONITORING}/projects/{self.project_id}/timeSeries?{urllib.parse.urlencode(params)}'
+    series = self._paged(url, 'timeSeries')
+    return throughput.build_model_throughput_profiles(
+        series, window_s=profile_window_s, end_epoch=int(end.timestamp())
+    )
+
   def _model_usage(self, window_s: int, end_offset_s: int = 0) -> dict[str, Any]:
     token_rows = self._timeseries(
         self.project_id,
@@ -3222,6 +3243,12 @@ class GeminiEnterpriseFleetService:
         ['resource.label.model_user_id'],
         end_offset_s=end_offset_s,
     )
+    profiles: dict[str, dict[str, Any]] = {}
+    if end_offset_s == 0 and window_s <= RAW_SERIES_MAX_WINDOW_S:
+      try:
+        profiles = self._model_throughput(window_s)
+      except FleetSourceError:
+        profiles = {}
     models: dict[str, dict[str, Any]] = {}
 
     def bucket(model: str) -> dict[str, Any]:
@@ -3231,20 +3258,8 @@ class GeminiEnterpriseFleetService:
 
     for labels, value in token_rows:
       row = bucket(labels.get('model_user_id') or 'unknown')
-      token_type = str(labels.get('type') or '').lower()
-      count = round(value)
-      if token_type == 'input':
-        row['input_tokens'] += count
-      elif token_type == 'output':
-        row['output_tokens'] += count
-      elif token_type in ('thought', 'thoughts', 'reasoning') or token_type.startswith(('thought', 'reasoning')):
-        row['reasoning_tokens'] += count
-      elif 'cache_read' in token_type or token_type.startswith('cached'):
-        row['cache_read_tokens'] += count
-      elif token_type.startswith('cache_write'):
-        row['cache_write_tokens'] += count
-      else:
-        row['other_tokens'] += count
+      token_type = throughput.classify_token_type(labels.get('type'))
+      row[token_type] = row.get(token_type, 0) + round(value)
     for labels, value in invocation_rows:
       bucket(labels.get('model_user_id') or 'unknown')['invocations'] += round(value)
 
@@ -3269,6 +3284,9 @@ class GeminiEnterpriseFleetService:
         totals['models_without_rate_card'].append(row['model'])
       denominator = row['input_tokens'] + row['cache_read_tokens'] + row['cache_write_tokens']
       row['cache_read_share_pct'] = round(row['cache_read_tokens'] / denominator * 100, 1) if denominator else None
+      profile = profiles.get(row['model'])
+      if profile is not None:
+        row['throughput_profile'] = profile
       for key in ('input_tokens', 'output_tokens', 'reasoning_tokens', 'cache_read_tokens', 'cache_write_tokens', 'invocations'):
         totals[key] += row[key]
       rows.append(row)

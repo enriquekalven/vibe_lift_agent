@@ -16,6 +16,8 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
+from finops_dashboard import reference_data
+
 _LOG = logging.getLogger(__name__)
 _AUDIT_LOGGER = logging.getLogger('finops_dashboard.audit_sink')
 _STATE_FILE_LOCK = threading.Lock()
@@ -54,81 +56,19 @@ class ModelRateCard:
   output_per_million_usd: float
 
 
+# Vertex AI list prices per 1M tokens (standard tier, global endpoint, <=200K context) come from the
+# versioned reference file (finops_dashboard/reference/vertex_ai_reference.json), which records the date
+# they were last checked against https://cloud.google.com/vertex-ai/generative-ai/pricing.
+# Effective-dated price changes in that file are applied for the date the process starts.
 RATE_CARDS: dict[str, ModelRateCard] = {
-    # Vertex AI list prices per 1M tokens (<=200K context, global endpoint) from
-    # https://cloud.google.com/vertex-ai/generative-ai/pricing
-    'gemini-2.5-pro': ModelRateCard(
-        model_name='gemini-2.5-pro',
-        input_per_million_usd=1.25,
-        cached_read_per_million_usd=0.125,
-        cache_write_per_million_usd=1.25,
-        output_per_million_usd=10.00,
-    ),
-    'gemini-3.8-flash': ModelRateCard(
-        model_name='gemini-3.8-flash',
-        input_per_million_usd=0.30,
-        cached_read_per_million_usd=0.03,
-        cache_write_per_million_usd=0.30,
-        output_per_million_usd=2.50,
-    ),
-    'gemini-2.5-flash': ModelRateCard(
-        model_name='gemini-2.5-flash',
-        input_per_million_usd=0.30,
-        cached_read_per_million_usd=0.03,
-        cache_write_per_million_usd=0.30,
-        output_per_million_usd=2.50,
-    ),
-    'gemini-2.5-flash-lite': ModelRateCard(
-        model_name='gemini-2.5-flash-lite',
-        input_per_million_usd=0.10,
-        cached_read_per_million_usd=0.01,
-        cache_write_per_million_usd=0.10,
-        output_per_million_usd=0.40,
-    ),
-    'gemini-3.1-flash': ModelRateCard(
-        model_name='gemini-3.1-flash',
-        input_per_million_usd=1.25,
-        cached_read_per_million_usd=0.125,
-        cache_write_per_million_usd=1.56,
-        output_per_million_usd=5.00,
-    ),
-    'gemini-3.1-flash-lite': ModelRateCard(
-        model_name='gemini-3.1-flash-lite',
-        input_per_million_usd=0.50,
-        cached_read_per_million_usd=0.05,
-        cache_write_per_million_usd=0.625,
-        output_per_million_usd=2.00,
-    ),
-    'gemini-1.5-pro': ModelRateCard(
-        model_name='gemini-1.5-pro',
-        input_per_million_usd=1.25,
-        cached_read_per_million_usd=0.3125,
-        cache_write_per_million_usd=1.25,
-        output_per_million_usd=5.00,
-    ),
-    'gemini-1.5-flash': ModelRateCard(
-        model_name='gemini-1.5-flash',
-        input_per_million_usd=0.075,
-        cached_read_per_million_usd=0.01875,
-        cache_write_per_million_usd=0.075,
-        output_per_million_usd=0.30,
-    ),
-    # Anthropic Claude on Vertex AI Model Garden:
-    # https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models
-    'claude-opus-4-6': ModelRateCard(
-        model_name='claude-opus-4-6',
-        input_per_million_usd=5.00,
-        cached_read_per_million_usd=0.50,
-        cache_write_per_million_usd=6.25,
-        output_per_million_usd=25.00,
-    ),
-    'claude-sonnet-4-6': ModelRateCard(
-        model_name='claude-sonnet-4-6',
-        input_per_million_usd=3.00,
-        cached_read_per_million_usd=0.30,
-        cache_write_per_million_usd=3.75,
-        output_per_million_usd=15.00,
-    ),
+    name: ModelRateCard(
+        model_name=name,
+        input_per_million_usd=price['input'],
+        cached_read_per_million_usd=price['cached_read'],
+        cache_write_per_million_usd=price['cache_write'],
+        output_per_million_usd=price['output'],
+    )
+    for name, price in reference_data.list_prices().items()
 }
 
 MODEL_RATE_CARDS = RATE_CARDS
