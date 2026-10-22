@@ -525,6 +525,14 @@ out.govFleetShape = VL.governanceScore({
     ],
   },
 });
+out.govSimulated = VL.simulateGovernanceRemediation(out.govDegraded, {
+  summary: {estimated_monthly_savings_usd: 420.5},
+});
+out.govBriefLive = VL.formatGovernanceBrief(out.govDegraded, {
+  windowHours: 24,
+  costGovernance: {summary: {idle_candidates: 2, pending_clearance: 1, snoozed: 0, cleared: 0, estimated_monthly_savings_usd: 420.5}},
+});
+out.govBriefSim = VL.formatGovernanceBrief(out.govSimulated, {windowHours: 24});
 process.stdout.write(JSON.stringify(out));
 """
 
@@ -868,6 +876,28 @@ class DashboardEnhancementLogicTest(unittest.TestCase):
     self.assertEqual(trace['measured_value'], 2)
     self.assertEqual(trace['target_value'], 3)
     self.assertEqual(trace['points'], 8)  # round(12 * 2 / 3)
+
+  def test_governance_remediation_simulation_and_executive_brief(self):
+    sim = self.out['govSimulated']
+    deg = self.out['govDegraded']
+    self.assertTrue(sim['simulated'])
+    self.assertEqual(sim['score'], 100)
+    self.assertEqual(sim['grade'], 'A')
+    self.assertEqual(sim['baselineScore'], deg['score'])
+    self.assertEqual(sim['pointsGained'], 100 - deg['score'])
+    self.assertAlmostEqual(sim['estimatedSavingsUsd'], 420.5)
+    self.assertTrue(all(p['score'] == 20 and p['remediatedDelta'] >= 0 for p in sim['pillars']))
+
+    brief_live = self.out['govBriefLive']
+    self.assertIn('# Enterprise AI Governance & Tokenomics Brief (24h Window)', brief_live)
+    self.assertIn(f"**Composite Score:** {deg['score']}/100", brief_live)
+    self.assertIn('**Top Priority Action:**', brief_live)
+    self.assertIn('## Idle Runtime Hygiene & Savings', brief_live)
+    self.assertIn('$420.50/mo', brief_live)
+
+    brief_sim = self.out['govBriefSim']
+    self.assertIn('[SIMULATED REMEDIATION PREVIEW]', brief_sim)
+    self.assertIn('**Composite Score:** 100/100', brief_sim)
 
 
 if __name__ == '__main__':

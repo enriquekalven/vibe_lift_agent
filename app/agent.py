@@ -6,10 +6,11 @@ diagnoses prompt cache breakpoints, and runs static AST FinOps linting.
 
 import datetime
 import json
+import logging
 import math
 import os
 import sys
-from collections.abc import MutableMapping
+from collections.abc import Mapping, MutableMapping
 
 # Ensure project root is in sys.path
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -20,6 +21,7 @@ from google.adk.agents import Agent
 from google.adk.agents.context_cache_config import ContextCacheConfig
 from google.adk.apps import App
 from google.adk.models import Gemini
+from google.adk.plugins.base_plugin import BasePlugin
 from google.genai import types
 
 from finops_dashboard import cli_lint, telemetry
@@ -133,6 +135,8 @@ def calculate_cache_economics(
       "priced": log.priced,
       "prompt_tokens": prompt,
       "cached_tokens": cached,
+      "uncached_tokens": prompt - cached,
+      "cache_write_tokens": 0,
       "cache_hit_ratio_pct": log.cache_hit_ratio,
       "naive_cost_usd": naive_usd,
       "actual_cost_usd": actual_usd,
@@ -272,14 +276,21 @@ def query_live_finops_and_mart(days: int = 30) -> str:
       window_hours=hours, non_blocking=False
   )
   billing = ctrl.billing_export.get(non_blocking=False)
+  gov = ctrl.evaluate_idle_governance({
+      "window_hours": hours,
+      "send_warnings": False,
+      "persist_to_bq": False,
+  })
   return json.dumps(
       {
           "project_id": ctrl.gcp_telemetry.project_id,
           "window_days": clamped_days,
           "bigquery_mart_insights": bq_insights,
           "billing_reconciliation": billing,
+          "cost_governance": gov.get("cost_governance") if isinstance(gov, dict) else gov,
       },
       indent=2,
+      default=str,
   )
 
 
@@ -349,7 +360,7 @@ Your mission is to:
 1. Always call `open_dashboard` FIRST whenever the user asks to open, view, or inspect the FinOps dashboard, FinOps and Tokenomics dashboard, FinOps Analytics Platform, or asks for agent telemetry or FinOps prompt cache economics in the UI. Calling `open_dashboard` opens the interactive glassmorphic dashboard.
 2. Report on every agent deployed on the Gemini Enterprise app AND standalone/unregistered runtimes (Vertex AI Agent Engine, Cloud Run agents/MCP servers, GKE workloads, and Cloud Trace Skills/MCP tools) with `query_ge_agent_fleet`: live requests, errors, latency, tokens, conversations, zombie/idle allocation, and project-wide model usage and estimated cost. Only quote numbers returned by the tools.
 3. Query the BigQuery reporting mart (`finops_mart`) and Cloud Billing export reconciliation with `query_live_finops_and_mart`, and verify live telemetry grounding with `validate_telemetry_grounding`.
-4. Calculate token cache economics (Cache Read vs Write vs Uncached) and dollar savings vs naive pricing.
+4. Calculate token cache economics (Cache Read vs Write vs Uncached) and dollar savings vs naive pricing. Whenever you use `calculate_cache_economics`, always state the specific token breakdown (`prompt_tokens`, `cached_tokens`, `uncached_tokens`, `cache_write_tokens`, and `cache_hit_ratio_pct`) and compare `naive_cost_usd` vs `actual_cost_usd` alongside `saved_usd`.
 5. Diagnose prompt cache breakpoints where dynamic timestamps or non-static prefixes invalidate caches; use `xray_prompt_cache` to locate the exact break, its cost per 1,000 requests, and a re-measured cache-friendly rewrite.
 6. Run static AST FinOps linting (`FIN-01`..`FIN-05`) on Python agent code and prompt pairs using `lint_agent_finops`.
 Provide clear, authoritative, and actionable answers with specific token metrics and dollar cost savings. Never invent or extrapolate unmeasured values.
@@ -368,9 +379,69 @@ Provide clear, authoritative, and actionable answers with specific token metrics
     ],
 )
 
-# Standard ADK App
+_logger = logging.getLogger(__name__)
+
+
+def unwrap_agent_analytics_text(value: str) -> str:
+  """Strips the ``text: '...'`` wrapper that ADK's ``_format_content`` adds to text parts."""
+  if value.startswith("text: '") and value.endswith("'"):
+    inner = value[len("text: '") : -1]
+    return inner.replace("' | text: '", "\n")
+  return value
+
+
+def format_agent_analytics_content(content: object, event_type: str) -> object:
+  """Unwraps ``AGENT_RESPONSE`` and ``LLM_RESPONSE`` text for AQuA's BigQuery ingester."""
+  if event_type in ("AGENT_RESPONSE", "LLM_RESPONSE") and isinstance(content, Mapping):
+    response = content.get("response")
+    if isinstance(response, str):
+      return {**content, "response": unwrap_agent_analytics_text(response)}
+  return content
+
+
+def agent_analytics_settings(environ: Mapping[str, str] | None = None) -> dict[str, str] | None:
+  """Returns BigQuery Agent Analytics plugin settings, or None when conversation logging is off.
+
+  The plugin records each turn (prompts, responses, tool calls) in a BigQuery table that the
+  Ambient Quality Agent (AQuA) reviews. It stores user prompts verbatim, so it is opt-in:
+  FINOPS_AGENT_ANALYTICS_DATASET turns it on, in the project named by GOOGLE_CLOUD_PROJECT.
+  """
+  env = os.environ if environ is None else environ
+  dataset = env.get("FINOPS_AGENT_ANALYTICS_DATASET", "").strip()
+  if not dataset:
+    return None
+  project = env.get("GOOGLE_CLOUD_PROJECT", "").strip()
+  if not project:
+    _logger.warning("FINOPS_AGENT_ANALYTICS_DATASET is set but GOOGLE_CLOUD_PROJECT is not; conversation logging is off")
+    return None
+  return {
+      "project_id": project,
+      "dataset_id": dataset,
+      "table_id": env.get("FINOPS_AGENT_ANALYTICS_TABLE", "").strip() or "agent_events",
+      "location": env.get("FINOPS_AGENT_ANALYTICS_LOCATION", "").strip() or "us-central1",
+  }
+
+
+def build_agent_analytics_plugins(environ: Mapping[str, str] | None = None) -> list[BasePlugin]:
+  """Returns the BigQuery Agent Analytics plugin when conversation logging is on, else no plugins."""
+  settings = agent_analytics_settings(environ)
+  if settings is None:
+    return []
+  # Imported here so a deployment without logging never loads the BigQuery Storage client.
+  from google.adk.plugins.bigquery_agent_analytics_plugin import BigQueryAgentAnalyticsPlugin
+  return [BigQueryAgentAnalyticsPlugin(
+      project_id=settings["project_id"],
+      dataset_id=settings["dataset_id"],
+      table_id=settings["table_id"],
+      location=settings["location"],
+      content_formatter=format_agent_analytics_content,
+  )]
+
+
+# Standard ADK App. The ADK loader serves `app` (not `root_agent`), so plugins attached here run.
 app = App(
     root_agent=root_agent,
     name="app",
+    plugins=build_agent_analytics_plugins(),
     context_cache_config=ContextCacheConfig(min_tokens=2048, ttl_seconds=3600),
 )

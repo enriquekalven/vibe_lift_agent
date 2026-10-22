@@ -178,6 +178,14 @@ def _compact_state_for_mcp_open(state: dict[str, Any]) -> dict[str, Any]:
       'unregistered_summary': fleet.get('unregistered_summary') or {},
       'source_status': fleet.get('source_status') or {},
   }
+  gov_raw = state.get('cost_governance')
+  gov: dict[str, Any] = gov_raw if isinstance(gov_raw, dict) else {}
+  compact_gov = {
+      'status': gov.get('status'),
+      'automated_clearance_enabled': gov.get('automated_clearance_enabled'),
+      'summary': gov.get('summary') or {},
+      'governance_score': gov.get('governance_score') or {},
+  }
   return {
       'compact_mcp': True,
       'gcp_project': state.get('gcp_project'),
@@ -198,6 +206,7 @@ def _compact_state_for_mcp_open(state: dict[str, Any]) -> dict[str, Any]:
       'available_agents': state.get('available_agents') or [],
       'all_agents': compact_all_agents,
       'ge_fleet': compact_fleet,
+      'cost_governance': compact_gov,
   }
 
 
@@ -446,11 +455,38 @@ async def _tool_lint_agent_finops(session_key: str, args: dict[str, Any]) -> dic
 
 
 async def _tool_get_finops_state(session_key: str, args: dict[str, Any]) -> dict[str, Any]:
-  """Retrieves complete FinOps Dashboard runtime state (turns, active agent, telemetry, and parameters)."""
+  """Retrieves complete FinOps Dashboard runtime state (turns, active agent, telemetry, governance, and parameters)."""
   ctrl = _get_controller()
-  state = await asyncio.to_thread(ctrl.get_state_payload, True, None, True)
+  window_hours = ge_fleet.parse_window_hours(args.get('window_hours'))
+  state = await asyncio.to_thread(ctrl.get_state_payload, True, window_hours, True)
+  if ge_fleet.parse_bool(args.get('include_executive_digest')):
+    digest_preview = await asyncio.to_thread(
+        ctrl.executive_digest_payload,
+        {'window_hours': window_hours, 'cadence': 'daily', 'dry_run': True},
+        False,
+    )
+    state = dict(state)
+    state['executive_digest_preview'] = digest_preview
+  raw_gov = state.get('cost_governance')
+  gov = raw_gov if isinstance(raw_gov, dict) else {}
+  raw_gs = gov.get('governance_score')
+  gs = raw_gs if isinstance(raw_gs, dict) else {}
+  raw_gov_sum = gov.get('summary')
+  gov_sum = raw_gov_sum if isinstance(raw_gov_sum, dict) else {}
+  gov_note = (
+      f" Governance score: {gs.get('score')}/100 ({gs.get('grade', '—')}), "
+      f"{gov_sum.get('pending_clearance_count', 0)} runtime(s) pending clearance."
+      if gs.get('score') is not None
+      else ''
+  )
   return {
-      'content': [{'type': 'text', 'text': f"FinOps Dashboard state: active agent `{state.get('active_agent', {}).get('agent_id')}`, {len(state.get('turns', []))} turns recorded."}],
+      'content': [{
+          'type': 'text',
+          'text': (
+              f"FinOps Dashboard state: active agent `{state.get('active_agent', {}).get('agent_id')}`, "
+              f"{len(state.get('turns', []))} turns recorded.{gov_note}"
+          ),
+      }],
       'structuredContent': state,
   }
 
@@ -691,11 +727,23 @@ _TOOLS: list[dict[str, Any]] = [
     {
         'name': 'get_finops_state',
         'title': 'Get Full FinOps Dashboard Runtime State',
-        'description': 'Retrieves full runtime state, active agent profile, recorded turns, and telemetry.',
+        'description': (
+            'Retrieves full runtime state, active agent profile, recorded turns, telemetry, '
+            '5-pillar governance score, idle clearance queue, and optional executive digest preview.'
+        ),
         'visibility': ['model', 'app'],
         'inputSchema': {
             'type': 'object',
-            'properties': {},
+            'properties': {
+                'window_hours': {
+                    'type': 'integer',
+                    'description': 'Optional telemetry window in hours (1-8760).',
+                },
+                'include_executive_digest': {
+                    'type': 'boolean',
+                    'description': 'If true, includes a read-only FinOps Executive Digest preview in structuredContent.',
+                },
+            },
         },
         'annotations': _READ_ONLY_LOCAL,
         'handler': _tool_get_finops_state,

@@ -250,6 +250,24 @@ fi
 if [[ -n "${FINOPS_PII_REDACT:-}" ]]; then
   EXTRA_ENV="${EXTRA_ENV};FINOPS_PII_REDACT=${FINOPS_PII_REDACT}"
 fi
+# Optional: conversation logging for the Ambient Quality Agent (AQuA) through ADK's BigQuery Agent
+# Analytics plugin. The table holds RAW USER PROMPTS and agent responses, so this is opt-in: set
+# FINOPS_AGENT_ANALYTICS_DATASET to an existing dataset in this project. The plugin creates its table
+# (FINOPS_AGENT_ANALYTICS_TABLE, default agent_events) on the first turn, and the runtime SA gets
+# WRITER on that dataset only. To stop logging later, remove FINOPS_AGENT_ANALYTICS_DATASET from the
+# service (gcloud run services update --remove-env-vars).
+if [[ -n "${FINOPS_AGENT_ANALYTICS_DATASET:-}" ]]; then
+  ANALYTICS_LOCATION="$(bq --project_id="${PROJECT_ID}" show --format=json "${PROJECT_ID}:${FINOPS_AGENT_ANALYTICS_DATASET}" 2>/dev/null \
+    | python3 -c 'import json, sys; print(json.load(sys.stdin).get("location", ""))' 2>/dev/null || true)"
+  if [[ -n "${ANALYTICS_LOCATION}" ]]; then
+    grant_dataset_writer "${FINOPS_AGENT_ANALYTICS_DATASET}" "conversation logging for AQuA"
+    EXTRA_ENV="${EXTRA_ENV};FINOPS_AGENT_ANALYTICS_DATASET=${FINOPS_AGENT_ANALYTICS_DATASET}"
+    EXTRA_ENV="${EXTRA_ENV};FINOPS_AGENT_ANALYTICS_TABLE=${FINOPS_AGENT_ANALYTICS_TABLE:-agent_events}"
+    EXTRA_ENV="${EXTRA_ENV};FINOPS_AGENT_ANALYTICS_LOCATION=${ANALYTICS_LOCATION}"
+  else
+    warn "dataset ${FINOPS_AGENT_ANALYTICS_DATASET} not found in ${PROJECT_ID}; conversation logging stays off."
+  fi
+fi
 # Optional: live mode for the Prompt Cache X-Ray (diff two logged turns instead of pasted prompts).
 # The OTel prompt-log bucket holds RAW USER PROMPTS, so this is opt-in: set FINOPS_PROMPT_LOG_BUCKET
 # (e.g. my-project-agent-logs, no gs://) to grant the runtime SA read access on that bucket only and
@@ -420,6 +438,29 @@ else
   smoke_test_url "${PUBLIC_URL}" "${SURFACE}" || SMOKE_RC=$?
   if [[ "${SMOKE_RC}" == "1" ]]; then
     warn "post-deploy smoke test did not pass on ${PUBLIC_URL}; this revision is already serving traffic (first deploy or FINOPS_SKIP_SMOKE=1)."
+  fi
+fi
+
+# Record deployment_metadata.json for `agents-cli aqua publish-source`, and publish a source snapshot
+# when AQuA is attached (.aqua/attached_aqua.json).
+LATEST_REVISION="$(gcloud run services describe "${SERVICE_NAME}" --project="${PROJECT_ID}" --region="${REGION}" \
+    --format='value(status.latestReadyRevisionName)' 2>/dev/null || true)"
+if [[ -n "${LATEST_REVISION}" ]]; then
+  python3 - "projects/${PROJECT_ID}/locations/${REGION}/services/${SERVICE_NAME}" "${SERVICE_NAME}" "${LATEST_REVISION}" <<'PY'
+import json, sys
+runtime_id, service_name, revision = sys.argv[1:4]
+with open("deployment_metadata.json", "w", encoding="utf-8") as fh:
+  json.dump({
+      "remote_agent_runtime_id": runtime_id,
+      "agent_directory": "app",
+      "cloud_run_service": service_name,
+      "cloud_run_revision": revision,
+  }, fh, indent=2)
+  fh.write("\n")
+PY
+  if [[ -f ".aqua/attached_aqua.json" ]] && command -v agents-cli &>/dev/null; then
+    agents-cli aqua publish-source finops_agent --revision "${LATEST_REVISION}" || \
+      warn "could not publish source snapshot for ${LATEST_REVISION} to AQuA."
   fi
 fi
 

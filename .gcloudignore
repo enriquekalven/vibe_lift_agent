@@ -1,0 +1,13 @@
+#!include:.gitignore
+
+# Vendored AQuA extension and local Terraform state are observer tooling,
+# not part of the finops_agent runtime or source snapshot.
+extensions/
+.aqua/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.adk/
+.venv/
+artifacts/
+__pycache__/

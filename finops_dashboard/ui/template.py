@@ -2710,10 +2710,17 @@ __FINOPS_ENHANCEMENTS_JS__
       notifyHostSizeChanged();
     }
 
-    let currentCostSubView = 'summary';
+    let currentCostSubView = (function() {
+      try {
+        const saved = localStorage.getItem('finops.costSubView');
+        if (['summary', 'calculator', 'code_audit', 'limits', 'all'].indexOf(saved) >= 0) return saved;
+      } catch (e) {}
+      return 'summary';
+    })();
     function switchCostSubView(viewKey) {
-      currentCostSubView = viewKey || 'summary';
       const views = ['summary', 'calculator', 'code_audit', 'limits', 'all'];
+      currentCostSubView = views.indexOf(viewKey) >= 0 ? viewKey : 'summary';
+      try { localStorage.setItem('finops.costSubView', currentCostSubView); } catch (e) {}
       views.forEach(function(k) {
         const b = document.getElementById('costSubBtn_' + k);
         if (b) b.classList.toggle('active', k === currentCostSubView);
@@ -2732,6 +2739,9 @@ __FINOPS_ENHANCEMENTS_JS__
         if (elNode) elNode.classList.toggle('hidden', !panelMap[pid]);
       });
       notifyHostSizeChanged();
+    }
+    if (currentCostSubView !== 'summary') {
+      document.addEventListener('DOMContentLoaded', function() { switchCostSubView(currentCostSubView); });
     }
 
     function renderMiniChart(points, key, unit, color, targetVal, lowerIsBetter) {
@@ -3089,7 +3099,13 @@ __FINOPS_ENHANCEMENTS_JS__
       notifyHostSizeChanged();
     }
 
-    let currentOtelLayerFilter = 'ALL';
+    let currentOtelLayerFilter = (function() {
+      try {
+        const saved = localStorage.getItem('finops.otelLayerFilter');
+        if (saved && typeof saved === 'string') return saved;
+      } catch (e) {}
+      return 'ALL';
+    })();
     let latestNl2SqlResult = null;
 
     function toggleNl2SqlDrawer() {
@@ -3165,6 +3181,7 @@ __FINOPS_ENHANCEMENTS_JS__
 
     function setOtelLayerFilter(layerId) {
       currentOtelLayerFilter = layerId || 'ALL';
+      try { localStorage.setItem('finops.otelLayerFilter', currentOtelLayerFilter); } catch (e) {}
       document.querySelectorAll('[data-otel-layer]').forEach(function(btn) {
         const isActive = btn.getAttribute('data-otel-layer') === currentOtelLayerFilter;
         btn.classList.toggle('active', isActive);
@@ -7634,6 +7651,31 @@ __FINOPS_ENHANCEMENTS_JS__
     async function triggerGovernanceWarn(sendWarnings) {
       const doSend = Boolean(sendWarnings);
       const note = document.getElementById('govStatusNote');
+      if (isEmbedded()) {
+        if (doSend) {
+          if (note) {
+            note.textContent = 'Dispatching live Stage 1 warning emails runs in the standalone IAP console (finops-tokenomics-dashboard); read-only evaluation is available in the MCP side panel.';
+          }
+          return;
+        }
+        if (note) note.textContent = 'Evaluating fleet idle telemetry via MCP host bridge (read-only)…';
+        try {
+          const result = await callHost('tools/call', {
+            name: 'get_finops_state',
+            arguments: {window_hours: fleetWindowHours},
+          }, 25000);
+          const sc = result && !result.isError ? result.structuredContent : null;
+          const govPayload = sc && sc.cost_governance ? sc.cost_governance : null;
+          if (govPayload) renderCostGovernance(govPayload);
+          if (note) {
+            const cnt = (govPayload && govPayload.summary) ? (govPayload.summary.pending_clearance_count || 0) : 0;
+            note.textContent = 'Stage 1 evaluation complete: ' + String(cnt) + ' runtime(s) flagged in clearance queue.';
+          }
+        } catch (err) {
+          if (note) note.textContent = 'Stage 1 evaluation failed: ' + err;
+        }
+        return;
+      }
       if (note) {
         note.textContent = doSend
           ? 'Evaluating fleet idle telemetry & dispatching Stage 1 warnings…'
@@ -7665,6 +7707,12 @@ __FINOPS_ENHANCEMENTS_JS__
     async function triggerScheduledClearance(mode) {
       const cleanMode = (mode === true || !mode) ? 'dry_run' : String(mode);
       const note = document.getElementById('govStatusNote');
+      if (isEmbedded()) {
+        if (note) {
+          note.textContent = 'Stage 2 scheduled clearance (' + cleanMode + ') runs in the standalone IAP console (finops-tokenomics-dashboard).';
+        }
+        return;
+      }
       if (note) note.textContent = 'Executing Stage 2 scheduled clearance (' + cleanMode + ')…';
       try {
         const res = await fetch('/api/governance/execute_clearance', {
@@ -7696,6 +7744,12 @@ __FINOPS_ENHANCEMENTS_JS__
 
     async function snoozeGovernanceRuntime(runtimeId) {
       const note = document.getElementById('govStatusNote');
+      if (isEmbedded()) {
+        if (note) {
+          note.textContent = 'Keep-Alive snooze for ' + runtimeId + ' runs in the standalone IAP console (finops-tokenomics-dashboard) or via the signed email link.';
+        }
+        return;
+      }
       if (note) note.textContent = 'Applying 7-day Keep-Alive snooze for ' + runtimeId + '…';
       try {
         const res = await fetch('/api/governance/snooze', {
@@ -7719,9 +7773,53 @@ __FINOPS_ENHANCEMENTS_JS__
       }
     }
 
+    function renderExecutiveDigestBox(box, note, data) {
+      if (box && data) {
+        box.replaceChildren();
+        box.classList.remove('hidden');
+        const wowPct = (data.wow_delta && data.wow_delta.spend_delta_pct != null) ? (String(data.wow_delta.spend_delta_pct) + '%') : 'N/A';
+        const header = el('div', null, [
+          el('strong', null, [String(data.subject || 'FinOps Executive Digest')]),
+          el('span', 'mono', [' · WoW Spend Delta: ' + wowPct + ' · Recipient: ' + String(data.recipient_masked || '—')]),
+        ]);
+        const bodyPreview = (data.delivery && data.delivery.text_preview) ? data.delivery.text_preview : '';
+        const pre = el('pre', 'mono', [String(bodyPreview)]);
+        pre.style.whiteSpace = 'pre-wrap';
+        pre.style.margin = '8px 0 0 0';
+        pre.style.fontSize = '11px';
+        box.appendChild(header);
+        box.appendChild(pre);
+      }
+      if (note) {
+        note.textContent = 'Executive Digest ready (channel: ' + String((data && data.delivery && data.delivery.delivery_channel) || 'DRY_RUN_PREVIEW') + ').';
+      }
+    }
+
     async function previewExecutiveDigest(sendNotifications) {
       const box = document.getElementById('govDigestPreview');
       const note = document.getElementById('govStatusNote');
+      if (isEmbedded()) {
+        if (sendNotifications) {
+          if (note) {
+            note.textContent = 'Sending live Executive Digest emails runs in the standalone IAP console (finops-tokenomics-dashboard); use Preview Executive Digest in the MCP side panel.';
+          }
+          return;
+        }
+        if (note) note.textContent = 'Generating FinOps Executive Digest preview via MCP host bridge…';
+        try {
+          const result = await callHost('tools/call', {
+            name: 'get_finops_state',
+            arguments: {window_hours: fleetWindowHours, include_executive_digest: true},
+          }, 25000);
+          const sc = result && !result.isError ? result.structuredContent : null;
+          const digest = sc && sc.executive_digest_preview ? sc.executive_digest_preview : null;
+          if (!digest) throw new Error('no digest preview returned');
+          renderExecutiveDigestBox(box, note, digest);
+        } catch (err) {
+          if (note) note.textContent = 'Executive Digest preview failed: ' + err;
+        }
+        return;
+      }
       if (note) note.textContent = sendNotifications ? 'Generating & dispatching FinOps Executive Digest…' : 'Generating FinOps Executive Digest preview…';
       try {
         const res = await fetch('/api/cron/send_executive_digest', {
@@ -7735,25 +7833,7 @@ __FINOPS_ENHANCEMENTS_JS__
           if (note) note.textContent = 'Executive Digest preview failed: HTTP ' + res.status;
           return;
         }
-        if (box && data) {
-          box.replaceChildren();
-          box.classList.remove('hidden');
-          const wowPct = (data.wow_delta && data.wow_delta.spend_delta_pct != null) ? (String(data.wow_delta.spend_delta_pct) + '%') : 'N/A';
-          const header = el('div', null, [
-            el('strong', null, [String(data.subject || 'FinOps Executive Digest')]),
-            el('span', 'mono', [' · WoW Spend Delta: ' + wowPct + ' · Recipient: ' + String(data.recipient_masked || '—')]),
-          ]);
-          const bodyPreview = (data.delivery && data.delivery.text_preview) ? data.delivery.text_preview : '';
-          const pre = el('pre', 'mono', [String(bodyPreview)]);
-          pre.style.whiteSpace = 'pre-wrap';
-          pre.style.margin = '8px 0 0 0';
-          pre.style.fontSize = '11px';
-          box.appendChild(header);
-          box.appendChild(pre);
-        }
-        if (note) {
-          note.textContent = 'Executive Digest ready (channel: ' + String((data && data.delivery && data.delivery.delivery_channel) || 'DRY_RUN_PREVIEW') + ').';
-        }
+        renderExecutiveDigestBox(box, note, data);
       } catch (err) {
         if (note) note.textContent = 'Executive Digest preview failed: ' + err;
       }

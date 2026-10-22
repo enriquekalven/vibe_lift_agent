@@ -28,7 +28,14 @@ Build
 *.zip
 *.tar.gz
 
-# Coverage
+# Coverage & tool caches
 .coverage
 .coverage.*
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# AQuA (Ambient Quality Agent) Terraform state and scratch files: never commit (see extensions/aqua).
+.aqua/
+/.aqua/
 

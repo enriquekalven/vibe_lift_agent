@@ -27,6 +27,7 @@ The Cloud Run service reads every metric as this account, never with the end use
 | `roles/iam.serviceAccountTokenCreator` | The delegating service account (`FINOPS_GMAIL_DWD_SERVICE_ACCOUNT`), even when it is the runtime SA itself | Keyless Gmail domain-wide delegation signs a JWT with IAM Credentials `signJwt` | **Manual**, only for Gmail option B |
 | Custom `finopsIdleRuntimeCleaner` (`run.services.get`, `run.services.update`, `aiplatform.reasoningEngines.get`, `aiplatform.reasoningEngines.delete`) | Project | Stage 2 enforced clearance (`CLEARANCE_MODE=enforced` + `FINOPS_ALLOW_AUTOMATED_CLEARANCE=1`) scales idle Cloud Run services to `minScale=0` and deletes unapproved zombie Reasoning Engines | `deploy_cloud_run.sh`, **only when `FINOPS_ALLOW_AUTOMATED_CLEARANCE=1`** |
 | `roles/storage.objectViewer` | Opt-in prompt snapshot GCS bucket (`FINOPS_PROMPT_LOG_BUCKET`) | Live Prompt Cache X-Ray (`FINOPS_PROMPT_XRAY_LIVE=1`) reads logged GenAI prompt snapshot objects | `deploy_cloud_run.sh`, **only when `FINOPS_PROMPT_LOG_BUCKET` is set** |
+| BigQuery `WRITER` (dataset-level `roles/bigquery.dataEditor`) | Opt-in conversation-logging dataset (`FINOPS_AGENT_ANALYTICS_DATASET`) | The BigQuery Agent Analytics plugin creates its table and appends one row per agent event for AQuA | `deploy_cloud_run.sh`, **only when `FINOPS_AGENT_ANALYTICS_DATASET` names an existing dataset** |
 
 ## 2. Google-managed service identities
 
