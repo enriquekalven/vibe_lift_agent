@@ -20,9 +20,11 @@ google-auth==2.58.1
 google-cloud-appengine-logging==1.10.0
 google-cloud-audit-log==0.6.2
 google-cloud-bigquery==3.45.2
+google-cloud-bigquery-storage==2.43.0
 google-cloud-core==2.7.0
 google-cloud-logging==3.16.3
 google-cloud-monitoring==2.31.0
+google-cloud-storage==3.17.1
 google-crc32c==1.9.0
 google-genai==2.25.0
 google-resumable-media==2.10.2
@@ -45,6 +47,7 @@ opentelemetry-semantic-conventions==0.63b1
 packaging==26.3
 proto-plus==1.28.4
 protobuf==7.36.2
+pyarrow==25.0.1
 pyasn1==0.6.4
 pyasn1_modules==0.4.2
 pycparser==3.0

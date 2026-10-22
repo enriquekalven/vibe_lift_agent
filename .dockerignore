@@ -25,3 +25,7 @@ docs/
 
 # ADK recipe extracted for google/adk-recipes; has its own pyproject, not part of this image.
 recipes/
+
+# AQuA extension (vendored by agents-cli) and its Terraform state: deploy tooling, not part of this image.
+extensions/
+.aqua/

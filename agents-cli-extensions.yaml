@@ -1,0 +1,6 @@
+extensions:
+- name: aqua
+  source: google/adk-recipes#core/python/ambient-quality-agent
+  ref: ambient-quality-agent/v0.1.0
+  sha: c5267aa3f7dd799e3681a27ceeb09f60117b53a0
+  scope: project

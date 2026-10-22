@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 # Keep in sync with requirements.txt (exact pins verified in the production image; see constraints.txt).
 dependencies = [
-    "google-adk==2.10.0",
+    "google-adk[bigquery-analytics]==2.10.0",
     "google-genai==2.25.0",
     "fastapi==0.141.1",
     "uvicorn[standard]==0.54.0",
@@ -46,7 +46,7 @@ region = "us-central1"
 target-version = "py311"
 line-length = 120
 # recipes/ is linted with google/adk-recipes' own ruff config, which differs from this one.
-extend-exclude = ["recipes"]
+extend-exclude = ["recipes", "extensions"]
 
 [tool.ruff.lint]
 select = [
@@ -78,7 +78,7 @@ extend-immutable-calls = ["fastapi.Body", "fastapi.Query"]
 known-first-party = ["app", "finops_dashboard"]
 
 [tool.codespell]
-skip = ".git,__pycache__,.ruff_cache,.mypy_cache,.pytest_cache,.adk,.google-agents-cli,artifacts"
+skip = ".git,__pycache__,.ruff_cache,.mypy_cache,.pytest_cache,.adk,.google-agents-cli,artifacts,extensions,.aqua"
 ignore-words-list = "nd,ot,te,ket,hist,ser,ba,sme,ue,emailin,prevend"
 
 

@@ -119,10 +119,19 @@
     },
     {
       "name": "get_finops_state",
-      "description": "Retrieves full runtime state, active agent profile, recorded turns, and telemetry.",
+      "description": "Retrieves full runtime state, active agent profile, recorded turns, telemetry, 5-pillar governance score, idle clearance queue, and optional executive digest preview.",
       "inputSchema": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "window_hours": {
+            "type": "integer",
+            "description": "Optional telemetry window in hours (1-8760)."
+          },
+          "include_executive_digest": {
+            "type": "boolean",
+            "description": "If true, includes a read-only FinOps Executive Digest preview in structuredContent."
+          }
+        }
       }
     },
     {

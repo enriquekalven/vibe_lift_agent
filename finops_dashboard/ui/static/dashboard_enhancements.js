@@ -1548,6 +1548,123 @@ var VL = (function() {
     };
   }
 
+  function vlSimulateGovernanceRemediation(gov, costGovernance) {
+    if (!gov || typeof gov !== 'object') return null;
+    var pillars = Array.isArray(gov.pillars) ? gov.pillars : [];
+    var cgSum = (costGovernance && costGovernance.summary) || {};
+    var rawSavings = num(cgSum.estimated_monthly_savings_usd);
+    if (rawSavings === null) rawSavings = num(cgSum.est_reclaimable_monthly_usd);
+    var reclaimUsd = rawSavings !== null && rawSavings > 0 ? rawSavings : 0;
+    var simPillars = pillars.map(function(p) {
+      var curVal = num(p && p.score);
+      var maxVal = num(p && p.max);
+      var cur = curVal !== null ? Math.max(0, curVal) : 0;
+      var maxPts = maxVal !== null && maxVal > 0 ? maxVal : cur;
+      var gain = Math.max(0, maxPts - cur);
+      return {
+        id: p.id,
+        label: p.label,
+        score: maxPts,
+        originalScore: cur,
+        currentScore: cur,
+        projectedScore: maxPts,
+        max: maxPts,
+        maxScore: maxPts,
+        ptsLost: 0,
+        remediatedDelta: gain,
+        deltaPoints: gain,
+        status: 'healthy',
+        components: (p.components || []).map(function(c) {
+          var cMax = num(c && c.max_points);
+          var cPts = num(c && c.points);
+          var targetPts = cMax !== null && cMax > 0 ? cMax : (cPts !== null ? Math.max(0, cPts) : 0);
+          return {
+            id: c.id,
+            label: c.label,
+            points: targetPts,
+            max_points: cMax !== null ? cMax : 0,
+            source: c.source,
+            grounding_status: c.grounding_status,
+          };
+        }),
+        summary: p.summary || '',
+        recommendation: gain > 0
+          ? ('Simulated remediation applied (+' + gain + ' pts recovered).')
+          : (p.recommendation || ''),
+        actionLabel: p.actionLabel || '',
+        actionTab: p.actionTab,
+        actionTarget: p.actionTarget,
+      };
+    });
+    var projScore = simPillars.reduce(function(acc, sp) { return acc + sp.projectedScore; }, 0);
+    var curScoreVal = num(gov.score);
+    var curScore = curScoreVal !== null ? Math.max(0, Math.min(100, curScoreVal)) : 0;
+    var deltaPts = Math.max(0, projScore - curScore);
+    var projGrade = projScore >= 85 ? 'A' : (projScore >= 70 ? 'B' : (projScore >= 55 ? 'C' : (projScore >= 40 ? 'D' : 'F')));
+    var projStatusLabel = projScore >= 85 ? 'Exemplary Governance' : (projScore >= 70 ? 'Governed' : (projScore >= 50 ? 'Needs Tuning' : 'Action Required'));
+    return {
+      simulated: true,
+      isWhatIfPreview: true,
+      score: projScore,
+      grade: projGrade,
+      status: projScore >= 85 ? 'OPTIMAL' : 'STRONG',
+      statusLabel: projStatusLabel,
+      baselineScore: curScore,
+      currentScore: curScore,
+      currentGrade: String(gov.grade || 'F'),
+      projectedScore: projScore,
+      projectedGrade: projGrade,
+      projectedStatusLabel: projStatusLabel,
+      pointsGained: deltaPts,
+      deltaPoints: deltaPts,
+      estimatedSavingsUsd: reclaimUsd,
+      estMonthlySavingsUsd: reclaimUsd,
+      pillars: simPillars,
+      accountability: gov.accountability || {},
+      topAction: null,
+      recommendations: [],
+    };
+  }
+
+  function vlFormatGovernanceBrief(gov, opts) {
+    if (!gov || typeof gov !== 'object') return '';
+    var options = opts && typeof opts === 'object' ? opts : {};
+    var winHrs = num(options.windowHours);
+    var winLabel = winHrs !== null ? (winHrs + 'h Window') : String(options.windowLabel || 'Current Window');
+    var headerSuffix = gov.simulated ? ' [SIMULATED REMEDIATION PREVIEW]' : '';
+    var lines = [
+      '# Enterprise AI Governance & Tokenomics Brief (' + winLabel + ')' + headerSuffix,
+      '',
+      '- **Composite Score:** ' + gov.score + '/100 (Grade ' + gov.grade + ' \u00b7 ' + (gov.statusLabel || gov.status || '') + ')',
+    ];
+    if (gov.simulated && typeof gov.pointsGained === 'number') {
+      lines.push(
+        '- **Remediation Delta:** +' + gov.pointsGained + ' pts over live baseline (' + gov.baselineScore + '/100)' +
+        (gov.estimatedSavingsUsd > 0 ? ' \u00b7 Est. Recoverable Spend: $' + gov.estimatedSavingsUsd.toFixed(2) + '/mo' : '')
+      );
+    }
+    if (gov.topAction && gov.topAction.ptsLost > 0) {
+      lines.push('- **Top Priority Action:** ' + gov.topAction.label + ' \u2014 ' + gov.topAction.actionLabel + ' (+' + gov.topAction.ptsLost + ' pts)');
+    }
+    lines.push('', '## 5-Pillar Scorecard', '| Pillar | Score | Status | Recommendation |', '| :--- | :--- | :--- | :--- |');
+    (gov.pillars || []).forEach(function(p) {
+      lines.push('| ' + p.label + ' | ' + p.score + '/' + p.max + ' pts | ' + String(p.status || '').toUpperCase() + ' | ' + (p.recommendation || '') + ' |');
+    });
+    var cgSum = options.costGovernance && options.costGovernance.summary ? options.costGovernance.summary : null;
+    if (cgSum) {
+      var savingsVal = num(cgSum.estimated_monthly_savings_usd);
+      if (savingsVal === null) savingsVal = num(cgSum.est_reclaimable_monthly_usd);
+      lines.push(
+        '',
+        '## Idle Runtime Hygiene & Savings',
+        '- **Idle Candidates:** ' + (num(cgSum.idle_candidates) !== null ? num(cgSum.idle_candidates) : 0) +
+        ' \u00b7 **Pending Clearance:** ' + (num(cgSum.pending_clearance) !== null ? num(cgSum.pending_clearance) : 0) +
+        (savingsVal !== null ? ' \u00b7 **Est. Reclaimable Spend:** $' + savingsVal.toFixed(2) + '/mo' : '')
+      );
+    }
+    return lines.join('\n');
+  }
+
   function vlBuildPdfReport(report) {
     var r = report || {};
     var fl = r.fleet || (r.state && r.state.ge_fleet) || {};
@@ -2559,6 +2676,7 @@ var VL = (function() {
   }
 
   var govScoreExpanded = false;
+  var govSimRemediated = false;
 
   function runGovernanceAction(p) {
     if (!p) return;
@@ -2586,25 +2704,26 @@ var VL = (function() {
   function renderGovernanceScore(st, fl) {
     var stObj = st || state() || {};
     var flObj = fl || rawFleet() || stObj.ge_fleet || {};
-    var gov = vlGovernanceScore({
+    var liveGov = vlGovernanceScore({
       fleet: flObj,
       state: stObj,
       costGovernance: stObj.cost_governance || null,
       budgetUsd: readBudget(),
     });
-    if (!gov) return;
+    if (!liveGov) return;
+    var gov = govSimRemediated ? vlSimulateGovernanceRemediation(liveGov, stObj.cost_governance || null) : liveGov;
 
     var chip = byId('vlGovScoreChip');
     if (chip) {
-      var tierCls = gov.score >= 85 ? 'vl-gov-chip-ok' : (gov.score >= 70 ? 'vl-gov-chip-good' : (gov.score >= 50 ? 'vl-gov-chip-warn' : 'vl-gov-chip-bad'));
+      var tierCls = liveGov.score >= 85 ? 'vl-gov-chip-ok' : (liveGov.score >= 70 ? 'vl-gov-chip-good' : (liveGov.score >= 50 ? 'vl-gov-chip-warn' : 'vl-gov-chip-bad'));
       chip.className = 'btn vl-gov-chip ' + tierCls;
       chip.setAttribute('aria-expanded', govScoreExpanded ? 'true' : 'false');
-      chip.title = 'Enterprise AI Governance & Tokenomics Score: ' + gov.score + '/100 (' + gov.grade + ' \u00b7 ' + gov.statusLabel + '). Click to inspect 5-pillar breakdown.';
+      chip.title = 'Enterprise AI Governance & Tokenomics Score: ' + liveGov.score + '/100 (' + liveGov.grade + ' \u00b7 ' + liveGov.statusLabel + '). Click to inspect 5-pillar breakdown.';
       setKids(chip, [
         h('span', {class: 'vl-gov-dot'}),
         h('span', {}, ['Gov Score: ']),
-        h('strong', {class: 'mono'}, [gov.score + '/100']),
-        h('span', {class: 'vl-gov-grade mono'}, [gov.grade]),
+        h('strong', {class: 'mono'}, [liveGov.score + '/100']),
+        h('span', {class: 'vl-gov-grade mono'}, [liveGov.grade]),
       ]);
       chip.classList.remove('hidden');
     }
@@ -2622,8 +2741,35 @@ var VL = (function() {
       },
     }, [govScoreExpanded ? 'Hide 5-pillar breakdown \u25b4' : 'Inspect 5 pillars & remediate \u25be']);
 
+    var simBtn = h('button', {
+      type: 'button',
+      id: 'vlGovSimBtn',
+      class: 'btn btn-xs' + (govSimRemediated ? ' btn-primary' : ''),
+      'aria-pressed': govSimRemediated ? 'true' : 'false',
+      title: 'Simulate projected 5-pillar score if all recommended FinOps & Governance remediations are applied',
+      onclick: function() {
+        govSimRemediated = !govSimRemediated;
+        if (govSimRemediated) govScoreExpanded = true;
+        renderGovernanceScore(state(), rawFleet());
+      },
+    }, [govSimRemediated ? 'Exit Remediation Sim' : 'Simulate Remediation']);
+
+    var copyBriefBtn = h('button', {
+      type: 'button',
+      id: 'vlGovCopyBriefBtn',
+      class: 'btn btn-xs',
+      title: 'Copy formatted Markdown 5-pillar governance & tokenomics brief to clipboard',
+      onclick: function(ev) {
+        var brief = vlFormatGovernanceBrief(gov, {
+          windowHours: stObj && typeof stObj.window_hours === 'number' ? stObj.window_hours : null,
+          costGovernance: stObj.cost_governance || null,
+        });
+        copyText(brief, ev && ev.currentTarget ? ev.currentTarget : copyBriefBtn);
+      },
+    }, ['Copy Executive Brief']);
+
     var topAct = gov.topAction;
-    var quickFixBtn = topAct && topAct.ptsLost > 0 ? h('button', {
+    var quickFixBtn = (!govSimRemediated && topAct && topAct.ptsLost > 0) ? h('button', {
       type: 'button',
       class: 'btn btn-xs btn-primary',
       onclick: function() { runGovernanceAction(topAct); },
@@ -2639,6 +2785,17 @@ var VL = (function() {
       (acct.unconfigured_points_possible > 0 ? ' \u00b7 Baseline ' + acct.unconfigured_neutral_points + '/' + acct.unconfigured_points_possible + ' pts' : ' \u00b7 100% Grounded'),
     ]) : null;
 
+    var simBanner = gov.simulated ? h('div', {
+      class: 'mono',
+      style: 'margin-top:8px;padding:6px 10px;border-radius:6px;background:rgba(163,113,247,0.12);border:1px solid rgba(163,113,247,0.35);font-size:11px;color:var(--text)',
+    }, [
+      h('span', {class: 'whatif-pill', style: 'margin-right:8px'}, ['WHAT-IF PREVIEW']),
+      h('span', {}, [
+        'Projected score ' + gov.score + '/100 (Grade ' + gov.grade + ', +' + gov.pointsGained + ' pts over live ' + gov.baselineScore + '/100)' +
+        (gov.estimatedSavingsUsd > 0 ? ' \u00b7 Est. recoverable savings: $' + gov.estimatedSavingsUsd.toFixed(2) : ''),
+      ]),
+    ]) : null;
+
     var cards = govScoreExpanded ? h('div', {class: 'vl-gov-grid'}, (gov.pillars || []).map(function(p) {
       var pct = p.max > 0 ? Math.min(100, Math.max(0, Math.round(100 * p.score / p.max))) : 0;
       var barCls = p.status === 'healthy' ? 'vl-gov-bar-ok' : (p.status === 'warning' ? 'vl-gov-bar-warn' : 'vl-gov-bar-bad');
@@ -2652,10 +2809,13 @@ var VL = (function() {
           h('span', {class: 'vl-gov-comp-pts'}, [ptStr]),
         ]);
       })) : null;
-      return h('div', {class: 'vl-gov-card'}, [
+      var badgeLabel = (gov.simulated && p.remediatedDelta > 0)
+        ? (p.originalScore + ' \u2192 ' + p.score + '/' + p.max + ' (+' + p.remediatedDelta + ' pts)')
+        : (p.score + '/' + p.max + ' pts');
+      return h('div', {class: 'vl-gov-card' + (gov.simulated && p.remediatedDelta > 0 ? ' whatif-active' : '')}, [
         h('div', {class: 'vl-gov-card-top'}, [
           h('strong', {class: 'vl-gov-card-title'}, [p.label]),
-          h('span', {class: 'badge ' + cardBadge + ' mono'}, [p.score + '/' + p.max + ' pts']),
+          h('span', {class: 'badge ' + cardBadge + ' mono'}, [badgeLabel]),
         ]),
         h('div', {class: 'vl-gov-bar', role: 'img', 'aria-label': p.label + ' score ' + p.score + ' of ' + p.max}, [
           h('div', {class: 'vl-gov-bar-fill ' + barCls, style: 'width:' + pct + '%'}),
@@ -2684,8 +2844,9 @@ var VL = (function() {
             ? h('span', {class: 'vl-gov-sub'}, ['Top opportunity: ' + topAct.label + ' (' + topAct.summary + ')'])
             : h('span', {class: 'vl-gov-sub'}, ['All 5 FinOps & Governance pillars are operating at target thresholds.']),
         ]),
-        h('div', {class: 'vl-links'}, [quickFixBtn, toggleBtn]),
+        h('div', {class: 'vl-links'}, [quickFixBtn, simBtn, copyBriefBtn, toggleBtn]),
       ]),
+      simBanner,
       cards,
     ]);
     box.classList.remove('hidden');
@@ -5445,7 +5606,9 @@ var VL = (function() {
     resolveTheme: vlResolveTheme,
     paletteScore: vlPaletteScore, paletteFilter: vlPaletteFilter,
     alertPolicies: vlAlertPolicies, alertTarget: vlAlertTarget, autoAlertWindow: vlAutoAlertWindow,
-    classifyError: vlClassifyError, governanceScore: vlGovernanceScore, buildPdfReport: vlBuildPdfReport,
+    classifyError: vlClassifyError, governanceScore: vlGovernanceScore,
+    simulateGovernanceRemediation: vlSimulateGovernanceRemediation, formatGovernanceBrief: vlFormatGovernanceBrief,
+    buildPdfReport: vlBuildPdfReport,
     // DOM (browser only)
     mount: mount, smartTable: smartTable, setTableQuery: setTableQuery, setTableFacet: setTableFacet,
     renderHealthStrip: renderHealthStrip, renderGovernanceScore: renderGovernanceScore, toggleGovernanceScorecard: toggleGovernanceScorecard,

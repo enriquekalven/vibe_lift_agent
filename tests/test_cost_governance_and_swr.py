@@ -1209,8 +1209,71 @@ class GovernanceEmailAndSchedulingTest(unittest.TestCase):
             self.assertEqual(r_post_queued.json()["days"], 7)
             self.assertEqual(r_post_queued.json()["governance_status"], "SNOOZED")
 
+    def test_mcp_compact_state_and_embedded_governance_bridge(self) -> None:
+        from finops_dashboard import mcp_server
+        from finops_dashboard.ui.template import render_dashboard_html
+
+        ctrl = FinOpsRuntimeController()
+        fake_state = {
+            "window_hours": 24,
+            "project_id": "test-proj",
+            "live_finops": {"spend_drift": {"cost_now_usd": 12.5}},
+            "cost_governance": {
+                "status": "OK",
+                "automated_clearance_enabled": False,
+                "summary": {
+                    "idle_candidates": 2,
+                    "pending_clearance": 1,
+                    "snoozed": 0,
+                    "cleared": 0,
+                    "estimated_monthly_savings_usd": 195.0,
+                },
+                "governance_score": {
+                    "score": 82,
+                    "grade": "B",
+                    "status": "STRONG",
+                    "pillars": [{"id": "runtime_hygiene", "score": 15, "max": 20}],
+                },
+            },
+        }
+        compact = mcp_server._compact_state_for_mcp_open(fake_state)
+        self.assertIn("cost_governance", compact)
+        self.assertEqual(compact["cost_governance"]["governance_score"]["score"], 82)
+        self.assertEqual(compact["cost_governance"]["summary"]["idle_candidates"], 2)
+
+        import asyncio
+
+        with (
+            patch.object(mcp_server, "_get_controller", return_value=ctrl),
+            patch.object(ctrl, "get_state_payload", return_value=fake_state),
+            patch.object(
+                ctrl,
+                "executive_digest_payload",
+                return_value={"status": "OK", "subject": "[FinOps Weekly Digest]", "delivery": {"sent": False}},
+            ),
+        ):
+            res = asyncio.run(
+                mcp_server._tool_get_finops_state(
+                    "test-session",
+                    {"window_hours": 24, "include_executive_digest": True},
+                )
+            )
+            text = res["content"][0]["text"]
+            self.assertIn("Governance score: 82/100 (B)", text)
+            self.assertIn("executive_digest_preview", res["structuredContent"])
+            self.assertEqual(
+                res["structuredContent"]["executive_digest_preview"]["subject"],
+                "[FinOps Weekly Digest]",
+            )
+
+        html = render_dashboard_html()
+        self.assertIn("finops.costSubView", html)
+        self.assertIn("finops.otelLayerFilter", html)
+        self.assertIn("include_executive_digest: true", html)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 
